@@ -1,0 +1,30 @@
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: llama
+  namespace: santhosh
+spec:
+  predictor:
+    model:
+      modelFormat:
+        name: huggingface
+        version: "1"
+      runtime: llm-runtime
+      args:
+        - --model_name=llama3.2-3B
+        - --model_id=meta-llama/Llama-3.2-3B-Instruct
+        - --backend=vllm
+      env:
+        - name: HF_TOKEN
+          value: ""
+        - name: CUDA_VISIBLE_DEVICES
+          value: "0"
+      resources:
+        requests:
+          cpu: "4"
+          memory: "16Gi"
+          nvidia.com/gpu: "1"
+        limits:
+          cpu: "6"
+          memory: "24Gi"
+          nvidia.com/gpu: "1"
