@@ -21,7 +21,10 @@ spec:
         - --enable-tool-call-parser
       env:
         - name: HF_TOKEN
-          value: hf_token
+          valueFrom:
+            secretKeyRef:
+              name: huggingface-secret
+              key: token
         - name: CUDA_VISIBLE_DEVICES
           value: "0"
       resources:

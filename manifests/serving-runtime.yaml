@@ -21,5 +21,3 @@ spec:
           cpu: "6"
           memory: "24Gi"
           nvidia.com/gpu: "1"
-  nodeSelector:
-    kubernetes.io/hostname: "10.0.10.31"
