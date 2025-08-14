@@ -62,15 +62,7 @@ def download_github_directory(
 
 @dsl.component(
     base_image="pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime",
-    packages_to_install=["sentence-transformers", "langchain"],
-    resources=dsl.ResourceSpec(
-        cpu_request="2",
-        cpu_limit="2", 
-        memory_request="4Gi",
-        memory_limit="4Gi",
-        accelerator_type="nvidia.com/gpu",
-        accelerator_count=1
-    )
+    packages_to_install=["sentence-transformers", "langchain"]
 )
 def chunk_and_embed(
     github_data: dsl.Input[dsl.Dataset],
