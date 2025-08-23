@@ -61,14 +61,18 @@ spec:
               protocol: TCP
 
           livenessProbe:
-            tcpSocket: { port: 8000 }
+            httpGet:
+              path: /health
+              port: 8000
             initialDelaySeconds: 30
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
 
           readinessProbe:
-            tcpSocket: { port: 8000 }
+            httpGet:
+              path: /health
+              port: 8000
             initialDelaySeconds: 10
             periodSeconds: 5
             timeoutSeconds: 3
