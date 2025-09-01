@@ -122,6 +122,7 @@ function createChatbotElements() {
 
 document.addEventListener('DOMContentLoaded', async function() {
     // Create chatbot HTML structure dynamically and wait for completion
+    console.log("Newer Version Loaded");
     const elementsCreated = await createChatbotElements();
     
     if (!elementsCreated) {
