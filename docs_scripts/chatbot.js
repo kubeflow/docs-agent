@@ -1,98 +1,135 @@
 // Function to create chatbot HTML elements dynamically
 function createChatbotElements() {
-    // Create chatbot backdrop
-    const chatbotBackdrop = document.createElement('div');
-    chatbotBackdrop.id = 'chatbot-backdrop';
-    chatbotBackdrop.className = 'chatbot-backdrop';
-    document.body.appendChild(chatbotBackdrop);
+    try {
+        // Check if elements already exist (prevent duplicates)
+        if (document.getElementById('chatbot-container')) {
+            console.log('Chatbot elements already exist, skipping creation');
+            return true;
+        }
 
-    // Create chatbot container
-    const chatbotContainer = document.createElement('div');
-    chatbotContainer.id = 'chatbot-container';
-    chatbotContainer.className = 'chatbot-container';
+        // Create chatbot backdrop
+        const chatbotBackdrop = document.createElement('div');
+        chatbotBackdrop.id = 'chatbot-backdrop';
+        chatbotBackdrop.className = 'chatbot-backdrop';
+        document.body.appendChild(chatbotBackdrop);
 
-    // Create chatbot header
-    const chatbotHeader = document.createElement('div');
-    chatbotHeader.className = 'chatbot-header';
+        // Create chatbot container
+        const chatbotContainer = document.createElement('div');
+        chatbotContainer.id = 'chatbot-container';
+        chatbotContainer.className = 'chatbot-container';
 
-    const chatbotTitle = document.createElement('div');
-    chatbotTitle.className = 'chatbot-title';
-    chatbotTitle.innerHTML = '<span>Docs Bot</span>';
+        // Create chatbot header
+        const chatbotHeader = document.createElement('div');
+        chatbotHeader.className = 'chatbot-header';
 
-    const toggleButton = document.createElement('button');
-    toggleButton.id = 'toggle-chatbot';
-    toggleButton.className = 'toggle-chatbot';
-    toggleButton.innerHTML = '<span class="minimize-icon">×</span>';
+        const chatbotTitle = document.createElement('div');
+        chatbotTitle.className = 'chatbot-title';
+        chatbotTitle.innerHTML = '<span>Docs Bot</span>';
 
-    chatbotHeader.appendChild(chatbotTitle);
-    chatbotHeader.appendChild(toggleButton);
+        const toggleButton = document.createElement('button');
+        toggleButton.id = 'toggle-chatbot';
+        toggleButton.className = 'toggle-chatbot';
+        toggleButton.innerHTML = '<span class="minimize-icon">×</span>';
 
-    // Create chat messages area
-    const chatMessages = document.createElement('div');
-    chatMessages.id = 'chat-messages';
-    chatMessages.className = 'chat-messages';
+        chatbotHeader.appendChild(chatbotTitle);
+        chatbotHeader.appendChild(toggleButton);
 
-    // Create welcome message
-    const welcomeMessage = document.createElement('div');
-    welcomeMessage.className = 'message bot-message welcome-message';
-    const welcomeContent = document.createElement('div');
-    welcomeContent.className = 'message-content';
-    const welcomeText = document.createElement('p');
-    welcomeText.textContent = "Hello! I'm your documentation assistant. How can I help you today?";
-    welcomeContent.appendChild(welcomeText);
-    welcomeMessage.appendChild(welcomeContent);
-    chatMessages.appendChild(welcomeMessage);
+        // Create chat messages area
+        const chatMessages = document.createElement('div');
+        chatMessages.id = 'chat-messages';
+        chatMessages.className = 'chat-messages';
 
-    // Create input container
-    const chatInputContainer = document.createElement('div');
-    chatInputContainer.className = 'chat-input-container';
+        // Create welcome message
+        const welcomeMessage = document.createElement('div');
+        welcomeMessage.className = 'message bot-message welcome-message';
+        const welcomeContent = document.createElement('div');
+        welcomeContent.className = 'message-content';
+        const welcomeText = document.createElement('p');
+        welcomeText.textContent = "Hello! I'm your documentation assistant. How can I help you today?";
+        welcomeContent.appendChild(welcomeText);
+        welcomeMessage.appendChild(welcomeContent);
+        chatMessages.appendChild(welcomeMessage);
 
-    const inputWrapper = document.createElement('div');
-    inputWrapper.className = 'input-wrapper';
+        // Create input container
+        const chatInputContainer = document.createElement('div');
+        chatInputContainer.className = 'chat-input-container';
 
-    const userInput = document.createElement('textarea');
-    userInput.id = 'user-input';
-    userInput.className = 'chat-input';
-    userInput.placeholder = 'Message Docs Bot...';
-    userInput.rows = 1;
+        const inputWrapper = document.createElement('div');
+        inputWrapper.className = 'input-wrapper';
 
-    const sendButton = document.createElement('button');
-    sendButton.id = 'send-message';
-    sendButton.className = 'send-button';
-    sendButton.innerHTML = '<span class="send-icon">➤</span>';
+        const userInput = document.createElement('textarea');
+        userInput.id = 'user-input';
+        userInput.className = 'chat-input';
+        userInput.placeholder = 'Message Docs Bot...';
+        userInput.rows = 1;
 
-    inputWrapper.appendChild(userInput);
-    inputWrapper.appendChild(sendButton);
+        const sendButton = document.createElement('button');
+        sendButton.id = 'send-message';
+        sendButton.className = 'send-button';
+        sendButton.innerHTML = '<span class="send-icon">➤</span>';
 
-    const inputFooter = document.createElement('div');
-    inputFooter.className = 'input-footer';
-    const inputHint = document.createElement('span');
-    inputHint.className = 'input-hint';
-    inputHint.textContent = 'Press Enter to send, Shift + Enter for new line';
-    inputFooter.appendChild(inputHint);
+        inputWrapper.appendChild(userInput);
+        inputWrapper.appendChild(sendButton);
 
-    chatInputContainer.appendChild(inputWrapper);
-    chatInputContainer.appendChild(inputFooter);
+        const inputFooter = document.createElement('div');
+        inputFooter.className = 'input-footer';
+        const inputHint = document.createElement('span');
+        inputHint.className = 'input-hint';
+        inputHint.textContent = 'Press Enter to send, Shift + Enter for new line';
+        inputFooter.appendChild(inputHint);
 
-    // Assemble chatbot container
-    chatbotContainer.appendChild(chatbotHeader);
-    chatbotContainer.appendChild(chatMessages);
-    chatbotContainer.appendChild(chatInputContainer);
-    document.body.appendChild(chatbotContainer);
+        chatInputContainer.appendChild(inputWrapper);
+        chatInputContainer.appendChild(inputFooter);
 
-    // Create chatbot toggle button
-    const chatbotToggle = document.createElement('button');
-    chatbotToggle.id = 'chatbot-toggle';
-    chatbotToggle.className = 'chatbot-toggle';
-    chatbotToggle.innerHTML = '<span class="chat-icon">💬</span><span class="chat-text">Docs Bot</span>';
-    document.body.appendChild(chatbotToggle);
+        // Assemble chatbot container
+        chatbotContainer.appendChild(chatbotHeader);
+        chatbotContainer.appendChild(chatMessages);
+        chatbotContainer.appendChild(chatInputContainer);
+        document.body.appendChild(chatbotContainer);
+
+        // Create chatbot toggle button
+        const chatbotToggle = document.createElement('button');
+        chatbotToggle.id = 'chatbot-toggle';
+        chatbotToggle.className = 'chatbot-toggle';
+        chatbotToggle.innerHTML = '<span class="chat-icon">💬</span><span class="chat-text">Docs Bot</span>';
+        document.body.appendChild(chatbotToggle);
+
+        // Force a small delay to ensure DOM is updated
+        return new Promise(resolve => {
+            setTimeout(() => {
+                // Verify all elements were created successfully
+                const requiredElements = [
+                    'chatbot-container', 'chatbot-backdrop', 'chat-messages', 
+                    'user-input', 'send-message', 'toggle-chatbot', 'chatbot-toggle'
+                ];
+                
+                const missingElements = requiredElements.filter(id => !document.getElementById(id));
+                if (missingElements.length > 0) {
+                    console.error('Failed to create chatbot elements:', missingElements);
+                    resolve(false);
+                } else {
+                    console.log('All chatbot elements created successfully');
+                    resolve(true);
+                }
+            }, 10);
+        });
+        
+    } catch (error) {
+        console.error('Error creating chatbot elements:', error);
+        return false;
+    }
 }
 
-document.addEventListener('DOMContentLoaded', function() {
-    // Create chatbot HTML structure dynamically
-    createChatbotElements();
+document.addEventListener('DOMContentLoaded', async function() {
+    // Create chatbot HTML structure dynamically and wait for completion
+    const elementsCreated = await createChatbotElements();
     
-    // DOM Elements
+    if (!elementsCreated) {
+        console.error('Failed to create chatbot elements, aborting initialization');
+        return;
+    }
+    
+    // DOM Elements - with null checks
     const chatbotContainer = document.getElementById('chatbot-container');
     const chatbotBackdrop = document.getElementById('chatbot-backdrop');
     const chatMessages = document.getElementById('chat-messages');
@@ -100,6 +137,20 @@ document.addEventListener('DOMContentLoaded', function() {
     const sendButton = document.getElementById('send-message');
     const toggleButton = document.getElementById('toggle-chatbot');
     const chatbotToggle = document.getElementById('chatbot-toggle');
+
+    // Validate all required elements exist
+    if (!chatbotContainer || !chatbotBackdrop || !chatMessages || !userInput || !sendButton || !toggleButton || !chatbotToggle) {
+        console.error('Some chatbot elements are missing:', {
+            chatbotContainer: !!chatbotContainer,
+            chatbotBackdrop: !!chatbotBackdrop,
+            chatMessages: !!chatMessages,
+            userInput: !!userInput,
+            sendButton: !!sendButton,
+            toggleButton: !!toggleButton,
+            chatbotToggle: !!chatbotToggle
+        });
+        return;
+    }
 
     // State
     let isTyping = false;
@@ -134,6 +185,12 @@ document.addEventListener('DOMContentLoaded', function() {
                     
                     if (response.type === 'content') {
                         if (!currentMessageDiv) {
+                            const messagesContainer = chatMessages || document.getElementById('chat-messages');
+                            if (!messagesContainer) {
+                                console.error('Cannot display message: chat messages container not found');
+                                return;
+                            }
+
                             // Create new message div for the first token
                             currentMessageDiv = document.createElement('div');
                             currentMessageDiv.className = 'message bot-message';
@@ -145,7 +202,7 @@ document.addEventListener('DOMContentLoaded', function() {
                             currentMessageDiv.appendChild(contentDiv);
                             contentDiv.appendChild(paragraph);
                             
-                            chatMessages.appendChild(currentMessageDiv);
+                            messagesContainer.appendChild(currentMessageDiv);
                             removeTypingIndicator();
                         }
                         
@@ -311,6 +368,12 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function addMessage(text, sender) {
+        const messagesContainer = chatMessages || document.getElementById('chat-messages');
+        if (!messagesContainer) {
+            console.error('Cannot add message: chat messages container not found');
+            return;
+        }
+
         const messageDiv = document.createElement('div');
         messageDiv.className = `message ${sender}-message`;
         
@@ -338,11 +401,17 @@ document.addEventListener('DOMContentLoaded', function() {
         contentDiv.appendChild(paragraph);
         messageDiv.appendChild(contentDiv);
         
-        chatMessages.appendChild(messageDiv);
+        messagesContainer.appendChild(messageDiv);
         scrollToBottom();
     }
 
     function addSystemMessage(text) {
+        const messagesContainer = chatMessages || document.getElementById('chat-messages');
+        if (!messagesContainer) {
+            console.error('Cannot add system message: chat messages container not found');
+            return;
+        }
+
         const messageDiv = document.createElement('div');
         messageDiv.className = 'message system-message';
         
@@ -355,15 +424,21 @@ document.addEventListener('DOMContentLoaded', function() {
         contentDiv.appendChild(paragraph);
         messageDiv.appendChild(contentDiv);
         
-        chatMessages.appendChild(messageDiv);
+        messagesContainer.appendChild(messageDiv);
         scrollToBottom();
     }
 
     function addCitations(citations) {
         if (!citations || citations.length === 0) return;
         
+        const messagesContainer = chatMessages || document.getElementById('chat-messages');
+        if (!messagesContainer) {
+            console.error('Cannot add citations: chat messages container not found');
+            return;
+        }
+        
         // Find the last bot message to attach citations to
-        const messages = chatMessages.querySelectorAll('.bot-message:not(.typing-indicator)');
+        const messages = messagesContainer.querySelectorAll('.bot-message:not(.typing-indicator)');
         const lastBotMessage = messages[messages.length - 1];
         
         if (!lastBotMessage) {
@@ -378,7 +453,7 @@ document.addEventListener('DOMContentLoaded', function() {
             contentDiv.appendChild(citationsContainer);
             citationDiv.appendChild(contentDiv);
             
-            chatMessages.appendChild(citationDiv);
+            messagesContainer.appendChild(citationDiv);
         } else {
             // Attach citations to the last bot message
             const contentDiv = lastBotMessage.querySelector('.message-content');
@@ -448,6 +523,12 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function showTypingIndicator() {
+        const messagesContainer = chatMessages || document.getElementById('chat-messages');
+        if (!messagesContainer) {
+            console.error('Cannot show typing indicator: chat messages container not found');
+            return;
+        }
+
         isTyping = true;
         const typingDiv = document.createElement('div');
         typingDiv.className = 'message bot-message typing-indicator';
@@ -463,7 +544,7 @@ document.addEventListener('DOMContentLoaded', function() {
         contentDiv.appendChild(dots);
         typingDiv.appendChild(contentDiv);
         
-        chatMessages.appendChild(typingDiv);
+        messagesContainer.appendChild(typingDiv);
         scrollToBottom();
     }
 
@@ -476,34 +557,68 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function scrollToBottom() {
-        chatMessages.scrollTop = chatMessages.scrollHeight;
+        const messagesContainer = chatMessages || document.getElementById('chat-messages');
+        if (messagesContainer) {
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
     }
 
     function showChatbot() {
-        chatbotContainer.classList.remove('minimized');
-        chatbotContainer.classList.add('active');
-        chatbotBackdrop.classList.add('active');
-        chatbotToggle.classList.add('hidden');
-        toggleButton.querySelector('.minimize-icon').textContent = '×';
+        if (chatbotContainer) {
+            chatbotContainer.classList.remove('minimized');
+            chatbotContainer.classList.add('active');
+        }
+        if (chatbotBackdrop) {
+            chatbotBackdrop.classList.add('active');
+        }
+        if (chatbotToggle) {
+            chatbotToggle.classList.add('hidden');
+        }
+        if (toggleButton) {
+            const minimizeIcon = toggleButton.querySelector('.minimize-icon');
+            if (minimizeIcon) {
+                minimizeIcon.textContent = '×';
+            }
+        }
         scrollToBottom();
         document.body.style.overflow = 'hidden';
     }
 
     function hideChatbot() {
-        chatbotContainer.classList.remove('active');
-        chatbotBackdrop.classList.remove('active');
-        chatbotToggle.classList.remove('hidden');
+        if (chatbotContainer) {
+            chatbotContainer.classList.remove('active');
+        }
+        if (chatbotBackdrop) {
+            chatbotBackdrop.classList.remove('active');
+        }
+        if (chatbotToggle) {
+            chatbotToggle.classList.remove('hidden');
+        }
         
         // Restore body scroll
         document.body.style.overflow = '';
         
         setTimeout(() => {
-            chatbotContainer.classList.add('minimized');
-            toggleButton.querySelector('.minimize-icon').textContent = '+';
+            if (chatbotContainer) {
+                chatbotContainer.classList.add('minimized');
+            }
+            if (toggleButton) {
+                const minimizeIcon = toggleButton.querySelector('.minimize-icon');
+                if (minimizeIcon) {
+                    minimizeIcon.textContent = '+';
+                }
+            }
         }, 300);
     }
 
     // Initialize chatbot state
-    chatbotContainer.classList.add('minimized');
-    toggleButton.querySelector('.minimize-icon').textContent = '+';
+    if (chatbotContainer) {
+        chatbotContainer.classList.add('minimized');
+    }
+    if (toggleButton) {
+        const minimizeIcon = toggleButton.querySelector('.minimize-icon');
+        if (minimizeIcon) {
+            minimizeIcon.textContent = '+';
+        }
+    }
 });
