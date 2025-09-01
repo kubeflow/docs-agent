@@ -1,0 +1,23 @@
+apiVersion: serving.kserve.io/v1alpha1
+kind: ServingRuntime
+metadata:
+  name: llm-runtime
+  namespace: santhosh
+spec:
+  supportedModelFormats:
+    - name: huggingface
+      version: "1"
+      autoSelect: true
+  containers:
+    - name: kserve-container
+      image: kserve/huggingfaceserver:latest-gpu
+      command: ["python", "-m", "huggingfaceserver"]
+      resources:
+        requests:
+          cpu: "4"
+          memory: "16Gi"
+          nvidia.com/gpu: "1"
+        limits:
+          cpu: "6"
+          memory: "24Gi"
+          nvidia.com/gpu: "1"

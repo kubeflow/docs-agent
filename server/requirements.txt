@@ -1,0 +1,13 @@
+# Core dependencies
+websockets
+httpx
+
+# Milvus client
+pymilvus
+
+# Optimized ML dependencies - use lighter alternatives
+sentence-transformers
+torch --extra-index-url https://download.pytorch.org/whl/cpu
+
+# Essential only
+numpy
