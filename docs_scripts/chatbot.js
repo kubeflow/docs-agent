@@ -1,4 +1,97 @@
+// Function to create chatbot HTML elements dynamically
+function createChatbotElements() {
+    // Create chatbot backdrop
+    const chatbotBackdrop = document.createElement('div');
+    chatbotBackdrop.id = 'chatbot-backdrop';
+    chatbotBackdrop.className = 'chatbot-backdrop';
+    document.body.appendChild(chatbotBackdrop);
+
+    // Create chatbot container
+    const chatbotContainer = document.createElement('div');
+    chatbotContainer.id = 'chatbot-container';
+    chatbotContainer.className = 'chatbot-container';
+
+    // Create chatbot header
+    const chatbotHeader = document.createElement('div');
+    chatbotHeader.className = 'chatbot-header';
+
+    const chatbotTitle = document.createElement('div');
+    chatbotTitle.className = 'chatbot-title';
+    chatbotTitle.innerHTML = '<span>Docs Bot</span>';
+
+    const toggleButton = document.createElement('button');
+    toggleButton.id = 'toggle-chatbot';
+    toggleButton.className = 'toggle-chatbot';
+    toggleButton.innerHTML = '<span class="minimize-icon">×</span>';
+
+    chatbotHeader.appendChild(chatbotTitle);
+    chatbotHeader.appendChild(toggleButton);
+
+    // Create chat messages area
+    const chatMessages = document.createElement('div');
+    chatMessages.id = 'chat-messages';
+    chatMessages.className = 'chat-messages';
+
+    // Create welcome message
+    const welcomeMessage = document.createElement('div');
+    welcomeMessage.className = 'message bot-message welcome-message';
+    const welcomeContent = document.createElement('div');
+    welcomeContent.className = 'message-content';
+    const welcomeText = document.createElement('p');
+    welcomeText.textContent = "Hello! I'm your documentation assistant. How can I help you today?";
+    welcomeContent.appendChild(welcomeText);
+    welcomeMessage.appendChild(welcomeContent);
+    chatMessages.appendChild(welcomeMessage);
+
+    // Create input container
+    const chatInputContainer = document.createElement('div');
+    chatInputContainer.className = 'chat-input-container';
+
+    const inputWrapper = document.createElement('div');
+    inputWrapper.className = 'input-wrapper';
+
+    const userInput = document.createElement('textarea');
+    userInput.id = 'user-input';
+    userInput.className = 'chat-input';
+    userInput.placeholder = 'Message Docs Bot...';
+    userInput.rows = 1;
+
+    const sendButton = document.createElement('button');
+    sendButton.id = 'send-message';
+    sendButton.className = 'send-button';
+    sendButton.innerHTML = '<span class="send-icon">➤</span>';
+
+    inputWrapper.appendChild(userInput);
+    inputWrapper.appendChild(sendButton);
+
+    const inputFooter = document.createElement('div');
+    inputFooter.className = 'input-footer';
+    const inputHint = document.createElement('span');
+    inputHint.className = 'input-hint';
+    inputHint.textContent = 'Press Enter to send, Shift + Enter for new line';
+    inputFooter.appendChild(inputHint);
+
+    chatInputContainer.appendChild(inputWrapper);
+    chatInputContainer.appendChild(inputFooter);
+
+    // Assemble chatbot container
+    chatbotContainer.appendChild(chatbotHeader);
+    chatbotContainer.appendChild(chatMessages);
+    chatbotContainer.appendChild(chatInputContainer);
+    document.body.appendChild(chatbotContainer);
+
+    // Create chatbot toggle button
+    const chatbotToggle = document.createElement('button');
+    chatbotToggle.id = 'chatbot-toggle';
+    chatbotToggle.className = 'chatbot-toggle';
+    chatbotToggle.innerHTML = '<span class="chat-icon">💬</span><span class="chat-text">Docs Bot</span>';
+    document.body.appendChild(chatbotToggle);
+}
+
 document.addEventListener('DOMContentLoaded', function() {
+    // Create chatbot HTML structure dynamically
+    createChatbotElements();
+    
     // DOM Elements
     const chatbotContainer = document.getElementById('chatbot-container');
     const chatbotBackdrop = document.getElementById('chatbot-backdrop');
