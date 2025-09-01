@@ -1,0 +1,256 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  annotations:
+    sidecar.istio.io/inject: "false"
+  creationTimestamp: "2025-08-03T16:17:18Z"
+  generateName: milvus-standalone-final-5cb655b8d6-
+  generation: 1
+  labels:
+    app: milvus-standalone-final
+    pod-template-hash: 5cb655b8d6
+  name: milvus-standalone-final-5cb655b8d6-6ngrn
+  namespace: santhosh
+  ownerReferences:
+  - apiVersion: apps/v1
+    blockOwnerDeletion: true
+    controller: true
+    kind: ReplicaSet
+    name: milvus-standalone-final-5cb655b8d6
+    uid: 7859a7a3-5ff8-41af-8e07-a533a298b141
+  resourceVersion: "14225268"
+  uid: 804d95ff-f4e4-47a4-a7b3-d5c6edaa5042
+spec:
+  containers:
+  - command:
+    - milvus
+    - run
+    - standalone
+    env:
+    - name: ETCD_ENDPOINTS
+      value: localhost:2379
+    - name: MINIO_ADDRESS
+      value: localhost:9000
+    - name: MINIO_ACCESS_KEY_ID
+      value: minioadmin
+    - name: MINIO_SECRET_ACCESS_KEY
+      value: minioadmin
+    image: milvusdb/milvus:v2.3.4
+    imagePullPolicy: IfNotPresent
+    name: milvus
+    ports:
+    - containerPort: 19530
+      protocol: TCP
+    - containerPort: 9091
+      protocol: TCP
+    readinessProbe:
+      failureThreshold: 3
+      httpGet:
+        path: /healthz
+        port: 9091
+        scheme: HTTP
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      successThreshold: 1
+      timeoutSeconds: 5
+    resources: {}
+    terminationMessagePath: /dev/termination-log
+    terminationMessagePolicy: File
+    volumeMounts:
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-2hjlp
+      readOnly: true
+  - command:
+    - etcd
+    - --advertise-client-urls=http://127.0.0.1:2379
+    - --listen-client-urls=http://0.0.0.0:2379
+    - --data-dir=/etcd-data
+    image: quay.io/coreos/etcd:v3.5.0
+    imagePullPolicy: IfNotPresent
+    name: etcd
+    ports:
+    - containerPort: 2379
+      protocol: TCP
+    resources: {}
+    terminationMessagePath: /dev/termination-log
+    terminationMessagePolicy: File
+    volumeMounts:
+    - mountPath: /etcd-data
+      name: etcd-data
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-2hjlp
+      readOnly: true
+  - command:
+    - minio
+    - server
+    - /minio-data
+    - --console-address
+    - :9001
+    env:
+    - name: MINIO_ROOT_USER
+      value: minioadmin
+    - name: MINIO_ROOT_PASSWORD
+      value: minioadmin
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    imagePullPolicy: IfNotPresent
+    name: minio
+    ports:
+    - containerPort: 9000
+      protocol: TCP
+    resources: {}
+    terminationMessagePath: /dev/termination-log
+    terminationMessagePolicy: File
+    volumeMounts:
+    - mountPath: /minio-data
+      name: minio-data
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-2hjlp
+      readOnly: true
+  dnsPolicy: ClusterFirst
+  enableServiceLinks: true
+  nodeName: 10.0.10.183
+  preemptionPolicy: PreemptLowerPriority
+  priority: 0
+  restartPolicy: Always
+  schedulerName: default-scheduler
+  securityContext: {}
+  serviceAccount: default
+  serviceAccountName: default
+  terminationGracePeriodSeconds: 30
+  tolerations:
+  - effect: NoExecute
+    key: node.kubernetes.io/not-ready
+    operator: Exists
+    tolerationSeconds: 300
+  - effect: NoExecute
+    key: node.kubernetes.io/unreachable
+    operator: Exists
+    tolerationSeconds: 300
+  volumes:
+  - emptyDir: {}
+    name: etcd-data
+  - emptyDir: {}
+    name: minio-data
+  - name: kube-api-access-2hjlp
+    projected:
+      defaultMode: 420
+      sources:
+      - serviceAccountToken:
+          expirationSeconds: 3607
+          path: token
+      - configMap:
+          items:
+          - key: ca.crt
+            path: ca.crt
+          name: kube-root-ca.crt
+      - downwardAPI:
+          items:
+          - fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+            path: namespace
+status:
+  conditions:
+  - lastProbeTime: null
+    lastTransitionTime: "2025-08-03T16:17:30Z"
+    status: "True"
+    type: PodReadyToStartContainers
+  - lastProbeTime: null
+    lastTransitionTime: "2025-08-03T16:17:18Z"
+    status: "True"
+    type: Initialized
+  - lastProbeTime: null
+    lastTransitionTime: "2025-08-03T16:18:01Z"
+    status: "True"
+    type: Ready
+  - lastProbeTime: null
+    lastTransitionTime: "2025-08-03T16:18:01Z"
+    status: "True"
+    type: ContainersReady
+  - lastProbeTime: null
+    lastTransitionTime: "2025-08-03T16:17:18Z"
+    status: "True"
+    type: PodScheduled
+  containerStatuses:
+  - containerID: cri-o://974cb9b3a881ab0f7965bd5e31621686474764d8d01550ef3710e9b2058e48a7
+    image: quay.io/coreos/etcd:v3.5.0
+    imageID: quay.io/coreos/etcd@sha256:28759af54acd6924b2191dc1a1d096e2fa2e219717a21b9d8edf89717db3631b
+    lastState: {}
+    name: etcd
+    ready: true
+    resources: {}
+    restartCount: 0
+    started: true
+    state:
+      running:
+        startedAt: "2025-08-03T16:17:27Z"
+    user:
+      linux:
+        gid: 0
+        supplementalGroups:
+        - 0
+        uid: 0
+    volumeMounts:
+    - mountPath: /etcd-data
+      name: etcd-data
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-2hjlp
+      readOnly: true
+      recursiveReadOnly: Disabled
+  - containerID: cri-o://b864b918e771fcb9e1fdb41baeb8f46f5024ecfd08f88679210603506682463b
+    image: docker.io/milvusdb/milvus:v2.3.4
+    imageID: docker.io/milvusdb/milvus@sha256:efd6ef720b6ad0de62d006319996ba18504842ffaa543e3b072aeb5963305907
+    lastState: {}
+    name: milvus
+    ready: true
+    resources: {}
+    restartCount: 0
+    started: true
+    state:
+      running:
+        startedAt: "2025-08-03T16:17:25Z"
+    user:
+      linux:
+        gid: 0
+        supplementalGroups:
+        - 0
+        uid: 0
+    volumeMounts:
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-2hjlp
+      readOnly: true
+      recursiveReadOnly: Disabled
+  - containerID: cri-o://4a19f6821fa31b1d3f5db68a0b49f0df03cba496770ba4d46922cb3308ff781e
+    image: docker.io/minio/minio:RELEASE.2023-03-20T20-16-18Z
+    imageID: docker.io/minio/minio@sha256:6d770d7f255cda1f18d841ffc4365cb7e0d237f6af6a15fcdb587480cd7c3b93
+    lastState: {}
+    name: minio
+    ready: true
+    resources: {}
+    restartCount: 0
+    started: true
+    state:
+      running:
+        startedAt: "2025-08-03T16:17:29Z"
+    user:
+      linux:
+        gid: 0
+        supplementalGroups:
+        - 0
+        uid: 0
+    volumeMounts:
+    - mountPath: /minio-data
+      name: minio-data
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-2hjlp
+      readOnly: true
+      recursiveReadOnly: Disabled
+  hostIP: 10.0.10.183
+  hostIPs:
+  - ip: 10.0.10.183
+  phase: Running
+  podIP: 10.0.10.93
+  podIPs:
+  - ip: 10.0.10.93
+  qosClass: BestEffort
+  startTime: "2025-08-03T16:17:18Z"
