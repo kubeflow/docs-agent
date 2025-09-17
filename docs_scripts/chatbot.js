@@ -34,21 +34,71 @@ function createChatbotElements() {
         chatbotHeader.appendChild(chatbotTitle);
         chatbotHeader.appendChild(toggleButton);
 
+        // Create sidebar strip
+        const sidebarStrip = document.createElement('div');
+        sidebarStrip.id = 'sidebar-strip';
+        sidebarStrip.className = 'sidebar-strip';
+        
+        // Top section with logo and new chat
+        const sidebarTop = document.createElement('div');
+        sidebarTop.className = 'sidebar-top';
+        
+        const kubeflowLogo = document.createElement('img');
+        kubeflowLogo.className = 'kubeflow-logo';
+        kubeflowLogo.src = 'https://raw.githubusercontent.com/kubeflow/website/master/static/favicon-32x32.png';
+        kubeflowLogo.alt = 'Kubeflow Logo';
+        kubeflowLogo.title = 'Kubeflow Docs Bot';
+        
+        const newChatIcon = document.createElement('button');
+        newChatIcon.id = 'sidebar-new-chat';
+        newChatIcon.className = 'sidebar-icon-btn';
+        newChatIcon.innerHTML = '✏️';
+        newChatIcon.title = 'New chat';
+        
+        sidebarTop.appendChild(kubeflowLogo);
+        sidebarTop.appendChild(newChatIcon);
+        
+        // Bottom section with expand icon
+        const sidebarBottom = document.createElement('div');
+        sidebarBottom.className = 'sidebar-bottom';
+        
+        const expandIcon = document.createElement('button');
+        expandIcon.id = 'sidebar-expand';
+        expandIcon.className = 'sidebar-icon-btn expand-btn';
+        expandIcon.innerHTML = '☰';
+        expandIcon.title = 'Chat history';
+        
+        sidebarBottom.appendChild(expandIcon);
+        
+        sidebarStrip.appendChild(sidebarTop);
+        sidebarStrip.appendChild(sidebarBottom);
+
+        // Create expanded sidebar
+        const chatSidebar = document.createElement('div');
+        chatSidebar.id = 'chat-sidebar';
+        chatSidebar.className = 'chat-sidebar collapsed';
+        
+        const sidebarHeader = document.createElement('div');
+        sidebarHeader.className = 'sidebar-header';
+        sidebarHeader.innerHTML = '<h3>Chat History</h3>';
+        
+        const chatList = document.createElement('div');
+        chatList.id = 'chat-list';
+        chatList.className = 'chat-list';
+        
+        chatSidebar.appendChild(sidebarHeader);
+        chatSidebar.appendChild(chatList);
+
+        // Create main content area
+        const mainContent = document.createElement('div');
+        mainContent.id = 'main-content';
+        mainContent.className = 'main-content';
+
         // Create chat messages area
         const chatMessages = document.createElement('div');
         chatMessages.id = 'chat-messages';
         chatMessages.className = 'chat-messages';
 
-        // Create welcome message
-        const welcomeMessage = document.createElement('div');
-        welcomeMessage.className = 'message bot-message welcome-message';
-        const welcomeContent = document.createElement('div');
-        welcomeContent.className = 'message-content';
-        const welcomeText = document.createElement('p');
-        welcomeText.textContent = "Hello! I'm your documentation assistant. How can I help you today?";
-        welcomeContent.appendChild(welcomeText);
-        welcomeMessage.appendChild(welcomeContent);
-        chatMessages.appendChild(welcomeMessage);
 
         // Create input container
         const chatInputContainer = document.createElement('div');
@@ -81,10 +131,15 @@ function createChatbotElements() {
         chatInputContainer.appendChild(inputWrapper);
         chatInputContainer.appendChild(inputFooter);
 
+        // Assemble main content
+        mainContent.appendChild(chatMessages);
+        mainContent.appendChild(chatInputContainer);
+
         // Assemble chatbot container
         chatbotContainer.appendChild(chatbotHeader);
-        chatbotContainer.appendChild(chatMessages);
-        chatbotContainer.appendChild(chatInputContainer);
+        chatbotContainer.appendChild(sidebarStrip);
+        chatbotContainer.appendChild(chatSidebar);
+        chatbotContainer.appendChild(mainContent);
         document.body.appendChild(chatbotContainer);
 
         // Create chatbot toggle button
@@ -100,7 +155,8 @@ function createChatbotElements() {
                 // Verify all elements were created successfully
                 const requiredElements = [
                     'chatbot-container', 'chatbot-backdrop', 'chat-messages', 
-                    'user-input', 'send-message', 'toggle-chatbot', 'chatbot-toggle'
+                    'user-input', 'send-message', 'toggle-chatbot', 'chatbot-toggle', 
+                    'sidebar-strip', 'sidebar-new-chat', 'sidebar-expand', 'chat-sidebar', 'chat-list'
                 ];
                 
                 const missingElements = requiredElements.filter(id => !document.getElementById(id));
@@ -122,7 +178,6 @@ function createChatbotElements() {
 
 document.addEventListener('DOMContentLoaded', async function() {
     // Create chatbot HTML structure dynamically and wait for completion
-    console.log("Newer Version Loaded");
     const elementsCreated = await createChatbotElements();
     
     if (!elementsCreated) {
@@ -138,9 +193,14 @@ document.addEventListener('DOMContentLoaded', async function() {
     const sendButton = document.getElementById('send-message');
     const toggleButton = document.getElementById('toggle-chatbot');
     const chatbotToggle = document.getElementById('chatbot-toggle');
+    const sidebarStrip = document.getElementById('sidebar-strip');
+    const sidebarNewChat = document.getElementById('sidebar-new-chat');
+    const sidebarExpand = document.getElementById('sidebar-expand');
+    const chatSidebar = document.getElementById('chat-sidebar');
+    const chatList = document.getElementById('chat-list');
 
     // Validate all required elements exist
-    if (!chatbotContainer || !chatbotBackdrop || !chatMessages || !userInput || !sendButton || !toggleButton || !chatbotToggle) {
+    if (!chatbotContainer || !chatbotBackdrop || !chatMessages || !userInput || !sendButton || !toggleButton || !chatbotToggle || !sidebarStrip || !sidebarNewChat || !sidebarExpand || !chatSidebar || !chatList) {
         console.error('Some chatbot elements are missing:', {
             chatbotContainer: !!chatbotContainer,
             chatbotBackdrop: !!chatbotBackdrop,
@@ -148,16 +208,263 @@ document.addEventListener('DOMContentLoaded', async function() {
             userInput: !!userInput,
             sendButton: !!sendButton,
             toggleButton: !!toggleButton,
-            chatbotToggle: !!chatbotToggle
+            chatbotToggle: !!chatbotToggle,
+            sidebarStrip: !!sidebarStrip,
+            sidebarNewChat: !!sidebarNewChat,
+            sidebarExpand: !!sidebarExpand,
+            chatSidebar: !!chatSidebar,
+            chatList: !!chatList
         });
         return;
     }
 
-    // State
+    // State - TODO 1: Add chat stack state management ✅
     let isTyping = false;
     let socket = null;
     let currentMessageDiv = null;
     let currentMessageContent = '';
+    let messagesHistory = []; // Current chat messages
+    let chatsStack = []; // Stack of all chats: [{name: string, messages: array}, ...]
+    let currentChatIndex = -1; // Index of current chat in stack, -1 for new unsaved chat
+    
+    // TODO 2: Browser storage functions ✅
+    function saveChatsToStorage() {
+        try {
+            localStorage.setItem('chatbot_chats_stack', JSON.stringify(chatsStack));
+            console.log(`Saved ${chatsStack.length} chats to storage`);
+        } catch (error) {
+            console.error('Error saving chats to storage:', error);
+        }
+    }
+    
+    function loadChatsFromStorage() {
+        try {
+            const saved = localStorage.getItem('chatbot_chats_stack');
+            if (saved) {
+                chatsStack = JSON.parse(saved);
+                console.log(`Loaded ${chatsStack.length} chats from storage`);
+            }
+        } catch (error) {
+            console.error('Error loading chats from storage:', error);
+            chatsStack = [];
+        }
+    }
+    
+    function generateChatName(messages) {
+        // Generate name from first 3 words of first user message
+        const firstUserMessage = messages.find(msg => msg.role === 'user');
+        if (firstUserMessage) {
+            const words = firstUserMessage.content.trim().split(/\s+/);
+            const first3Words = words.slice(0, 3).join(' ');
+            return first3Words || `Chat ${chatsStack.length + 1}`;
+        }
+        return `Chat ${chatsStack.length + 1}`;
+    }
+    
+    // TODO 3: New chat functionality ✅
+    function startNewChat() {
+        // Save current chat to stack if it has messages
+        if (messagesHistory.length > 1) { // More than just welcome message
+            const chatName = generateChatName(messagesHistory);
+            const currentChat = {
+                name: chatName,
+                messages: [...messagesHistory] // Copy array
+            };
+            
+            if (currentChatIndex === -1) {
+                // Push new chat to stack
+                chatsStack.push(currentChat);
+                console.log(`Pushed new chat to stack: "${chatName}"`);
+            } else {
+                // Update existing chat in stack
+                chatsStack[currentChatIndex] = currentChat;
+                console.log(`Updated existing chat: "${chatName}"`);
+            }
+            
+            // Save to storage
+            saveChatsToStorage();
+        }
+        
+        // Reset current chat state
+        currentChatIndex = -1;
+        messagesHistory = [];
+        
+        // Clear UI
+        clearChatUI();
+        
+        // Add welcome message
+        addWelcomeMessage();
+        
+        // Update sidebar
+        updateSidebar();
+        
+        console.log('Started new chat');
+    }
+    
+    function clearChatUI() {
+        if (chatMessages) {
+            chatMessages.innerHTML = '';
+        }
+    }
+    
+    function addWelcomeMessage() {
+        const welcomeMsg = "Hello! I'm your documentation assistant. How can I help you today?";
+        addMessage(welcomeMsg, 'bot');
+        messagesHistory.push({
+            role: 'assistant',
+            content: welcomeMsg
+        });
+    }
+    
+    // Auto-save current chat periodically
+    function autoSaveCurrentChat() {
+        if (messagesHistory.length > 1) { // More than just welcome message
+            const chatName = generateChatName(messagesHistory);
+            const currentChat = {
+                name: chatName,
+                messages: [...messagesHistory]
+            };
+            
+            if (currentChatIndex === -1) {
+                // This is a new chat, push to stack
+                chatsStack.push(currentChat);
+                currentChatIndex = chatsStack.length - 1;
+                console.log(`Auto-saved new chat: "${chatName}"`);
+            } else {
+                // Update existing chat
+                chatsStack[currentChatIndex] = currentChat;
+                console.log(`Auto-saved existing chat: "${chatName}"`);
+            }
+            
+            saveChatsToStorage();
+            updateSidebar(); // Refresh sidebar to show updated chat names
+        }
+    }
+    
+    // Sidebar Management Functions
+    function updateSidebar() {
+        if (!chatList || !chatSidebar) return;
+        
+        // Only render chats if sidebar is expanded (not collapsed)
+        if (chatSidebar.classList.contains('collapsed')) {
+            chatList.innerHTML = ''; // Clear when collapsed
+            return;
+        }
+        
+        // Clear existing items
+        chatList.innerHTML = '';
+        
+        // Add each chat to the sidebar
+        chatsStack.forEach((chat, index) => {
+            const chatItem = document.createElement('div');
+            chatItem.className = 'chat-item';
+            if (index === currentChatIndex) {
+                chatItem.classList.add('active');
+            }
+            
+            const chatName = document.createElement('div');
+            chatName.className = 'chat-name';
+            chatName.textContent = chat.name;
+            
+            const chatActions = document.createElement('div');
+            chatActions.className = 'chat-actions';
+            
+            const deleteButton = document.createElement('button');
+            deleteButton.className = 'delete-chat-btn';
+            deleteButton.innerHTML = '×';
+            deleteButton.title = 'Delete chat';
+            deleteButton.onclick = (e) => {
+                e.stopPropagation();
+                deleteChat(index);
+            };
+            
+            chatActions.appendChild(deleteButton);
+            chatItem.appendChild(chatName);
+            chatItem.appendChild(chatActions);
+            
+            // Click to switch to this chat
+            chatItem.onclick = () => switchToChat(index);
+            
+            chatList.appendChild(chatItem);
+        });
+        
+        // Add empty state if no chats
+        if (chatsStack.length === 0) {
+            const emptyState = document.createElement('div');
+            emptyState.className = 'empty-state';
+            emptyState.textContent = 'No saved chats yet';
+            chatList.appendChild(emptyState);
+        }
+    }
+    
+    function toggleSidebar() {
+        if (!chatSidebar) return;
+        
+        chatSidebar.classList.toggle('collapsed');
+        if (!chatSidebar.classList.contains('collapsed')) {
+            updateSidebar(); // Refresh the sidebar content when opening
+        }
+    }
+    
+    function closeSidebar() {
+        if (!chatSidebar) return;
+        
+        chatSidebar.classList.add('collapsed');
+    }
+    
+    function switchToChat(chatIndex) {
+        if (chatIndex < 0 || chatIndex >= chatsStack.length) return;
+        
+        // Save current chat if it has changes
+        autoSaveCurrentChat();
+        
+        // Load the selected chat
+        const selectedChat = chatsStack[chatIndex];
+        currentChatIndex = chatIndex;
+        messagesHistory = [...selectedChat.messages];
+        
+        // Clear and rebuild UI
+        clearChatUI();
+        messagesHistory.forEach(msg => {
+            if (msg.role === 'user') {
+                addMessage(msg.content, 'user');
+            } else if (msg.role === 'assistant') {
+                addMessage(msg.content, 'bot');
+            }
+        });
+        
+        // Update sidebar to show active chat
+        updateSidebar();
+        
+        console.log(`Switched to chat: ${selectedChat.name}`);
+    }
+    
+    function deleteChat(chatIndex) {
+        if (chatIndex < 0 || chatIndex >= chatsStack.length) return;
+        
+        const chatToDelete = chatsStack[chatIndex];
+        
+        // Remove from stack
+        chatsStack.splice(chatIndex, 1);
+        
+        // Update current chat index if needed
+        if (currentChatIndex === chatIndex) {
+            // If we're deleting the current chat, start a new one
+            currentChatIndex = -1;
+            messagesHistory = [];
+            clearChatUI();
+            addWelcomeMessage();
+        } else if (currentChatIndex > chatIndex) {
+            // Adjust current index if a chat before it was deleted
+            currentChatIndex--;
+        }
+        
+        // Save to storage and update sidebar
+        saveChatsToStorage();
+        updateSidebar();
+        
+        console.log(`Deleted chat: ${chatToDelete.name}`);
+    }
 
     // Initialize WebSocket connection
     function connectWebSocket() {
@@ -175,7 +482,8 @@ document.addEventListener('DOMContentLoaded', async function() {
                     const response = JSON.parse(event.data);
                     
                     if (response.type === 'system') {
-                        addSystemMessage(response.content);
+                        // Skip system messages (connection status)
+                        console.log('System message:', response.content);
                         return;
                     }
                     
@@ -186,8 +494,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                     
                     if (response.type === 'content') {
                         if (!currentMessageDiv) {
-                            const messagesContainer = chatMessages || document.getElementById('chat-messages');
-                            if (!messagesContainer) {
+                            if (!chatMessages) {
                                 console.error('Cannot display message: chat messages container not found');
                                 return;
                             }
@@ -203,7 +510,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                             currentMessageDiv.appendChild(contentDiv);
                             contentDiv.appendChild(paragraph);
                             
-                            messagesContainer.appendChild(currentMessageDiv);
+                            chatMessages.appendChild(currentMessageDiv);
                             removeTypingIndicator();
                         }
                         
@@ -232,11 +539,21 @@ document.addEventListener('DOMContentLoaded', async function() {
                     
                     // Handle end of message or errors
                     if (response.type === 'end') {
+                        // Store the complete bot response in conversation history
+                        if (currentMessageContent.trim()) {
+                            messagesHistory.push({
+                                role: 'assistant',
+                                content: currentMessageContent.trim()
+                            });
+                        }
                         currentMessageDiv = null;
                         currentMessageContent = '';
+                        
+                        // Auto-save after bot response
+                        autoSaveCurrentChat();
                     } else if (response.type === 'error') {
                         removeTypingIndicator();
-                        addSystemMessage('Error: ' + response.content);
+                        addMessage('Error: ' + response.content, 'bot');
                         currentMessageDiv = null;
                         currentMessageContent = '';
                     }
@@ -250,19 +567,23 @@ document.addEventListener('DOMContentLoaded', async function() {
             
             socket.onclose = function(event) {
                 console.log('WebSocket connection closed, code:', event.code, 'reason:', event.reason);
-                addSystemMessage('Disconnected from server');
                 setTimeout(connectWebSocket, 3000);
             };
             
             socket.onerror = function(error) {
                 console.error('WebSocket error:', error);
-                addSystemMessage('Connection error');
             };
         } catch (error) {
             console.error('Error creating WebSocket connection:', error);
-            addSystemMessage('Failed to connect');
         }
     }
+
+    // Load chats from storage and initialize
+    loadChatsFromStorage();
+    
+    // Add welcome message
+    addWelcomeMessage();
+    
 
     // Connect to WebSocket when page loads
     connectWebSocket();
@@ -276,54 +597,105 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
     });
 
-    toggleButton.addEventListener('click', hideChatbot);
-    chatbotToggle.addEventListener('click', showChatbot);
-    chatbotBackdrop.addEventListener('click', hideChatbot);
-
     // Auto-resize textarea
     userInput.addEventListener('input', function() {
         this.style.height = 'auto';
-        this.style.height = Math.min(this.scrollHeight, 150) + 'px';
+        this.style.height = Math.min(this.scrollHeight, 120) + 'px';
     });
 
-    // Unified markdown formatting function
+    // Chatbot toggle functionality
+    chatbotToggle.addEventListener('click', function() {
+        chatbotContainer.style.display = 'flex';
+        chatbotBackdrop.style.display = 'block';
+        document.body.classList.add('chatbot-open'); // Prevent body scroll
+        userInput.focus();
+    });
+
+    toggleButton.addEventListener('click', function() {
+        chatbotContainer.style.display = 'none';
+        chatbotBackdrop.style.display = 'none';
+        document.body.classList.remove('chatbot-open'); // Restore body scroll
+    });
+
+    chatbotBackdrop.addEventListener('click', function() {
+        chatbotContainer.style.display = 'none';
+        chatbotBackdrop.style.display = 'none';
+        document.body.classList.remove('chatbot-open'); // Restore body scroll
+    });
+
+    // New chat button event listener
+    sidebarNewChat.addEventListener('click', function() {
+        console.log('Sidebar new chat clicked');
+        startNewChat();
+    });
+    
+    // Sidebar expand button event listener
+    sidebarExpand.addEventListener('click', function() {
+        console.log('Sidebar expand clicked');
+        toggleSidebar();
+    });
+    
+    // Click outside sidebar to close
+    document.addEventListener('click', function(e) {
+        const sidebar = document.getElementById('chat-sidebar');
+        const sidebarStrip = document.getElementById('sidebar-strip');
+        const expandBtn = document.getElementById('sidebar-expand');
+        
+        if (sidebar && !sidebar.classList.contains('collapsed')) {
+            // Check if click is outside sidebar and sidebar strip
+            if (!sidebar.contains(e.target) && !sidebarStrip.contains(e.target) && e.target !== expandBtn) {
+                closeSidebar();
+            }
+        }
+    });
+
+    // Auto-save on page unload
+    window.addEventListener('beforeunload', function() {
+        autoSaveCurrentChat();
+    });
+
+    // Auto-save every 30 seconds
+    setInterval(autoSaveCurrentChat, 30000);
+
+    // Utility function to format text
     function formatMarkdown(text, isStreaming = false) {
         if (!text) return '';
         
         let formatted = text;
-        const tempCodeBlocks = [];
-        const tempInlineCode = [];
         
         // Handle code blocks first (triple backticks)
-        formatted = formatted.replace(/```(\w+)?\n?([\s\S]*?)```/g, (match, lang, code) => {
-            const language = lang || 'text';
-            const escapedCode = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            const block = `<pre><code class="language-${language}">${escapedCode.trim()}</code></pre>`;
-            tempCodeBlocks.push(block);
-            return `__CODEBLOCK_${tempCodeBlocks.length - 1}__`;
-        });
+        if (isStreaming) {
+            // For streaming, be more careful with incomplete code blocks
+            const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
+            formatted = formatted.replace(codeBlockRegex, function(match, lang, code) {
+                const language = lang || 'text';
+                return `<pre><code class="language-${language}">${escapeHtml(code.trim())}</code></pre>`;
+            });
+            
+            // Handle incomplete code blocks at the end
+            const incompleteCodeRegex = /```(\w+)?\n([\s\S]*)$/;
+            if (incompleteCodeRegex.test(formatted) && !formatted.endsWith('```')) {
+                formatted = formatted.replace(incompleteCodeRegex, function(match, lang, code) {
+                    const language = lang || 'text';
+                    return `<pre><code class="language-${language}">${escapeHtml(code)}</code></pre>`;
+                });
+            }
+        } else {
+            // For complete text, handle normally
+            const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
+            formatted = formatted.replace(codeBlockRegex, function(match, lang, code) {
+                const language = lang || 'text';
+                return `<pre><code class="language-${language}">${escapeHtml(code.trim())}</code></pre>`;
+            });
+        }
         
-        // Handle inline code (single backticks)
-        formatted = formatted.replace(/`([^`]+)`/g, (match, code) => {
-            const escapedCode = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            const inlineCode = `<code>${escapedCode}</code>`;
-            tempInlineCode.push(inlineCode);
-            return `__INLINECODE_${tempInlineCode.length - 1}__`;
-        });
+        // Handle inline code (single backticks) - avoid already processed code blocks
+        formatted = formatted.replace(/`([^`\n]+)`/g, '<code>$1</code>');
         
-        // Escape remaining HTML
-        formatted = formatted.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        // Handle line breaks
+        formatted = formatted.replace(/\n/g, '<br>');
         
-        // Restore code blocks and inline code
-        tempCodeBlocks.forEach((block, index) => {
-            formatted = formatted.replace(`__CODEBLOCK_${index}__`, block);
-        });
-        
-        tempInlineCode.forEach((code, index) => {
-            formatted = formatted.replace(`__INLINECODE_${index}__`, code);
-        });
-        
-        // Bold text
+        // Handle bold text
         formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
         
         return formatted;
@@ -337,7 +709,13 @@ document.addEventListener('DOMContentLoaded', async function() {
         currentMessageDiv = null;
         currentMessageContent = '';
 
-        // Add user message
+        // Add user message to history
+        messagesHistory.push({
+            role: 'user',
+            content: message
+        });
+
+        // Add user message to UI
         addMessage(message, 'user');
         userInput.value = '';
         userInput.style.height = 'auto';
@@ -348,29 +726,34 @@ document.addEventListener('DOMContentLoaded', async function() {
         // Send message to WebSocket server
         if (socket && socket.readyState === WebSocket.OPEN) {
             try {
-                // Send the raw message - the server expects plain text
-                console.log('Sending message to server:', message);
-                socket.send(message);
+                // Send the complete conversation context as JSON
+                const payload = {
+                    message: message,
+                    messages: messagesHistory
+                };
+                console.log('Sending message with context to server:', payload);
+                console.log('Full conversation history:', messagesHistory);
+                socket.send(JSON.stringify(payload));
             } catch (error) {
                 console.error('Error sending message:', error);
                 removeTypingIndicator();
-                addSystemMessage('Failed to send message');
                 addMessage('Error sending your message. Please try again.', 'bot');
             }
         } else {
             // If WebSocket is not connected, show an error message
             console.error('WebSocket not connected. Current state:', socket ? socket.readyState : 'No socket');
             removeTypingIndicator();
-            addSystemMessage('Not connected to server');
             addMessage('Unable to connect to the server. Please try again later.', 'bot');
             // Try to reconnect
             connectWebSocket();
         }
+        
+        // Auto-save after user message
+        autoSaveCurrentChat();
     }
 
     function addMessage(text, sender) {
-        const messagesContainer = chatMessages || document.getElementById('chat-messages');
-        if (!messagesContainer) {
+        if (!chatMessages) {
             console.error('Cannot add message: chat messages container not found');
             return;
         }
@@ -383,18 +766,22 @@ document.addEventListener('DOMContentLoaded', async function() {
         
         const paragraph = document.createElement('p');
         
-        // Use enhanced parsing for bot messages to handle markdown
+        // Format the text based on sender
         if (sender === 'bot') {
-            const formattedText = formatMarkdown(text);
-            paragraph.innerHTML = formattedText;
+            paragraph.innerHTML = formatMarkdown(text);
             
-            // Apply syntax highlighting
-            if (window.Prism) {
-                const codeBlocks = messageDiv.querySelectorAll('pre code');
-                codeBlocks.forEach(block => {
-                    window.Prism.highlightElement(block);
-                });
-            }
+            // Apply syntax highlighting after DOM insertion
+            setTimeout(() => {
+                if (window.Prism) {
+                    const codeBlocks = paragraph.querySelectorAll('pre code');
+                    codeBlocks.forEach(block => {
+                        if (!block.classList.contains('prism-highlighted')) {
+                            block.classList.add('prism-highlighted');
+                            window.Prism.highlightElement(block);
+                        }
+                    });
+                }
+            }, 10);
         } else {
             paragraph.textContent = text;
         }
@@ -402,224 +789,87 @@ document.addEventListener('DOMContentLoaded', async function() {
         contentDiv.appendChild(paragraph);
         messageDiv.appendChild(contentDiv);
         
-        messagesContainer.appendChild(messageDiv);
-        scrollToBottom();
-    }
-
-    function addSystemMessage(text) {
-        const messagesContainer = chatMessages || document.getElementById('chat-messages');
-        if (!messagesContainer) {
-            console.error('Cannot add system message: chat messages container not found');
-            return;
-        }
-
-        const messageDiv = document.createElement('div');
-        messageDiv.className = 'message system-message';
-        
-        const contentDiv = document.createElement('div');
-        contentDiv.className = 'message-content';
-        
-        const paragraph = document.createElement('p');
-        paragraph.textContent = text;
-        
-        contentDiv.appendChild(paragraph);
-        messageDiv.appendChild(contentDiv);
-        
-        messagesContainer.appendChild(messageDiv);
+        chatMessages.appendChild(messageDiv);
         scrollToBottom();
     }
 
     function addCitations(citations) {
         if (!citations || citations.length === 0) return;
         
-        const messagesContainer = chatMessages || document.getElementById('chat-messages');
-        if (!messagesContainer) {
+        if (!chatMessages) {
             console.error('Cannot add citations: chat messages container not found');
             return;
         }
         
-        // Find the last bot message to attach citations to
-        const messages = messagesContainer.querySelectorAll('.bot-message:not(.typing-indicator)');
-        const lastBotMessage = messages[messages.length - 1];
+        const citationsDiv = document.createElement('div');
+        citationsDiv.className = 'citations-container';
         
-        if (!lastBotMessage) {
-            // If no bot message exists, create a standalone citations message
-            const citationDiv = document.createElement('div');
-            citationDiv.className = 'message bot-message citations-message';
-            
-            const contentDiv = document.createElement('div');
-            contentDiv.className = 'message-content';
-            
-            const citationsContainer = createCitationsDropdown(citations);
-            contentDiv.appendChild(citationsContainer);
-            citationDiv.appendChild(contentDiv);
-            
-            messagesContainer.appendChild(citationDiv);
-        } else {
-            // Attach citations to the last bot message
-            const contentDiv = lastBotMessage.querySelector('.message-content');
-            const existingCitations = contentDiv.querySelector('.citations-container');
-            
-            // Remove existing citations if any
-            if (existingCitations) {
-                existingCitations.remove();
-            }
-            
-            const citationsContainer = createCitationsDropdown(citations);
-            contentDiv.appendChild(citationsContainer);
-        }
+        const citationsTitle = document.createElement('h4');
+        citationsTitle.textContent = 'Sources:';
+        citationsTitle.className = 'citations-title';
+        citationsDiv.appendChild(citationsTitle);
         
-        scrollToBottom();
-    }
-
-    function createCitationsDropdown(citations) {
-        const container = document.createElement('div');
-        container.className = 'citations-container';
-        
-        const toggleButton = document.createElement('button');
-        toggleButton.className = 'citations-toggle';
-        toggleButton.innerHTML = `
-            <span class="citations-icon">📚</span>
-            <span class="citations-text">Sources (${citations.length})</span>
-            <span class="citations-arrow">▼</span>
-        `;
-        
-        const dropdown = document.createElement('div');
-        dropdown.className = 'citations-dropdown';
+        const citationsList = document.createElement('ul');
+        citationsList.className = 'citations-list';
         
         citations.forEach((citation, index) => {
+            const listItem = document.createElement('li');
             const link = document.createElement('a');
             link.href = citation;
             link.target = '_blank';
             link.rel = 'noopener noreferrer';
-            link.className = 'citation-link';
-            
-            // Extract the page title from URL for better display
-            const urlParts = citation.split('/');
-            const pageName = urlParts[urlParts.length - 1] || urlParts[urlParts.length - 2];
-            const displayName = pageName.replace(/-/g, ' ').replace(/_/g, ' ');
-            
-            link.innerHTML = `
-                <span class="citation-number">${index + 1}</span>
-                <span class="citation-title">${displayName}</span>
-                <span class="citation-url">${citation}</span>
-            `;
-            
-            dropdown.appendChild(link);
+            link.textContent = `Source ${index + 1}`;
+            listItem.appendChild(link);
+            citationsList.appendChild(listItem);
         });
         
-        // Toggle functionality
-        let isOpen = false;
-        toggleButton.addEventListener('click', function() {
-            isOpen = !isOpen;
-            dropdown.classList.toggle('open', isOpen);
-            toggleButton.querySelector('.citations-arrow').textContent = isOpen ? '▲' : '▼';
-            toggleButton.classList.toggle('open', isOpen);
-        });
-        
-        container.appendChild(toggleButton);
-        container.appendChild(dropdown);
-        
-        return container;
+        citationsDiv.appendChild(citationsList);
+        chatMessages.appendChild(citationsDiv);
+        scrollToBottom();
     }
 
     function showTypingIndicator() {
-        const messagesContainer = chatMessages || document.getElementById('chat-messages');
-        if (!messagesContainer) {
-            console.error('Cannot show typing indicator: chat messages container not found');
-            return;
-        }
-
+        if (isTyping || !chatMessages) return;
+        
         isTyping = true;
+        
         const typingDiv = document.createElement('div');
-        typingDiv.className = 'message bot-message typing-indicator';
         typingDiv.id = 'typing-indicator';
+        typingDiv.className = 'message bot-message typing-indicator';
         
         const contentDiv = document.createElement('div');
         contentDiv.className = 'message-content';
         
-        const dots = document.createElement('div');
-        dots.className = 'typing-dots';
-        dots.innerHTML = '<span></span><span></span><span></span>';
+        const typingAnimation = document.createElement('div');
+        typingAnimation.className = 'typing-animation';
+        typingAnimation.innerHTML = '<span></span><span></span><span></span>';
         
-        contentDiv.appendChild(dots);
+        contentDiv.appendChild(typingAnimation);
         typingDiv.appendChild(contentDiv);
+        chatMessages.appendChild(typingDiv);
         
-        messagesContainer.appendChild(typingDiv);
         scrollToBottom();
     }
 
     function removeTypingIndicator() {
-        isTyping = false;
         const typingIndicator = document.getElementById('typing-indicator');
         if (typingIndicator) {
             typingIndicator.remove();
         }
+        isTyping = false;
     }
 
     function scrollToBottom() {
-        const messagesContainer = chatMessages || document.getElementById('chat-messages');
-        if (messagesContainer) {
-            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        if (chatMessages) {
+            chatMessages.scrollTop = chatMessages.scrollHeight;
         }
     }
 
-    function showChatbot() {
-        if (chatbotContainer) {
-            chatbotContainer.classList.remove('minimized');
-            chatbotContainer.classList.add('active');
-        }
-        if (chatbotBackdrop) {
-            chatbotBackdrop.classList.add('active');
-        }
-        if (chatbotToggle) {
-            chatbotToggle.classList.add('hidden');
-        }
-        if (toggleButton) {
-            const minimizeIcon = toggleButton.querySelector('.minimize-icon');
-            if (minimizeIcon) {
-                minimizeIcon.textContent = '×';
-            }
-        }
-        scrollToBottom();
-        document.body.style.overflow = 'hidden';
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
     }
 
-    function hideChatbot() {
-        if (chatbotContainer) {
-            chatbotContainer.classList.remove('active');
-        }
-        if (chatbotBackdrop) {
-            chatbotBackdrop.classList.remove('active');
-        }
-        if (chatbotToggle) {
-            chatbotToggle.classList.remove('hidden');
-        }
-        
-        // Restore body scroll
-        document.body.style.overflow = '';
-        
-        setTimeout(() => {
-            if (chatbotContainer) {
-                chatbotContainer.classList.add('minimized');
-            }
-            if (toggleButton) {
-                const minimizeIcon = toggleButton.querySelector('.minimize-icon');
-                if (minimizeIcon) {
-                    minimizeIcon.textContent = '+';
-                }
-            }
-        }, 300);
-    }
-
-    // Initialize chatbot state
-    if (chatbotContainer) {
-        chatbotContainer.classList.add('minimized');
-    }
-    if (toggleButton) {
-        const minimizeIcon = toggleButton.querySelector('.minimize-icon');
-        if (minimizeIcon) {
-            minimizeIcon.textContent = '+';
-        }
-    }
+    console.log('Chatbot initialized with chat stack system');
 });
