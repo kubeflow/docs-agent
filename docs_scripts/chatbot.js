@@ -662,14 +662,19 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (!text) return '';
         
         let formatted = text;
+        const codeBlockPlaceholders = [];
+        let placeholderIndex = 0;
         
-        // Handle code blocks first (triple backticks)
+        // Handle code blocks first (triple backticks) and replace with placeholders
         if (isStreaming) {
             // For streaming, be more careful with incomplete code blocks
             const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
             formatted = formatted.replace(codeBlockRegex, function(match, lang, code) {
                 const language = lang || 'text';
-                return `<pre><code class="language-${language}">${escapeHtml(code.trim())}</code></pre>`;
+                const placeholder = `__CODE_BLOCK_${placeholderIndex}__`;
+                codeBlockPlaceholders[placeholderIndex] = `<pre><code class="language-${language}">${escapeHtml(code.trim())}</code></pre>`;
+                placeholderIndex++;
+                return placeholder;
             });
             
             // Handle incomplete code blocks at the end
@@ -677,7 +682,10 @@ document.addEventListener('DOMContentLoaded', async function() {
             if (incompleteCodeRegex.test(formatted) && !formatted.endsWith('```')) {
                 formatted = formatted.replace(incompleteCodeRegex, function(match, lang, code) {
                     const language = lang || 'text';
-                    return `<pre><code class="language-${language}">${escapeHtml(code)}</code></pre>`;
+                    const placeholder = `__CODE_BLOCK_${placeholderIndex}__`;
+                    codeBlockPlaceholders[placeholderIndex] = `<pre><code class="language-${language}">${escapeHtml(code)}</code></pre>`;
+                    placeholderIndex++;
+                    return placeholder;
                 });
             }
         } else {
@@ -685,18 +693,26 @@ document.addEventListener('DOMContentLoaded', async function() {
             const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
             formatted = formatted.replace(codeBlockRegex, function(match, lang, code) {
                 const language = lang || 'text';
-                return `<pre><code class="language-${language}">${escapeHtml(code.trim())}</code></pre>`;
+                const placeholder = `__CODE_BLOCK_${placeholderIndex}__`;
+                codeBlockPlaceholders[placeholderIndex] = `<pre><code class="language-${language}">${escapeHtml(code.trim())}</code></pre>`;
+                placeholderIndex++;
+                return placeholder;
             });
         }
         
         // Handle inline code (single backticks) - avoid already processed code blocks
         formatted = formatted.replace(/`([^`\n]+)`/g, '<code>$1</code>');
         
-        // Handle line breaks
+        // Handle line breaks (only outside code blocks)
         formatted = formatted.replace(/\n/g, '<br>');
         
         // Handle bold text
         formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+        
+        // Restore code blocks from placeholders
+        codeBlockPlaceholders.forEach((codeBlock, index) => {
+            formatted = formatted.replace(`__CODE_BLOCK_${index}__`, codeBlock);
+        });
         
         return formatted;
     }
@@ -796,18 +812,41 @@ document.addEventListener('DOMContentLoaded', async function() {
     function addCitations(citations) {
         if (!citations || citations.length === 0) return;
         
-        if (!chatMessages) {
-            console.error('Cannot add citations: chat messages container not found');
+        // Find the last bot message content to attach citations to
+        const lastBotMessage = chatMessages.querySelector('.bot-message:last-child');
+        if (!lastBotMessage) {
+            console.error('No bot message found to attach citations to');
+            return;
+        }
+        
+        // Get the message content div inside the bot message
+        const messageContent = lastBotMessage.querySelector('.message-content');
+        if (!messageContent) {
+            console.error('No message content found to attach citations to');
             return;
         }
         
         const citationsDiv = document.createElement('div');
         citationsDiv.className = 'citations-container';
         
+        // Create header with title and toggle
+        const citationsHeader = document.createElement('div');
+        citationsHeader.className = 'citations-header';
+        
         const citationsTitle = document.createElement('h4');
-        citationsTitle.textContent = 'Sources:';
+        citationsTitle.textContent = `Sources (${citations.length}):`;
         citationsTitle.className = 'citations-title';
-        citationsDiv.appendChild(citationsTitle);
+        
+        const citationsToggle = document.createElement('span');
+        citationsToggle.className = 'citations-toggle';
+        citationsToggle.textContent = '▼';
+        
+        citationsHeader.appendChild(citationsTitle);
+        citationsHeader.appendChild(citationsToggle);
+        
+        // Create collapsible content
+        const citationsContent = document.createElement('div');
+        citationsContent.className = 'citations-content';
         
         const citationsList = document.createElement('ul');
         citationsList.className = 'citations-list';
@@ -818,13 +857,38 @@ document.addEventListener('DOMContentLoaded', async function() {
             link.href = citation;
             link.target = '_blank';
             link.rel = 'noopener noreferrer';
-            link.textContent = `Source ${index + 1}`;
+            
+            // Extract readable URL text (remove protocol and truncate if too long)
+            let displayText = citation.replace(/^https?:\/\//, '');
+            if (displayText.length > 60) {
+                displayText = displayText.substring(0, 57) + '...';
+            }
+            link.textContent = displayText;
+            
             listItem.appendChild(link);
             citationsList.appendChild(listItem);
         });
         
-        citationsDiv.appendChild(citationsList);
-        chatMessages.appendChild(citationsDiv);
+        citationsContent.appendChild(citationsList);
+        
+        // Add click handler for toggle
+        citationsHeader.addEventListener('click', function() {
+            const isExpanded = citationsContent.classList.contains('expanded');
+            if (isExpanded) {
+                citationsContent.classList.remove('expanded');
+                citationsToggle.classList.remove('expanded');
+            } else {
+                citationsContent.classList.add('expanded');
+                citationsToggle.classList.add('expanded');
+            }
+        });
+        
+        // Assemble the citations container
+        citationsDiv.appendChild(citationsHeader);
+        citationsDiv.appendChild(citationsContent);
+        
+        // Attach citations to the message content
+        messageContent.appendChild(citationsDiv);
         scrollToBottom();
     }
 

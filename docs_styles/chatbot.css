@@ -30,6 +30,8 @@
     transition: margin-left 0.3s ease;
     position: relative;
     z-index: 1;
+    min-height: 0; /* Important: allows flex child to shrink */
+    height: 100%; /* Ensure it takes full height */
 }
 
 .chatbot-container .chat-sidebar:not(.collapsed) ~ .main-content {
@@ -205,13 +207,33 @@ body.chatbot-open {
     transform: translateX(0);
     transition: transform 0.3s ease;
     z-index: 9;
-    overflow: hidden;
+    overflow-y: auto; /* Enable vertical scrolling */
+    overflow-x: hidden; /* Hide horizontal overflow */
     box-shadow: 2px 0 10px rgba(0, 0, 0, 0.1);
     box-sizing: border-box;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
 }
 
 .chat-sidebar.collapsed {
     transform: translateX(-100%);
+}
+
+.chat-sidebar::-webkit-scrollbar {
+    width: 6px;
+}
+
+.chat-sidebar::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.chat-sidebar::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 3px;
+}
+
+.chat-sidebar::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.3);
 }
 
 .sidebar-header {
@@ -306,6 +328,7 @@ body.chatbot-open {
 .chat-messages {
     flex: 1;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 20px;
     display: flex;
     flex-direction: column;
@@ -313,6 +336,8 @@ body.chatbot-open {
     background: #fafafa;
     scrollbar-width: thin;
     scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+    min-height: 0; /* Important: allows flex child to shrink below content size */
+    max-height: 100%; /* Ensure it doesn't exceed container */
 }
 
 .chat-messages::-webkit-scrollbar {
@@ -399,8 +424,6 @@ body.chatbot-open {
 }
 
 .message-content pre {
-    background: #f8f9fa;
-    border: 1px solid #e9ecef;
     border-radius: 8px;
     padding: 12px;
     margin: 8px 0;
@@ -408,6 +431,7 @@ body.chatbot-open {
     font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
     font-size: 13px;
     line-height: 1.4;
+    /* Let Prism handle background and colors */
 }
 
 .message-content pre code {
@@ -581,27 +605,85 @@ body.chatbot-open {
 }
 
 .citations-container {
-    margin: 16px 0;
-    padding: 12px;
+    margin: 12px -4px 0 -4px; /* Extend slightly beyond message padding */
     background: #f8f9fa;
-    border-left: 4px solid #4a6bdf;
-    border-radius: 0 8px 8px 0;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    width: calc(100% + 8px); /* Account for negative margins */
+    box-sizing: border-box;
+    font-size: 13px; /* Smaller font for compact look */
+    display: block;
+}
+
+.citations-header {
+    padding: 8px 12px; /* Smaller padding for compact look */
+    background: #f1f3f4;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    transition: background-color 0.2s ease;
+    user-select: none;
+    border-radius: 6px 6px 0 0; /* Round only top corners */
+    font-size: 12px; /* Smaller font */
+}
+
+.citations-header:hover {
+    background: #e5e7eb;
 }
 
 .citations-title {
-    font-size: 14px;
-    font-weight: 600;
-    color: #374151;
-    margin: 0 0 8px 0;
+    font-size: 12px; /* Smaller font */
+    font-weight: 500; /* Less bold */
+    color: #6b7280; /* Lighter color */
+    margin: 0;
+}
+
+.citations-toggle {
+    font-size: 10px; /* Even smaller arrow */
+    color: #9ca3af; /* Lighter color */
+    transition: transform 0.2s ease;
+}
+
+.citations-toggle.expanded {
+    transform: rotate(180deg);
+}
+
+.citations-content {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease-in-out;
+}
+
+.citations-content.expanded {
+    max-height: 180px; /* Compact accordion height */
 }
 
 .citations-list {
     list-style: none;
-    padding: 0;
+    padding: 6px 12px; /* Smaller padding */
     margin: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+    max-height: 150px; /* Smaller scrollable area */
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+}
+
+.citations-list::-webkit-scrollbar {
+    width: 4px;
+}
+
+.citations-list::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.citations-list::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 2px;
+}
+
+.citations-list::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.3);
 }
 
 .citations-list li {
@@ -612,13 +694,14 @@ body.chatbot-open {
 .citations-list a {
     color: #4a6bdf;
     text-decoration: none;
-    font-size: 13px;
-    padding: 4px 8px;
-    border-radius: 4px;
+    font-size: 11px; /* Smaller font */
+    padding: 2px 4px; /* Smaller padding */
+    border-radius: 3px;
     transition: all 0.2s ease;
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 4px; /* Smaller gap */
+    line-height: 1.3; /* Tighter line height */
 }
 
 .citations-list a:hover {
@@ -628,7 +711,7 @@ body.chatbot-open {
 
 .citations-list a::before {
     content: "🔗";
-    font-size: 12px;
+    font-size: 10px; /* Smaller icon */
 }
 
 /* Dark mode support */
@@ -672,10 +755,23 @@ body.chatbot-open {
     
     .citations-container {
         background: #374151;
+        border-color: #4b5563;
+    }
+    
+    .citations-header {
+        background: #4b5563;
+    }
+    
+    .citations-header:hover {
+        background: #6b7280;
     }
     
     .citations-title {
         color: #f9fafb;
+    }
+    
+    .citations-toggle {
+        color: #d1d5db;
     }
 }
 
