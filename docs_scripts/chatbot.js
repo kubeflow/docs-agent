@@ -220,7 +220,6 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     // State - TODO 1: Add chat stack state management ✅
     let isTyping = false;
-    let socket = null;
     let currentMessageDiv = null;
     let currentMessageContent = '';
     let messagesHistory = []; // Current chat messages
@@ -466,115 +465,180 @@ document.addEventListener('DOMContentLoaded', async function() {
         console.log(`Deleted chat: ${chatToDelete.name}`);
     }
 
-    // Initialize WebSocket connection
-    function connectWebSocket() {
+    // API Configuration
+    const API_BASE_URL = 'https://129.80.218.9/api/agent/chat';
+    const AUTH_TOKEN = import.meta.env.VITE_AUTH_TOKEN || 'fallback-token-for-development';
+    
+    // API connection status
+    let isConnected = false;
+    
+    // Initialize API connection
+    function initializeAPI() {
+        console.log('Initializing API connection...');
+        isConnected = true; // API is stateless, so we consider it always "connected"
+        console.log('API connection ready');
+    }
+    
+    // Send message to API
+    async function sendMessageToAPI(message, messagesHistory) {
         try {
-            console.log('Attempting to connect to WebSocket...');
-            socket = new WebSocket('wss://websocket-server-production-9b44.up.railway.app');
+            console.log('Sending message to API:', message);
             
-            socket.onopen = function(e) {
-                console.log('WebSocket connection established successfully');
+            const payload = {
+                message: message,
+                stream: true,
+                messages: messagesHistory
             };
             
-            socket.onmessage = function(event) {
-                console.log('Received message from server:', event.data);
-                try {
-                    const response = JSON.parse(event.data);
+            const response = await fetch(API_BASE_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${AUTH_TOKEN}`
+                },
+                body: JSON.stringify(payload)
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            // Handle streaming response
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            
+            // Reset current message state
+            currentMessageDiv = null;
+            currentMessageContent = '';
+            
+            while (true) {
+                const { done, value } = await reader.read();
+                
+                if (done) {
+                    console.log('Stream completed');
+                    break;
+                }
+                
+                const chunk = decoder.decode(value, { stream: true });
+                const lines = chunk.split('\n');
+                
+                for (const line of lines) {
+                    if (line.trim() === '') continue;
                     
-                    if (response.type === 'system') {
-                        // Skip system messages (connection status)
-                        console.log('System message:', response.content);
-                        return;
-                    }
-                    
-                    if (response.type === 'citations') {
-                        addCitations(response.citations);
-                        return;
-                    }
-                    
-                    if (response.type === 'content') {
-                        if (!currentMessageDiv) {
-                            if (!chatMessages) {
-                                console.error('Cannot display message: chat messages container not found');
+                    try {
+                        // Handle Server-Sent Events format
+                        if (line.startsWith('data: ')) {
+                            const data = line.substring(6);
+                            if (data === '[DONE]') {
+                                // End of stream
+                                if (currentMessageContent.trim()) {
+                                    messagesHistory.push({
+                                        role: 'assistant',
+                                        content: currentMessageContent.trim()
+                                    });
+                                }
+                                currentMessageDiv = null;
+                                currentMessageContent = '';
+                                autoSaveCurrentChat();
+                                removeTypingIndicator();
                                 return;
                             }
-
-                            // Create new message div for the first token
-                            currentMessageDiv = document.createElement('div');
-                            currentMessageDiv.className = 'message bot-message';
                             
-                            const contentDiv = document.createElement('div');
-                            contentDiv.className = 'message-content';
-                            
-                            const paragraph = document.createElement('p');
-                            currentMessageDiv.appendChild(contentDiv);
-                            contentDiv.appendChild(paragraph);
-                            
-                            chatMessages.appendChild(currentMessageDiv);
-                            removeTypingIndicator();
+                            const response = JSON.parse(data);
+                            handleAPIResponse(response);
+                        } else {
+                            // Try to parse as JSON directly
+                            const response = JSON.parse(line);
+                            handleAPIResponse(response);
                         }
-                        
-                        // Append new content to the end (tokens come in reverse order)
-                        currentMessageContent += response.content;
-                        const paragraph = currentMessageDiv.querySelector('p');
-                        
-                        // Format streaming content
-                        const formattedText = formatMarkdown(currentMessageContent, true);
-                        
-                        paragraph.innerHTML = formattedText;
-                        
-                        // Apply syntax highlighting to any new code blocks
-                        if (window.Prism) {
-                            const codeBlocks = currentMessageDiv.querySelectorAll('pre code');
-                            codeBlocks.forEach(block => {
-                                if (!block.classList.contains('prism-highlighted')) {
-                                    block.classList.add('prism-highlighted');
-                                    window.Prism.highlightElement(block);
-                                }
-                            });
-                        }
-                        
-                        scrollToBottom();
+                    } catch (parseError) {
+                        console.warn('Failed to parse response line:', line, parseError);
                     }
-                    
-                    // Handle end of message or errors
-                    if (response.type === 'end') {
-                        // Store the complete bot response in conversation history
-                        if (currentMessageContent.trim()) {
-                            messagesHistory.push({
-                                role: 'assistant',
-                                content: currentMessageContent.trim()
-                            });
-                        }
-                        currentMessageDiv = null;
-                        currentMessageContent = '';
-                        
-                        // Auto-save after bot response
-                        autoSaveCurrentChat();
-                    } else if (response.type === 'error') {
-                        removeTypingIndicator();
-                        addMessage('Error: ' + response.content, 'bot');
-                        currentMessageDiv = null;
-                        currentMessageContent = '';
-                    }
-                    
-                } catch (error) {
-                    console.error('Error parsing WebSocket message:', error);
-                    removeTypingIndicator();
-                    addMessage('Sorry, there was an error processing your request.', 'bot');
                 }
-            };
+            }
             
-            socket.onclose = function(event) {
-                console.log('WebSocket connection closed, code:', event.code, 'reason:', event.reason);
-                setTimeout(connectWebSocket, 3000);
-            };
-            
-            socket.onerror = function(error) {
-                console.error('WebSocket error:', error);
-            };
         } catch (error) {
-            console.error('Error creating WebSocket connection:', error);
+            console.error('Error sending message to API:', error);
+            removeTypingIndicator();
+            addMessage('Sorry, there was an error processing your request. Please try again.', 'bot');
+        }
+    }
+    
+    function handleAPIResponse(response) {
+        console.log('Received API response:', response);
+        
+        // Handle different response types
+        if (response.type === 'system') {
+            console.log('System message:', response.content);
+            return;
+        }
+        
+        if (response.type === 'citations') {
+            addCitations(response.citations);
+            return;
+        }
+        
+        if (response.type === 'content') {
+            if (!currentMessageDiv) {
+                if (!chatMessages) {
+                    console.error('Cannot display message: chat messages container not found');
+                    return;
+                }
+
+                // Create new message div for the first token
+                currentMessageDiv = document.createElement('div');
+                currentMessageDiv.className = 'message bot-message';
+                
+                const contentDiv = document.createElement('div');
+                contentDiv.className = 'message-content';
+                
+                const paragraph = document.createElement('p');
+                currentMessageDiv.appendChild(contentDiv);
+                contentDiv.appendChild(paragraph);
+                
+                chatMessages.appendChild(currentMessageDiv);
+                removeTypingIndicator();
+            }
+            
+            // Append new content
+            currentMessageContent += response.content;
+            const paragraph = currentMessageDiv.querySelector('p');
+            
+            // Format streaming content
+            const formattedText = formatMarkdown(currentMessageContent, true);
+            paragraph.innerHTML = formattedText;
+            
+            // Apply syntax highlighting to any new code blocks
+            if (window.Prism) {
+                const codeBlocks = currentMessageDiv.querySelectorAll('pre code');
+                codeBlocks.forEach(block => {
+                    if (!block.classList.contains('prism-highlighted')) {
+                        block.classList.add('prism-highlighted');
+                        window.Prism.highlightElement(block);
+                    }
+                });
+            }
+            
+            scrollToBottom();
+        }
+        
+        // Handle end of message or errors
+        if (response.type === 'end') {
+            // Store the complete bot response in conversation history
+            if (currentMessageContent.trim()) {
+                messagesHistory.push({
+                    role: 'assistant',
+                    content: currentMessageContent.trim()
+                });
+            }
+            currentMessageDiv = null;
+            currentMessageContent = '';
+            autoSaveCurrentChat();
+        } else if (response.type === 'error') {
+            removeTypingIndicator();
+            addMessage('Error: ' + response.content, 'bot');
+            currentMessageDiv = null;
+            currentMessageContent = '';
         }
     }
 
@@ -584,9 +648,8 @@ document.addEventListener('DOMContentLoaded', async function() {
     // Add welcome message
     addWelcomeMessage();
     
-
-    // Connect to WebSocket when page loads
-    connectWebSocket();
+    // Initialize API connection
+    initializeAPI();
 
     // Event Listeners
     sendButton.addEventListener('click', handleSendMessage);
@@ -721,10 +784,6 @@ document.addEventListener('DOMContentLoaded', async function() {
         const message = userInput.value.trim();
         if (!message || isTyping) return;
 
-        // Reset the current message state
-        currentMessageDiv = null;
-        currentMessageContent = '';
-
         // Add user message to history
         messagesHistory.push({
             role: 'user',
@@ -739,29 +798,13 @@ document.addEventListener('DOMContentLoaded', async function() {
         // Show typing indicator
         showTypingIndicator();
 
-        // Send message to WebSocket server
-        if (socket && socket.readyState === WebSocket.OPEN) {
-            try {
-                // Send the complete conversation context as JSON
-                const payload = {
-                    message: message,
-                    messages: messagesHistory
-                };
-                console.log('Sending message with context to server:', payload);
-                console.log('Full conversation history:', messagesHistory);
-                socket.send(JSON.stringify(payload));
-            } catch (error) {
-                console.error('Error sending message:', error);
-                removeTypingIndicator();
-                addMessage('Error sending your message. Please try again.', 'bot');
-            }
+        // Send message to API
+        if (isConnected) {
+            sendMessageToAPI(message, messagesHistory);
         } else {
-            // If WebSocket is not connected, show an error message
-            console.error('WebSocket not connected. Current state:', socket ? socket.readyState : 'No socket');
+            console.error('API not connected');
             removeTypingIndicator();
             addMessage('Unable to connect to the server. Please try again later.', 'bot');
-            // Try to reconnect
-            connectWebSocket();
         }
         
         // Auto-save after user message
