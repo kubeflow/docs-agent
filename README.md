@@ -44,64 +44,11 @@ Kubeflow users often struggle to find relevant information across the extensive 
 
 ### High-Level Architecture
 
-```mermaid
-graph TB
-    subgraph "User Interface"
-        UI[Web Interface]
-        API[API Client]
-    end
-    
-    subgraph "API Layer"
-        WS[WebSocket API]
-        HTTP[HTTPS API]
-    end
-    
-    subgraph "Processing Layer"
-        LLM[Llama 3.1-8B<br/>via KServe]
-        EMB[Embedding Model<br/>sentence-transformers]
-    end
-    
-    subgraph "Data Layer"
-        MILVUS[(Milvus Vector DB)]
-        KFP[Kubeflow Pipelines]
-    end
-    
-    subgraph "Data Sources"
-        GITHUB[GitHub Repositories]
-        DOCS[Documentation Files]
-    end
-    
-    UI --> WS
-    API --> HTTP
-    WS --> LLM
-    HTTP --> LLM
-    LLM --> EMB
-    EMB --> MILVUS
-    KFP --> GITHUB
-    KFP --> DOCS
-    KFP --> MILVUS
-```
+![High-Level Architecture](assets/indexing.svg)
 
 ### Data Flow
 
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant API as API Server
-    participant LLM as Llama Model
-    participant EMB as Embedding Model
-    participant M as Milvus
-    
-    U->>API: Query Request
-    API->>LLM: Process Query
-    LLM->>API: Tool Call Request
-    API->>EMB: Generate Embedding
-    EMB->>M: Vector Search
-    M->>API: Relevant Documents
-    API->>LLM: Tool Results
-    LLM->>API: Final Response
-    API->>U: Streamed Response
-```
+![Data Flow](assets/querying.svg)
 
 ## Prerequisites
 
