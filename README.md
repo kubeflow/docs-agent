@@ -342,15 +342,19 @@ async def stream_llm_response(payload, websocket, citations_collector):
 
 #### HTTPS API (`server-https/app.py`)
 
-**Use Case**: RESTful integrations, server-to-server communication
+**Use Case**: RESTful integrations, server-to-server communication, web applications
 
-**Features**:
-- Server-Sent Events (SSE) for streaming
-- Both streaming and non-streaming modes
-- CORS support for web applications
-- FastAPI-based with automatic documentation
+**Key Features**:
+- **Dual Response Modes**: Both streaming (Server-Sent Events) and non-streaming JSON responses
+- **RAG Integration**: Automatic tool calling for Kubeflow documentation search
+- **CORS Support**: Full cross-origin resource sharing for web applications
+- **FastAPI Framework**: Automatic OpenAPI documentation and type validation
+- **Production Ready**: Health checks, error handling, and Kubernetes integration
+- **Citation Management**: Automatic collection and deduplication of source citations
 
-**Key Endpoints**:
+**API Endpoints**:
+
+**Main Chat Endpoint**:
 ```python
 @app.post("/chat")
 async def chat(request: ChatRequest):
@@ -358,13 +362,44 @@ async def chat(request: ChatRequest):
     # Supports both streaming and non-streaming responses
     # Handles tool calling and citation collection
     # Returns structured JSON responses
+```
 
+**Health Check Endpoint**:
+```python
 @app.get("/health")
 async def health_check():
     """Health check for Kubernetes probes"""
     # Essential for production deployments
     # Used by readiness and liveness probes
 ```
+
+**Request/Response Models**:
+```python
+class ChatRequest(BaseModel):
+    message: str
+    stream: Optional[bool] = True  # Default to streaming
+
+# Streaming Response (SSE)
+data: {"type": "content", "content": "response text"}
+data: {"type": "tool_result", "tool_name": "search_kubeflow_docs", "content": "search results"}
+data: {"type": "citations", "citations": ["url1", "url2"]}
+data: {"type": "done"}
+
+# Non-streaming Response
+{
+    "response": "Complete response text",
+    "citations": ["url1", "url2"]  # or null if no citations
+}
+```
+
+**Advanced Features**:
+
+- **Intelligent Tool Calling**: Automatically determines when to search documentation based on query context
+- **Streaming Tool Execution**: Real-time tool call execution with live updates
+- **Citation Tracking**: Automatic collection and deduplication of source URLs
+- **Error Handling**: Comprehensive error handling with detailed error messages
+- **CORS Configuration**: Full CORS support for web application integration
+- **Resource Management**: Proper connection pooling and cleanup for Milvus and KServe
 
 #### SSL Certificate Requirements
 
@@ -419,41 +454,182 @@ ws.send(JSON.stringify({
 
 #### HTTPS API
 
+**Streaming Request (Server-Sent Events)**:
 ```bash
-# Streaming request
 curl -X POST "https://your-domain.com/chat" \
   -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
   -d '{"message": "What is KServe?", "stream": true}'
+```
 
-# Non-streaming request
+**Non-streaming Request (JSON Response)**:
+```bash
 curl -X POST "https://your-domain.com/chat" \
   -H "Content-Type: application/json" \
   -d '{"message": "What is KServe?", "stream": false}'
+```
+
+**JavaScript Integration Example**:
+```javascript
+// Streaming request
+const response = await fetch('https://your-domain.com/chat', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Accept': 'text/event-stream'
+  },
+  body: JSON.stringify({
+    message: 'How do I create a Kubeflow pipeline?',
+    stream: true
+  })
+});
+
+const reader = response.body.getReader();
+const decoder = new TextDecoder();
+
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+  
+  const chunk = decoder.decode(value);
+  const lines = chunk.split('\n');
+  
+  for (const line of lines) {
+    if (line.startsWith('data: ')) {
+      const data = JSON.parse(line.slice(6));
+      switch(data.type) {
+        case 'content':
+          console.log('Content:', data.content);
+          break;
+        case 'tool_result':
+          console.log('Tool:', data.tool_name, data.content);
+          break;
+        case 'citations':
+          console.log('Citations:', data.citations);
+          break;
+        case 'done':
+          console.log('Response complete');
+          break;
+      }
+    }
+  }
+}
+```
+
+**Python Integration Example**:
+```python
+import requests
+import json
+
+# Non-streaming request
+response = requests.post(
+    'https://your-domain.com/chat',
+    json={
+        'message': 'What is KServe?',
+        'stream': False
+    }
+)
+
+data = response.json()
+print(f"Response: {data['response']}")
+if data.get('citations'):
+    print(f"Sources: {data['citations']}")
+```
 
 ## Configuration
 
 ### Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `KSERVE_URL` | `http://llama.santhosh.svc.cluster.local/openai/v1/chat/completions` | KServe endpoint URL |
-| `MODEL` | `llama3.1-8B` | Model name |
-| `PORT` | `8000` | API server port |
-| `MILVUS_HOST` | `my-release-milvus.santhosh.svc.cluster.local` | Milvus host |
-| `MILVUS_PORT` | `19530` | Milvus port |
-| `MILVUS_COLLECTION` | `docs_rag` | Milvus collection name |
-| `EMBEDDING_MODEL` | `sentence-transformers/all-mpnet-base-v2` | Embedding model |
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>KSERVE_URL</code></td>
+<td><code>http://llama.santhosh.svc.cluster.local/openai/v1/chat/completions</code></td>
+<td>KServe endpoint URL</td>
+</tr>
+<tr>
+<td><code>MODEL</code></td>
+<td><code>llama3.1-8B</code></td>
+<td>Model name</td>
+</tr>
+<tr>
+<td><code>PORT</code></td>
+<td><code>8000</code></td>
+<td>API server port</td>
+</tr>
+<tr>
+<td><code>MILVUS_HOST</code></td>
+<td><code>my-release-milvus.santhosh.svc.cluster.local</code></td>
+<td>Milvus host</td>
+</tr>
+<tr>
+<td><code>MILVUS_PORT</code></td>
+<td><code>19530</code></td>
+<td>Milvus port</td>
+</tr>
+<tr>
+<td><code>MILVUS_COLLECTION</code></td>
+<td><code>docs_rag</code></td>
+<td>Milvus collection name</td>
+</tr>
+<tr>
+<td><code>EMBEDDING_MODEL</code></td>
+<td><code>sentence-transformers/all-mpnet-base-v2</code></td>
+<td>Embedding model</td>
+</tr>
+</tbody>
+</table>
 
 ### Pipeline Parameters
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `repo_owner` | `kubeflow` | GitHub repository owner |
-| `repo_name` | `website` | GitHub repository name |
-| `directory_path` | `content/en` | Documentation directory path |
-| `chunk_size` | `1000` | Text chunk size for embedding |
-| `chunk_overlap` | `100` | Overlap between chunks |
-| `base_url` | `https://www.kubeflow.org/docs` | Base URL for citations |
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>repo_owner</code></td>
+<td><code>kubeflow</code></td>
+<td>GitHub repository owner</td>
+</tr>
+<tr>
+<td><code>repo_name</code></td>
+<td><code>website</code></td>
+<td>GitHub repository name</td>
+</tr>
+<tr>
+<td><code>directory_path</code></td>
+<td><code>content/en</code></td>
+<td>Documentation directory path</td>
+</tr>
+<tr>
+<td><code>chunk_size</code></td>
+<td><code>1000</code></td>
+<td>Text chunk size for embedding</td>
+</tr>
+<tr>
+<td><code>chunk_overlap</code></td>
+<td><code>100</code></td>
+<td>Overlap between chunks</td>
+</tr>
+<tr>
+<td><code>base_url</code></td>
+<td><code>https://www.kubeflow.org/docs</code></td>
+<td>Base URL for citations</td>
+</tr>
+</tbody>
+</table>
 
 ## Chat History and Persistence
 
