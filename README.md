@@ -688,9 +688,19 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 
 ## Acknowledgments
 
+### Mentors
+- [Francisco Javier Arceo](https://www.linkedin.com/in/franciscojavierarceo/) - Project mentor and guidance
+- [Chase Christensen](https://www.linkedin.com/in/chase-c-695463162/) - Project mentor and technical support
+
+### Organizations
+- [Google Summer of Code (GSoC)](https://summerofcode.withgoogle.com/) for providing this incredible opportunity
+- [Red Hat AI](https://www.redhat.com/en/topics/ai) for providing the Llama 3.1-8B model
+- [Hugging Face](https://huggingface.co/) for the model hosting and sentence transformers library
+- [Oracle Cloud Infrastructure (OCI)](https://www.oracle.com/cloud/) for providing cloud resources and infrastructure
+
+### Open Source Community
 - [Kubeflow Community](https://github.com/kubeflow/community) for the KEP-867 proposal
 - [Milvus](https://milvus.io/) for the vector database
 - [KServe](https://kserve.github.io/website/) for model serving
 - [vLLM](https://github.com/vllm-project/vllm) for high-performance LLM inference
-- [Hugging Face](https://huggingface.co/) for the Llama model and sentence transformers
 ```
