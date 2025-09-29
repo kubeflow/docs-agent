@@ -349,7 +349,7 @@ def github_rag_incremental_pipeline(
     changed_files: str = '[]',  # JSON string of changed file paths
     github_token: str = "",
     base_url: str = "https://www.kubeflow.org/docs",
-    chunk_size: int = 1000,
+    chunk_size: int = 1200,
     chunk_overlap: int = 100,
     milvus_host: str = "milvus-standalone-final.santhosh.svc.cluster.local",
     milvus_port: str = "19530",

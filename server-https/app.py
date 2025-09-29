@@ -1,12 +1,12 @@
 import os
 import json
-import asyncio
 import httpx
-import websockets
-from websockets.server import serve
-from websockets.exceptions import ConnectionClosedError
-import logging
-from typing import Dict, Any, List
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import uvicorn
+from typing import Dict, Any, List, Optional, AsyncGenerator
 from sentence_transformers import SentenceTransformer
 from pymilvus import connections, Collection
 
@@ -22,7 +22,7 @@ MILVUS_COLLECTION = os.getenv("MILVUS_COLLECTION", "docs_rag")
 MILVUS_VECTOR_FIELD = os.getenv("MILVUS_VECTOR_FIELD", "vector")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
 
-# System prompt
+# System prompt (same as WebSocket version)
 SYSTEM_PROMPT = """
 You are the Kubeflow Docs Assistant.
 
@@ -41,7 +41,7 @@ Tool Use
 - When you do call the tool:
   • Use one clear, focused query.  
   • Summarize the result in your own words.  
-  • If no results are relevant, say “not found in the docs” and suggest refining the query.
+  • If no results are relevant, say "not found in the docs" and suggest refining the query.
 - Example usage:
   - User: "What is Kubeflow and how to setup kubeflow on my local machine"
   - You should make a tool call to search the docs with a query "kubeflow setup".
@@ -63,7 +63,53 @@ Style
 - Reply in clean Markdown.
 """
 
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_kubeflow_docs",
+            "description": (
+                "Search the official Kubeflow docs when the user asks Kubeflow-specific questions "
+                "about Pipelines, KServe, Notebooks/Jupyter, Katib, or the SDK/CLI/APIs.\n"
+                "Call ONLY for Kubeflow features, setup, usage, errors, or version differences that need citations.\n"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Short, focused search string (e.g., 'KServe inferenceService canary', 'Pipelines v2 disable cache').",
+                        "minLength": 1
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "Number of hits to retrieve (the assistant will read up to this many).",
+                        "default": 5,
+                        "minimum": 1,
+                        "maximum": 10
+                    }
+                },
+                "required": ["query"],
+                "additionalProperties": False
+            }
+        }
+    }
+]
 
+app = FastAPI(title="Kubeflow Docs API Service", version="1.0.0")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, specify your actual domains
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class ChatRequest(BaseModel):
+    message: str
+    stream: Optional[bool] = True
 
 def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
     """Execute a semantic search in Milvus and return structured JSON serializable results."""
@@ -109,39 +155,6 @@ def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
             connections.disconnect(alias="default")
         except Exception:
             pass
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "search_kubeflow_docs",
-            "description": (
-                "Search the official Kubeflow docs when the user asks Kubeflow-specific questions "
-                "about Pipelines, KServe, Notebooks/Jupyter, Katib, or the SDK/CLI/APIs.\n"
-                "Call ONLY for Kubeflow features, setup, usage, errors, or version differences that need citations.\n"
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Short, focused search string (e.g., 'KServe inferenceService canary', 'Pipelines v2 disable cache').",
-                        "minLength": 1
-                    },
-                    "top_k": {
-                        "type": "integer",
-                        "description": "Number of hits to retrieve (the assistant will read up to this many).",
-                        "default": 5,
-                        "minimum": 1,
-                        "maximum": 10
-                    }
-                },
-                "required": ["query"],
-                "additionalProperties": False
-            }
-        }
-    }
-]
-
 
 async def execute_tool(tool_call: Dict[str, Any]) -> tuple[str, List[str]]:
     """Execute a tool call and return the result and citations"""
@@ -181,17 +194,17 @@ async def execute_tool(tool_call: Dict[str, Any]) -> tuple[str, List[str]]:
         print(f"[ERROR] Tool execution failed: {e}")
         return f"Tool execution failed: {e}", []
 
-async def stream_llm_response(payload: Dict[str, Any], websocket, citations_collector: List[str] = None) -> None:
-    """Stream response from LLM to websocket, handling tool calls"""
-    if citations_collector is None:
-        citations_collector = []
+async def stream_llm_response(payload: Dict[str, Any]) -> AsyncGenerator[str, None]:
+    """Stream response from LLM and handle tool calls, yielding SSE events"""
+    citations_collector = []
+    
     try:
         async with httpx.AsyncClient(timeout=120) as client:
             async with client.stream("POST", KSERVE_URL, json=payload) as response:
                 if response.status_code != 200:
                     error_msg = f"LLM service error: HTTP {response.status_code}"
                     print(f"[ERROR] {error_msg}")
-                    await websocket.send(json.dumps({"type": "error", "content": error_msg}))
+                    yield f"data: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
                     return
                 
                 # Buffer for accumulating tool calls
@@ -245,10 +258,7 @@ async def stream_llm_response(payload: Dict[str, Any], websocket, citations_coll
                         
                         # Handle regular content
                         elif "content" in delta and delta["content"]:
-                            await websocket.send(json.dumps({
-                                "type": "content", 
-                                "content": delta["content"]
-                            }))
+                            yield f"data: {json.dumps({'type': 'content', 'content': delta['content']})}\n\n"
                         
                         # Handle finish reason - execute tools if needed
                         if finish_reason == "tool_calls":
@@ -266,22 +276,16 @@ async def stream_llm_response(payload: Dict[str, Any], websocket, citations_coll
                                         # Collect citations
                                         citations_collector.extend(tool_citations)
                                         
-                                        # Send tool execution result to client
-                                        await websocket.send(json.dumps({
-                                            "type": "tool_result",
-                                            "tool_name": tool_call["function"]["name"],
-                                            "content": result
-                                        }))
+                                        # Send tool execution result
+                                        yield f"data: {json.dumps({'type': 'tool_result', 'tool_name': tool_call['function']['name'], 'content': result})}\n\n"
                                         
                                         # Make follow-up request with tool results
-                                        await handle_tool_follow_up(payload, tool_call, result, websocket, citations_collector)
+                                        async for follow_up_chunk in handle_tool_follow_up(payload, tool_call, result, citations_collector):
+                                            yield follow_up_chunk
                                         
                                     except Exception as e:
                                         print(f"[ERROR] Tool execution error: {e}")
-                                        await websocket.send(json.dumps({
-                                            "type": "error",
-                                            "content": f"Tool execution failed: {e}"
-                                        }))
+                                        yield f"data: {json.dumps({'type': 'error', 'content': f'Tool execution failed: {e}'})}\n\n"
                             
                             tool_calls_buffer.clear()
                             break  # Tool execution complete, exit streaming loop
@@ -289,15 +293,26 @@ async def stream_llm_response(payload: Dict[str, Any], websocket, citations_coll
                     except json.JSONDecodeError as e:
                         print(f"[ERROR] JSON decode error: {e}, line: {line}")
                         continue
+        
+        # Send citations if any were collected
+        if citations_collector:
+            # Remove duplicates while preserving order
+            unique_citations = []
+            for citation in citations_collector:
+                if citation not in unique_citations:
+                    unique_citations.append(citation)
+            
+            yield f"data: {json.dumps({'type': 'citations', 'citations': unique_citations})}\n\n"
+        
+        # Send completion signal
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
                         
     except Exception as e:
         print(f"[ERROR] Streaming failed: {e}")
-        await websocket.send(json.dumps({"type": "error", "content": f"Streaming failed: {e}"}))
+        yield f"data: {json.dumps({'type': 'error', 'content': f'Streaming failed: {e}'})}\n\n"
 
-async def handle_tool_follow_up(original_payload: Dict[str, Any], tool_call: Dict[str, Any], tool_result: str, websocket, citations_collector: List[str] = None) -> None:
+async def handle_tool_follow_up(original_payload: Dict[str, Any], tool_call: Dict[str, Any], tool_result: str, citations_collector: List[str]) -> AsyncGenerator[str, None]:
     """Handle follow-up request after tool execution"""
-    if citations_collector is None:
-        citations_collector = []
     try:
         print("[TOOL] Handling follow-up request with tool results")
         
@@ -326,23 +341,70 @@ async def handle_tool_follow_up(original_payload: Dict[str, Any], tool_call: Dic
         }
         
         # Stream the follow-up response
-        await stream_llm_response(follow_up_payload, websocket, citations_collector)
+        async for chunk in stream_llm_response(follow_up_payload):
+            yield chunk
         
     except Exception as e:
         print(f"[ERROR] Tool follow-up failed: {e}")
-        await websocket.send(json.dumps({"type": "error", "content": f"Tool follow-up failed: {e}"}))
+        yield f"data: {json.dumps({'type': 'error', 'content': f'Tool follow-up failed: {e}'})}\n\n"
 
-async def handle_chat(message: str, websocket) -> None:
-    """Handle chat with tool calling support"""
+async def get_non_streaming_response(payload: Dict[str, Any]) -> tuple[str, List[str]]:
+    """Get non-streaming response by collecting all streaming chunks"""
+    response_content = ""
+    citations = []
+    
+    async for chunk in stream_llm_response(payload):
+        if chunk.startswith("data: "):
+            try:
+                data = json.loads(chunk[6:].strip())
+                if data.get("type") == "content":
+                    response_content += data.get("content", "")
+                elif data.get("type") == "citations":
+                    citations.extend(data.get("citations", []))
+                elif data.get("type") == "error":
+                    raise HTTPException(status_code=500, detail=data.get("content", "Unknown error"))
+            except json.JSONDecodeError:
+                continue
+    
+    return response_content, citations
+
+@app.get("/")
+async def hello():
+    """Simple hello endpoint"""
+    return {"message": "Hello from Kubeflow Docs API!", "service": "https-api"}
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Kubernetes probes"""
+    return {"status": "healthy", "service": "https-api"}
+
+@app.options("/chat")
+async def options_chat():
+    """Handle preflight OPTIONS request"""
+    return {"message": "OK"}
+
+@app.options("/")
+async def options_root():
+    """Handle preflight OPTIONS request for root"""
+    return {"message": "OK"}
+
+@app.options("/health")
+async def options_health():
+    """Handle preflight OPTIONS request for health"""
+    return {"message": "OK"}
+
+@app.post("/chat")
+async def chat(request: ChatRequest):
+    """Chat endpoint with RAG capabilities - supports both streaming and non-streaming"""
     try:
-        print(f"[CHAT] Processing message: {message[:100]}...")
+        print(f"[CHAT] Processing message: {request.message[:100]}...")
         
         # Create initial payload
         payload = {
             "model": MODEL,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": message}
+                {"role": "user", "content": request.message}
             ],
             "tools": TOOLS,
             "tool_choice": "auto",
@@ -350,105 +412,46 @@ async def handle_chat(message: str, websocket) -> None:
             "max_tokens": 1500
         }
         
-        # Collect citations throughout the conversation
-        citations_collector = []
-        
-        # Start streaming response
-        await stream_llm_response(payload, websocket, citations_collector)
-        
-        # Send citations if any were collected
-        if citations_collector:
-            # Remove duplicates while preserving order
+        if request.stream:
+            # Return streaming response using Server-Sent Events
+            return StreamingResponse(
+                stream_llm_response(payload),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Headers": "Cache-Control"
+                }
+            )
+        else:
+            # Return non-streaming JSON response
+            response_content, citations = await get_non_streaming_response(payload)
+            
+            # Remove duplicates from citations while preserving order
             unique_citations = []
-            for citation in citations_collector:
+            for citation in citations:
                 if citation not in unique_citations:
                     unique_citations.append(citation)
             
-            await websocket.send(json.dumps({
-                "type": "citations", 
-                "citations": unique_citations
-            }))
-        
-        # Send completion signal
-        await websocket.send(json.dumps({"type": "done"}))
+            return {
+                "response": response_content,
+                "citations": unique_citations if unique_citations else None
+            }
         
     except Exception as e:
         print(f"[ERROR] Chat handling failed: {e}")
-        await websocket.send(json.dumps({"type": "error", "content": f"Request failed: {e}"}))
+        raise HTTPException(status_code=500, detail=f"Request failed: {e}")
 
-async def handle_websocket(websocket, path):
-    """Handle WebSocket connections"""
-    print(f"[WS] New connection from {websocket.remote_address}")
-    
-    try:
-        # Send welcome message
-        await websocket.send(json.dumps({
-            "type": "system",
-            "content": "Connected to Kubeflow Documentation Assistant"
-        }))
-        
-        async for message in websocket:
-            try:
-                # Ensure we always deal with string, not bytes
-                if isinstance(message, (bytes, bytearray)):
-                    message = message.decode("utf-8", errors="ignore")
-
-                # Try to parse as JSON first
-                try:
-                    msg_data = json.loads(message)
-                    if isinstance(msg_data, dict) and "message" in msg_data:
-                        message = msg_data["message"]
-                except json.JSONDecodeError:
-                    # Treat as plain text message
-                    pass
-
-                print(f"[WS] Received: {message[:100]}...")
-                await handle_chat(message, websocket)
-                
-            except Exception as e:
-                print(f"[ERROR] Message processing error: {e}")
-                await websocket.send(json.dumps({
-                    "type": "error", 
-                    "content": f"Message processing failed: {e}"
-                }))
-                
-    except ConnectionClosedError:
-        print("[WS] Connection closed")
-    except Exception as e:
-        print(f"[ERROR] WebSocket error: {e}")
-
-async def health_check(path, request_headers):
-    """Handle HTTP health checks"""
-    if path == "/health":
-        return 200, [("Content-Type", "text/plain")], b"OK"
-    return None
-
-async def main():
-    """Start the WebSocket server"""
-    print("🚀 Starting Kubeflow Docs WebSocket Server")
+if __name__ == "__main__":
+    print("🚀 Starting Kubeflow Docs HTTP API Server")
     print(f"   Port: {PORT}")
     print(f"   LLM Service: {KSERVE_URL}")
     print(f"   Milvus: {MILVUS_HOST}:{MILVUS_PORT}")
     print(f"   Collection: {MILVUS_COLLECTION}")
     
-    # Configure logging
-    logging.getLogger("websockets").setLevel(logging.WARNING)
-    
-    # Start server
-    async with serve(
-        handle_websocket, 
-        "0.0.0.0", 
-        PORT,
-        process_request=health_check,
-        ping_interval=30,
-        ping_timeout=10
-    ):
-        print("✅ WebSocket server is running...")
-        print(f"   WebSocket: ws://localhost:{PORT}")
-        print(f"   Health: http://localhost:{PORT}/health")
-        
-        # Keep server running
-        await asyncio.Future()
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    uvicorn.run(
+        app, 
+        host="0.0.0.0", 
+        port=PORT
+    )

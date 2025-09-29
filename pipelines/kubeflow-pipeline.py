@@ -244,7 +244,7 @@ def store_milvus(
 
 
 @dsl.pipeline(
-    name="github-rag-full-build",
+    name="github-rag",
     description="RAG pipeline for processing GitHub documentation"
 )
 def github_rag_pipeline(
@@ -285,7 +285,11 @@ def github_rag_pipeline(
     )
 
 if __name__ == "__main__":
-    # Compile the pipeline
+    import os
+    # Set environment variable to disable caching by default
+    os.environ['KFP_DISABLE_EXECUTION_CACHING_BY_DEFAULT'] = 'true'
+    
+    # Compile the pipeline with caching disabled by default
     kfp.compiler.Compiler().compile(
         pipeline_func=github_rag_pipeline,
         package_path="github_rag_pipeline.yaml"
