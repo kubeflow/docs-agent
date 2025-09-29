@@ -1,0 +1,16 @@
+# Kubeflow Pipeline Dependencies
+kfp
+
+# Data Processing
+requests
+beautifulsoup4
+
+# Machine Learning & Embeddings
+sentence-transformers
+langchain
+torch
+
+# Vector Database
+pymilvus
+numpy
+
