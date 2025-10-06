@@ -1,0 +1,22 @@
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: https-api-vs
+  namespace: santhosh
+spec:
+  gateways:
+  - kubeflow/kubeflow-gateway
+  hosts:
+  - '*'
+  http:
+  - match:
+    - uri:
+        exact: /api/agent
+    rewrite:
+      uri: /
+    route:
+    - destination:
+        host: https-api.santhosh.svc.cluster.local
+        port:
+          number: 80
+    timeout: 0s

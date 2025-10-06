@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: https-api
+  labels:
+    app: https-api
+    version: v1
+  annotations:
+    # Add service annotations for better observability
+    prometheus.io/scrape: "false"  # Disable if no metrics endpoint
+spec:
+  type: ClusterIP  # Explicit service type
+  selector:
+    app: https-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+      protocol: TCP
+    - name: http-direct
+      port: 8000
+      targetPort: 8000
+      protocol: TCP
+  # Session affinity for consistent connections
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 3600  # 1 hour timeout for sessions
