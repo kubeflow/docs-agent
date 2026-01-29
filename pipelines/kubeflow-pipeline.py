@@ -61,6 +61,103 @@ def download_github_directory(
 
 
 @dsl.component(
+    base_image="python:3.9",
+    packages_to_install=["requests"]
+)
+def download_github_issues(
+    repos: str,
+    labels: str,
+    state: str,
+    max_issues_per_repo: int,
+    github_token: str,
+    issues_data: dsl.Output[dsl.Dataset]
+):
+    """Fetch GitHub issues from multiple repos and format for RAG indexing.
+    
+    Args:
+        repos: Comma-separated list of repos (e.g., "kubeflow/kubeflow,kubeflow/pipelines")
+        labels: Comma-separated labels to filter (e.g., "kind/bug,kind/question")
+        state: Issue state - "open", "closed", or "all"
+        max_issues_per_repo: Maximum issues to fetch per repository
+        github_token: GitHub personal access token for API authentication
+        issues_data: Output dataset path
+    """
+    import requests
+    import json
+
+    headers = {"Authorization": f"token {github_token}"} if github_token else {}
+    all_issues = []
+
+    for repo in repos.split(","):
+        repo = repo.strip()
+        if "/" not in repo:
+            print(f"Skipping invalid repo format: {repo}")
+            continue
+
+        owner, name = repo.split("/", 1)
+        print(f"Fetching issues from {owner}/{name}...")
+
+        page = 1
+        repo_issues = []
+
+        while len(repo_issues) < max_issues_per_repo:
+            url = f"https://api.github.com/repos/{owner}/{name}/issues"
+            params = {
+                "state": state,
+                "labels": labels,
+                "per_page": 100,
+                "page": page
+            }
+
+            try:
+                response = requests.get(url, params=params, headers=headers)
+                if response.status_code != 200:
+                    print(f"Error fetching {repo}: HTTP {response.status_code}")
+                    break
+
+                issues = response.json()
+                if not issues:
+                    break
+
+                for issue in issues:
+                    if "pull_request" in issue:
+                        continue
+
+                    labels_str = ", ".join([l["name"] for l in issue.get("labels", [])])
+
+                    content = f"# {issue['title']}\n\n"
+                    content += f"**Repository:** {repo}\n"
+                    content += f"**Issue:** #{issue['number']}\n"
+                    content += f"**Labels:** {labels_str}\n"
+                    content += f"**State:** {issue['state']}\n\n"
+                    content += issue.get("body", "") or ""
+
+                    repo_issues.append({
+                        "path": f"issues/{name}/{issue['number']}",
+                        "content": content,
+                        "file_name": f"issue-{name}-{issue['number']}.md"
+                    })
+
+                    if len(repo_issues) >= max_issues_per_repo:
+                        break
+
+                page += 1
+
+            except Exception as e:
+                print(f"Error fetching {repo}: {e}")
+                break
+
+        all_issues.extend(repo_issues)
+        print(f"  Fetched {len(repo_issues)} issues from {repo}")
+
+    print(f"Total issues fetched: {len(all_issues)}")
+
+    with open(issues_data.path, 'w', encoding='utf-8') as f:
+        for issue_data in all_issues:
+            f.write(json.dumps(issue_data, ensure_ascii=False) + '\n')
+
+
+@dsl.component(
     base_image="pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime",
     packages_to_install=["sentence-transformers", "langchain"]
 )
@@ -283,6 +380,7 @@ def github_rag_pipeline(
         milvus_port=milvus_port,
         collection_name=collection_name
     )
+
 
 if __name__ == "__main__":
     import os
