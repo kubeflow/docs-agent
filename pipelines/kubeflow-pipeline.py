@@ -64,6 +64,224 @@ def download_github_directory(
     base_image="pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime",
     packages_to_install=["sentence-transformers", "langchain"]
 )
+@dsl.component(
+    base_image="python:3.9",
+    packages_to_install=["requests"]
+)
+def download_github_issues(
+    repos: str,
+    labels: str,
+    state: str,
+    max_issues_per_repo: int,
+    github_token: str,
+    issues_data: dsl.Output[dsl.Dataset]
+):
+    """
+    Fetch GitHub issues from multiple repos and format for RAG indexing.
+
+    Output JSONL schema includes structured metadata + source_url for citations.
+    """
+    import requests
+    import json
+    import time
+
+    headers = {"Authorization": f"token {github_token}"} if github_token else {}
+    all_issues = []
+
+    def handle_rate_limit(resp):
+        if resp.status_code == 403:
+            remaining = resp.headers.get("X-RateLimit-Remaining")
+            reset = resp.headers.get("X-RateLimit-Reset")
+            if remaining == "0" and reset:
+                sleep_for = max(0, int(reset) - int(time.time())) + 5
+                print(f"Rate limit hit. Sleeping {sleep_for}s...")
+                time.sleep(sleep_for)
+                return True
+        return False
+
+    for repo in repos.split(","):
+        repo = repo.strip()
+        if "/" not in repo:
+            print(f"Skipping invalid repo format: {repo}")
+            continue
+
+        owner, name = repo.split("/", 1)
+        print(f"Fetching issues from {owner}/{name}...")
+
+        page = 1
+        repo_issues = []
+
+        while len(repo_issues) < max_issues_per_repo:
+            url = f"https://api.github.com/repos/{owner}/{name}/issues"
+            params = {"state": state, "labels": labels, "per_page": 100, "page": page}
+
+            resp = requests.get(url, params=params, headers=headers)
+
+            if handle_rate_limit(resp):
+                continue
+
+            if resp.status_code != 200:
+                print(f"Error fetching {repo}: HTTP {resp.status_code}")
+                break
+
+            issues = resp.json()
+            if not issues:
+                break
+
+            for issue in issues:
+                # Skip pull requests (issues API also returns PRs)
+                if "pull_request" in issue:
+                    continue
+
+                labels_list = [l["name"] for l in issue.get("labels", [])]
+                labels_str = ", ".join(labels_list)
+
+                issue_number = issue["number"]
+                source_url = issue.get("html_url", "")
+                created_at = issue.get("created_at", "")
+                updated_at = issue.get("updated_at", "")
+                author = (issue.get("user") or {}).get("login", "unknown")
+
+                content = f"# {issue.get('title', '')}\n\n"
+                content += f"**Repository:** {repo}\n"
+                content += f"**Issue:** #{issue_number}\n"
+                content += f"**State:** {issue.get('state', '')}\n"
+                content += f"**Labels:** {labels_str}\n"
+                content += f"**Issue URL:** {source_url}\n\n"
+                content += issue.get("body", "") or ""
+
+                repo_issues.append({
+                    "type": "github_issue",
+                    "repo": repo,
+                    "repo_name": name,
+                    "issue_number": issue_number,
+                    "issue_state": issue.get("state", ""),
+                    "issue_title": issue.get("title", ""),
+                    "labels": labels_list,
+                    "author": author,
+                    "created_at": created_at,
+                    "updated_at": updated_at,
+                    "source_url": source_url,
+                    "path": f"issues/{name}/{issue_number}",
+                    "file_name": f"issue-{name}-{issue_number}.md",
+                    "content": content
+                })
+
+                if len(repo_issues) >= max_issues_per_repo:
+                    break
+
+            page += 1
+
+        print(f"  Fetched {len(repo_issues)} issues from {repo}")
+        all_issues.extend(repo_issues)
+
+    print(f"Total issues fetched: {len(all_issues)}")
+
+    with open(issues_data.path, "w", encoding="utf-8") as f:
+        for item in all_issues:
+            f.write(json.dumps(item, ensure_ascii=False) + "\n")
+@dsl.component(
+    base_image="python:3.9",
+    packages_to_install=["requests"]
+)
+def download_github_issue_comments(
+    issues_data: dsl.Input[dsl.Dataset],
+    github_token: str,
+    max_comments_per_issue: int,
+    output_data: dsl.Output[dsl.Dataset]
+):
+    """
+    Enrich GitHub issues dataset by appending issue comments to content.
+    Preserves schema and adds citations-ready comment URLs.
+    """
+    import json
+    import time
+    import requests
+
+    headers = {"Authorization": f"token {github_token}"} if github_token else {}
+
+    def handle_rate_limit(resp):
+        if resp.status_code == 403:
+            remaining = resp.headers.get("X-RateLimit-Remaining")
+            reset = resp.headers.get("X-RateLimit-Reset")
+            if remaining == "0" and reset:
+                sleep_for = max(0, int(reset) - int(time.time())) + 5
+                print(f"Rate limit hit. Sleeping {sleep_for}s...")
+                time.sleep(sleep_for)
+                return True
+        return False
+
+    def fetch_comments(owner: str, repo: str, issue_number: int):
+        comments = []
+        page = 1
+        while True:
+            url = f"https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/comments"
+            params = {"per_page": 100, "page": page}
+
+            resp = requests.get(url, headers=headers, params=params)
+
+            if handle_rate_limit(resp):
+                continue
+
+            if resp.status_code != 200:
+                print(f"Failed comments {owner}/{repo}#{issue_number}: HTTP {resp.status_code}")
+                break
+
+            batch = resp.json()
+            if not batch:
+                break
+
+            comments.extend(batch)
+            if len(batch) < 100:
+                break
+            page += 1
+
+        return comments
+
+    enriched = []
+
+    with open(issues_data.path, "r", encoding="utf-8") as f:
+        for line in f:
+            obj = json.loads(line)
+
+            repo_full = obj.get("repo")
+            issue_number = obj.get("issue_number")
+
+            if not repo_full or not issue_number or "/" not in repo_full:
+                enriched.append(obj)
+                continue
+
+            owner, repo_name = repo_full.split("/", 1)
+            all_comments = fetch_comments(owner, repo_name, issue_number)
+            all_comments = all_comments[:max_comments_per_issue]
+
+            obj["comments_count"] = len(all_comments)
+
+            if all_comments:
+                content = obj.get("content", "")
+                content += "\n\n---\n\n## Issue Comments\n"
+
+                for c in all_comments:
+                    author = (c.get("user") or {}).get("login", "unknown")
+                    created_at = c.get("created_at", "")
+                    comment_url = c.get("html_url", "")
+                    body = c.get("body") or ""
+
+                    content += (
+                        f"\n\n### Comment by {author} ({created_at})\n"
+                        f"**Comment URL:** {comment_url}\n\n"
+                        f"{body}\n"
+                    )
+
+                obj["content"] = content
+
+            enriched.append(obj)
+
+    with open(output_data.path, "w", encoding="utf-8") as f:
+        for obj in enriched:
+            f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+
+    print(f"Enriched {len(enriched)} issues with comments.")
 def chunk_and_embed(
     github_data: dsl.Input[dsl.Dataset],
     repo_name: str,
@@ -283,6 +501,39 @@ def github_rag_pipeline(
         milvus_port=milvus_port,
         collection_name=collection_name
     )
+        # -------------------------------
+    # GitHub Issues + Comments ingestion
+    # -------------------------------
+
+    issues_task = download_github_issues(
+        repos="kubeflow/kubeflow,kubeflow/pipelines,kubeflow/kserve",
+        labels="kind/bug,kind/question",
+        state="all",
+        max_issues_per_repo=200,
+        github_token=github_token
+    )
+
+    comments_task = download_github_issue_comments(
+        issues_data=issues_task.outputs["issues_data"],
+        github_token=github_token,
+        max_comments_per_issue=50
+    )
+
+    issues_chunk_task = chunk_and_embed(
+        github_data=comments_task.outputs["output_data"],
+        repo_name="github-issues",
+        base_url="https://github.com",
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap
+    )
+
+    store_issues_task = store_milvus(
+        embedded_data=issues_chunk_task.outputs["embedded_data"],
+        milvus_host=milvus_host,
+        milvus_port=milvus_port,
+        collection_name="issues_rag"
+    )
+
 
 if __name__ == "__main__":
     import os
