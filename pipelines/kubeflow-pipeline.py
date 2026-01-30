@@ -72,7 +72,7 @@ def download_github_issues(
     github_token: str,
     issues_data: dsl.Output[dsl.Dataset]
 ):
-    """Fetch GitHub issues from multiple repos and format for RAG indexing.
+    """Fetch GitHub issues and comments from multiple repos for RAG indexing.
     
     Args:
         repos: Comma-separated list of repos (e.g., "kubeflow/kubeflow,kubeflow/pipelines")
@@ -84,9 +84,62 @@ def download_github_issues(
     """
     import requests
     import json
+    import time
 
     headers = {"Authorization": f"token {github_token}"} if github_token else {}
     all_issues = []
+
+    def api_request(url, params=None):
+        """Make GitHub API request with rate limit handling."""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                resp = requests.get(url, params=params, headers=headers)
+                
+                # Handle rate limiting
+                if resp.status_code == 403:
+                    remaining = resp.headers.get("X-RateLimit-Remaining", "0")
+                    if remaining == "0":
+                        reset_time = int(resp.headers.get("X-RateLimit-Reset", 0))
+                        wait_time = max(reset_time - int(time.time()), 60)
+                        print(f"Rate limited. Waiting {wait_time}s...")
+                        time.sleep(min(wait_time, 300))  # Max 5 min wait
+                        continue
+                
+                if resp.status_code == 200:
+                    return resp.json()
+                else:
+                    print(f"API error: HTTP {resp.status_code}")
+                    return None
+                    
+            except Exception as e:
+                print(f"Request failed (attempt {attempt+1}): {e}")
+                time.sleep(2 ** attempt)  # Exponential backoff
+        
+        return None
+
+    def fetch_comments(owner, name, issue_number):
+        """Fetch all comments for a single issue."""
+        comments_url = f"https://api.github.com/repos/{owner}/{name}/issues/{issue_number}/comments"
+        comments_text = ""
+        page = 1
+        
+        while True:
+            comments = api_request(comments_url, {"per_page": 100, "page": page})
+            if not comments:
+                break
+                
+            for comment in comments:
+                author = comment.get("user", {}).get("login", "unknown")
+                created = comment.get("created_at", "")[:10]
+                body = comment.get("body", "") or ""
+                comments_text += f"\n\n---\n**Comment by @{author}** ({created}):\n{body}"
+            
+            if len(comments) < 100:
+                break
+            page += 1
+        
+        return comments_text
 
     for repo in repos.split(","):
         repo = repo.strip()
@@ -109,43 +162,46 @@ def download_github_issues(
                 "page": page
             }
 
-            try:
-                response = requests.get(url, params=params, headers=headers)
-                if response.status_code != 200:
-                    print(f"Error fetching {repo}: HTTP {response.status_code}")
-                    break
-
-                issues = response.json()
-                if not issues:
-                    break
-
-                for issue in issues:
-                    if "pull_request" in issue:
-                        continue
-
-                    labels_str = ", ".join([l["name"] for l in issue.get("labels", [])])
-
-                    content = f"# {issue['title']}\n\n"
-                    content += f"**Repository:** {repo}\n"
-                    content += f"**Issue:** #{issue['number']}\n"
-                    content += f"**Labels:** {labels_str}\n"
-                    content += f"**State:** {issue['state']}\n\n"
-                    content += issue.get("body", "") or ""
-
-                    repo_issues.append({
-                        "path": f"issues/{name}/{issue['number']}",
-                        "content": content,
-                        "file_name": f"issue-{name}-{issue['number']}.md"
-                    })
-
-                    if len(repo_issues) >= max_issues_per_repo:
-                        break
-
-                page += 1
-
-            except Exception as e:
-                print(f"Error fetching {repo}: {e}")
+            issues = api_request(url, params)
+            if not issues:
                 break
+
+            for issue in issues:
+                if "pull_request" in issue:
+                    continue
+
+                labels_str = ", ".join([l["name"] for l in issue.get("labels", [])])
+                issue_url = issue.get("html_url", "")
+                created_at = issue.get("created_at", "")[:10]
+                updated_at = issue.get("updated_at", "")[:10]
+
+                # Build issue content with full metadata
+                content = f"# {issue['title']}\n\n"
+                content += f"**Repository:** {repo}\n"
+                content += f"**Issue:** #{issue['number']}\n"
+                content += f"**URL:** {issue_url}\n"
+                content += f"**Labels:** {labels_str}\n"
+                content += f"**State:** {issue['state']}\n"
+                content += f"**Created:** {created_at}\n"
+                content += f"**Updated:** {updated_at}\n\n"
+                content += issue.get("body", "") or ""
+
+                # Fetch and append comments
+                if issue.get("comments", 0) > 0:
+                    comments = fetch_comments(owner, name, issue["number"])
+                    content += comments
+
+                repo_issues.append({
+                    "path": f"issues/{name}/{issue['number']}",
+                    "content": content,
+                    "file_name": f"issue-{name}-{issue['number']}.md",
+                    "url": issue_url
+                })
+
+                if len(repo_issues) >= max_issues_per_repo:
+                    break
+
+            page += 1
 
         all_issues.extend(repo_issues)
         print(f"  Fetched {len(repo_issues)} issues from {repo}")
