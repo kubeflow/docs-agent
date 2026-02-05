@@ -10,7 +10,7 @@ metadata:
     app: milvus-standalone-final
     pod-template-hash: 5cb655b8d6
   name: milvus-standalone-final-5cb655b8d6-6ngrn
-  namespace: santhosh
+  namespace: docs-agent
   ownerReferences:
   - apiVersion: apps/v1
     blockOwnerDeletion: true

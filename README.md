@@ -82,7 +82,7 @@ Milvus is an open-source vector database designed for AI applications. It provid
 
 2. **Install Milvus**:
    ```bash
-   helm upgrade --install my-release zilliztech/milvus -n santhosh \
+   helm upgrade --install my-release zilliztech/milvus -n docs-agent \
      --set cluster.enabled=false \
      --set standalone.enabled=true \
      --set etcd.replicaCount=1 \
@@ -129,7 +129,7 @@ apiVersion: serving.kserve.io/v1alpha1
 kind: ServingRuntime
 metadata:
   name: llm-runtime
-  namespace: santhosh
+  namespace: docs-agent
 spec:
   supportedModelFormats:
     - name: huggingface
@@ -158,7 +158,7 @@ apiVersion: serving.kserve.io/v1beta1
 kind: InferenceService
 metadata:
   name: llama
-  namespace: santhosh
+  namespace: docs-agent
 spec:
   predictor:
     model:
@@ -289,13 +289,13 @@ For Kubeflow Pipelines to access Milvus, proper RBAC permissions are required:
 ```bash
 # Create role for Milvus access
 kubectl create role milvus-access \
-  --namespace santhosh \
+  --namespace docs-agent \
   --verb=get,list,watch \
   --resource=services,endpoints
 
 # Bind role to KFP service account
 kubectl create rolebinding kfp-to-milvus-editor \
-  --namespace santhosh \
+  --namespace docs-agent \
   --role=milvus-access \
   --serviceaccount=kubeflow:default-editor
 ```
@@ -663,10 +663,10 @@ Currently, the system uses browser local storage for chat history management to:
 
 ```bash
 # Check Milvus status
-kubectl get pods -n santhosh | grep milvus
+kubectl get pods -n docs-agent | grep milvus
 
 # Check KServe status
-kubectl get inferenceservice -n santhosh
+kubectl get inferenceservice -n docs-agent
 
 # Check API server logs
 kubectl logs -f deployment/docs-assistant-api
