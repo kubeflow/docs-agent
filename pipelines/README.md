@@ -236,7 +236,7 @@ import json
 def get_changed_files_from_git(since_commit="HEAD~1"):
     cmd = ["git", "diff", "--name-only", since_commit, "HEAD"]
     result = subprocess.run(cmd, capture_output=True, text=True)
-    
+
     if result.returncode == 0:
         files = [f.strip() for f in result.stdout.split('\n') if f.strip()]
         # Filter for documentation files
@@ -250,11 +250,11 @@ def get_changed_files_from_git(since_commit="HEAD~1"):
 ```python
 def process_github_webhook(webhook_payload):
     all_changed_files = []
-    
+
     for commit in webhook_payload.get("commits", []):
         all_changed_files.extend(commit.get("modified", []))
         all_changed_files.extend(commit.get("added", []))
-    
+
     # Filter for documentation files
     doc_files = [f for f in set(all_changed_files) if f.endswith(('.md', '.html'))]
     return json.dumps(doc_files)

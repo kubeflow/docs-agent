@@ -13,4 +13,3 @@ torch
 # Vector Database
 pymilvus
 numpy
-
