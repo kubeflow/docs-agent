@@ -373,7 +373,7 @@ curl http://localhost:8000/health
 - websockets, httpx, pymilvus, sentence-transformers, torch, numpy
 
 **HTTPS Server (server-https/):**
-- fastapi, uvicorn[standard], pydantic, httpx, sentence-transformers, pymilvus, torch, numpypipelines/):
+- fastapi, uvicorn[standard], pydantic, httpx, sentence-transformers, pymilvus, torch, numpy
 
-**Pipeline (**
+**Pipeline:**
 - kfp, requests, beautifulsoup4, sentence-transformers, langchain, torch, pymilvus, numpy
