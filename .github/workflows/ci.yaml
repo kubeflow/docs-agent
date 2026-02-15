@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff
+      - name: Ruff check
+        run: ruff check .
+      - name: Ruff format check
+        run: ruff format --check .
+
+  typecheck:
+    name: Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          pip install mypy types-requests
+          pip install -r server/requirements.txt
+          pip install -r server-https/requirements.txt
+      - name: Run mypy
+        run: |
+          mypy server/ --ignore-missing-imports
+          mypy server-https/ --ignore-missing-imports
+        continue-on-error: true
+
+  compile-pipelines:
+    name: Compile KFP Pipelines
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install KFP
+        run: pip install kfp
+      - name: Compile full pipeline
+        working-directory: pipelines
+        run: python kubeflow-pipeline.py
+      - name: Compile incremental pipeline
+        working-directory: pipelines
+        run: python incremental-pipeline.py
+      - name: Verify compiled artifacts
+        run: |
+          test -f pipelines/github_rag_pipeline.yaml
+          test -f pipelines/github_rag_incremental_pipeline.yaml
