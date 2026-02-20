@@ -307,7 +307,7 @@ def retrieve_platform(state: AgentState) -> AgentState:
 
 def route_to_partition(state: AgentState) -> str:
     """After intent classification, dispatch to the correct retrieval node."""
-    return state.get("intent", "docs")  # node names match intent strings
+    return state.get("intent") or "docs"  # node names match intent strings; falsy → 'docs'
 
 
 def handle_empty_retrieval(state: AgentState) -> str:
