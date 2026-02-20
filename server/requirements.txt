@@ -1,13 +1,12 @@
-# Core dependencies
+fastapi
+uvicorn
 websockets
-httpx
-
-# Milvus client
 pymilvus
-
-# Optimized ML dependencies - use lighter alternatives
 sentence-transformers
-torch --extra-index-url https://download.pytorch.org/whl/cpu
-
-# Essential only
-numpy
+httpx
+requests
+pydantic
+langchain
+langchain-openai
+langgraph
+langchain-community
