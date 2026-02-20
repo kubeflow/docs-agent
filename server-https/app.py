@@ -1,6 +1,8 @@
 import os
 import json
+import logging
 import httpx
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +23,40 @@ MILVUS_PORT = os.getenv("MILVUS_PORT", "19530")
 MILVUS_COLLECTION = os.getenv("MILVUS_COLLECTION", "docs_rag")
 MILVUS_VECTOR_FIELD = os.getenv("MILVUS_VECTOR_FIELD", "vector")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
+
+# Milvus connection lifecycle (persistent connection)
+MILVUS_ALIAS = "default"
+
+
+def init_milvus() -> None:
+    """Establish persistent connection to Milvus. Call once at application startup."""
+    try:
+        connections.connect(alias=MILVUS_ALIAS, host=MILVUS_HOST, port=MILVUS_PORT)
+        logging.info(f"[Milvus] Connected to {MILVUS_HOST}:{MILVUS_PORT}")
+    except Exception as e:
+        logging.error(f"[Milvus] Initial connection failed: {e}")
+        raise
+
+
+def close_milvus() -> None:
+    """Disconnect from Milvus. Call on application shutdown."""
+    try:
+        connections.disconnect(alias=MILVUS_ALIAS)
+        logging.info("[Milvus] Disconnected")
+    except Exception as e:
+        logging.warning(f"[Milvus] Disconnect warning: {e}")
+
+
+def _ensure_milvus_connected() -> bool:
+    """Ensure default alias is connected; reconnect if not. Returns True if connected."""
+    try:
+        if not connections.has_connection(MILVUS_ALIAS):
+            init_milvus()
+        return True
+    except Exception as e:
+        logging.warning(f"[Milvus] Reconnect failed: {e}")
+        return False
+
 
 # System prompt (same as WebSocket version)
 SYSTEM_PROMPT = """
@@ -96,7 +132,15 @@ TOOLS = [
     }
 ]
 
-app = FastAPI(title="Kubeflow Docs API Service", version="1.0.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Connect to Milvus at startup, disconnect on shutdown."""
+    init_milvus()
+    yield
+    close_milvus()
+
+
+app = FastAPI(title="Kubeflow Docs API Service", version="1.0.0", lifespan=lifespan)
 
 # Add CORS middleware
 app.add_middleware(
@@ -111,50 +155,57 @@ class ChatRequest(BaseModel):
     message: str
     stream: Optional[bool] = True
 
+def _do_milvus_search(collection: Collection, query_vec: list, top_k: int) -> List[Dict[str, Any]]:
+    """Run search and return list of hit dicts (shared for first attempt and retry)."""
+    search_params = {"metric_type": "COSINE", "params": {"nprobe": 32}}
+    results = collection.search(
+        data=[query_vec],
+        anns_field=MILVUS_VECTOR_FIELD,
+        param=search_params,
+        limit=int(top_k),
+        output_fields=["file_path", "content_text", "citation_url"],
+    )
+    hits = []
+    for hit in results[0]:
+        similarity = 1.0 - float(hit.distance)
+        entity = hit.entity
+        content_text = entity.get("content_text") or ""
+        if isinstance(content_text, str) and len(content_text) > 400:
+            content_text = content_text[:400] + "..."
+        hits.append({
+            "similarity": similarity,
+            "file_path": entity.get("file_path"),
+            "citation_url": entity.get("citation_url"),
+            "content_text": content_text,
+        })
+    return hits
+
+
 def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
-    """Execute a semantic search in Milvus and return structured JSON serializable results."""
+    """Execute a semantic search in Milvus using the persistent connection."""
+    if not _ensure_milvus_connected():
+        return {"results": []}
     try:
-        # Connect to Milvus
-        connections.connect(alias="default", host=MILVUS_HOST, port=MILVUS_PORT)
         collection = Collection(MILVUS_COLLECTION)
         collection.load()
-
-        # Encoder (same model as pipeline)
         encoder = SentenceTransformer(EMBEDDING_MODEL)
         query_vec = encoder.encode(query).tolist()
-
-        search_params = {"metric_type": "COSINE", "params": {"nprobe": 32}}
-        results = collection.search(
-            data=[query_vec],
-            anns_field=MILVUS_VECTOR_FIELD,
-            param=search_params,
-            limit=int(top_k),
-            output_fields=["file_path", "content_text", "citation_url"],
-        )
-
-        hits = []
-        for hit in results[0]:
-            # similarity = 1 - distance for COSINE in Milvus
-            similarity = 1.0 - float(hit.distance)
-            entity = hit.entity
-            content_text = entity.get("content_text") or ""
-            if isinstance(content_text, str) and len(content_text) > 400:
-                content_text = content_text[:400] + "..."
-            hits.append({
-                "similarity": similarity,
-                "file_path": entity.get("file_path"),
-                "citation_url": entity.get("citation_url"),
-                "content_text": content_text,
-            })
+        hits = _do_milvus_search(collection, query_vec, int(top_k))
         return {"results": hits}
     except Exception as e:
-        print(f"[ERROR] Milvus search failed: {e}")
-        return {"results": []}
-    finally:
+        logging.warning(f"[Milvus] Search failed (will retry once): {e}")
         try:
-            connections.disconnect(alias="default")
-        except Exception:
-            pass
+            close_milvus()
+            if _ensure_milvus_connected():
+                collection = Collection(MILVUS_COLLECTION)
+                collection.load()
+                encoder = SentenceTransformer(EMBEDDING_MODEL)
+                query_vec = encoder.encode(query).tolist()
+                hits = _do_milvus_search(collection, query_vec, int(top_k))
+                return {"results": hits}
+        except Exception as retry_e:
+            logging.error(f"[Milvus] Search failed after retry: {retry_e}")
+        return {"results": []}
 
 async def execute_tool(tool_call: Dict[str, Any]) -> tuple[str, List[str]]:
     """Execute a tool call and return the result and citations"""
