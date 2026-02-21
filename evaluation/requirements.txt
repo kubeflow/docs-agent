@@ -1,0 +1,6 @@
+ragas
+pandas
+tqdm
+openai
+python-dotenv
+ipywidgets
