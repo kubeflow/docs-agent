@@ -82,7 +82,7 @@ Milvus is an open-source vector database designed for AI applications. It provid
 
 2. **Install Milvus**:
    ```bash
-   helm upgrade --install my-release zilliztech/milvus -n santhosh \
+   helm upgrade --install my-release zilliztech/milvus -n docs-agent \
      --set cluster.enabled=false \
      --set standalone.enabled=true \
      --set etcd.replicaCount=1 \
@@ -105,7 +105,7 @@ Milvus is an open-source vector database designed for AI applications. It provid
 3. **Test Connection**:
    ```python
    from pymilvus import connections
-   connections.connect("default", host="my-release-milvus.santhosh.svc.cluster.local", port="19530")
+   connections.connect("default", host="my-release-milvus.docs-agent.svc.cluster.local", port="19530")
    print("Connected to Milvus successfully!")
    ```
 
@@ -129,7 +129,7 @@ apiVersion: serving.kserve.io/v1alpha1
 kind: ServingRuntime
 metadata:
   name: llm-runtime
-  namespace: santhosh
+  namespace: docs-agent
 spec:
   supportedModelFormats:
     - name: huggingface
@@ -158,7 +158,7 @@ apiVersion: serving.kserve.io/v1beta1
 kind: InferenceService
 metadata:
   name: llama
-  namespace: santhosh
+  namespace: docs-agent
 spec:
   predictor:
     model:
@@ -203,7 +203,7 @@ spec:
 
 **Connection Details**:
 ```python
-KSERVE_URL = os.getenv("KSERVE_URL", "http://llama.santhosh.svc.cluster.local/openai/v1/chat/completions")
+KSERVE_URL = os.getenv("KSERVE_URL", "http://llama.docs-agent.svc.cluster.local/openai/v1/chat/completions")
 MODEL = os.getenv("MODEL", "llama3.1-8B")
 ```
 
@@ -289,13 +289,13 @@ For Kubeflow Pipelines to access Milvus, proper RBAC permissions are required:
 ```bash
 # Create role for Milvus access
 kubectl create role milvus-access \
-  --namespace santhosh \
+  --namespace docs-agent \
   --verb=get,list,watch \
   --resource=services,endpoints
 
 # Bind role to KFP service account
 kubectl create rolebinding kfp-to-milvus-editor \
-  --namespace santhosh \
+  --namespace docs-agent \
   --role=milvus-access \
   --serviceaccount=kubeflow:default-editor
 ```
@@ -551,7 +551,7 @@ if data.get('citations'):
 <tbody>
 <tr>
 <td><code>KSERVE_URL</code></td>
-<td><code>http://llama.santhosh.svc.cluster.local/openai/v1/chat/completions</code></td>
+<td><code>http://llama.docs-agent.svc.cluster.local/openai/v1/chat/completions</code></td>
 <td>KServe endpoint URL</td>
 </tr>
 <tr>
@@ -566,7 +566,7 @@ if data.get('citations'):
 </tr>
 <tr>
 <td><code>MILVUS_HOST</code></td>
-<td><code>my-release-milvus.santhosh.svc.cluster.local</code></td>
+<td><code>my-release-milvus.docs-agent.svc.cluster.local</code></td>
 <td>Milvus host</td>
 </tr>
 <tr>
@@ -628,6 +628,11 @@ if data.get('citations'):
 <td><code>https://www.kubeflow.org/docs</code></td>
 <td>Base URL for citations</td>
 </tr>
+<tr>
+<td><code>milvus_host</code></td>
+<td><code>milvus-standalone-final.docs-agent.svc.cluster.local</code></td>
+<td>Milvus host (used by <code>kubeflow-pipeline.py</code> and <code>incremental-pipeline.py</code>)</td>
+</tr>
 </tbody>
 </table>
 
@@ -658,10 +663,10 @@ Currently, the system uses browser local storage for chat history management to:
 
 ```bash
 # Check Milvus status
-kubectl get pods -n santhosh | grep milvus
+kubectl get pods -n docs-agent | grep milvus
 
 # Check KServe status
-kubectl get inferenceservice -n santhosh
+kubectl get inferenceservice -n docs-agent
 
 # Check API server logs
 kubectl logs -f deployment/docs-assistant-api
@@ -703,4 +708,3 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 - [Milvus](https://milvus.io/) for the vector database
 - [KServe](https://kserve.github.io/website/) for model serving
 - [vLLM](https://github.com/vllm-project/vllm) for high-performance LLM inference
-```

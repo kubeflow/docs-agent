@@ -24,7 +24,7 @@ spec:
       containers:
         - name: ws-proxy
           image: santhoshtoorpu/ws-proxy:latest
-          imagePullPolicy: IfNotPresent   # actually reduce pulls
+          imagePullPolicy: IfNotPresent # actually reduce pulls
           resources:
             requests:
               cpu: "300m"
@@ -37,7 +37,7 @@ spec:
           env:
             # Match your app.py variable names
             - name: KSERVE_URL
-              value: "http://llama.santhosh.svc.cluster.local/openai/v1/chat/completions"
+              value: "http://llama.docs-agent.svc.cluster.local/openai/v1/chat/completions"
             - name: MODEL
               value: "llama3.1-8B"
             - name: PORT

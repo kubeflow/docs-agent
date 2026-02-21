@@ -87,7 +87,7 @@ python kubeflow-pipeline.py
 </tr>
 <tr>
 <td><code>milvus_host</code></td>
-<td>"milvus-standalone-final.santhosh.svc.cluster.local"</td>
+<td>"milvus-standalone-final.docs-agent.svc.cluster.local"</td>
 <td>Milvus server host</td>
 </tr>
 <tr>
@@ -209,7 +209,7 @@ kfp.compiler.Compiler().compile(
 </tr>
 <tr>
 <td><code>milvus_host</code></td>
-<td>"milvus-standalone-final.santhosh.svc.cluster.local"</td>
+<td>"milvus-standalone-final.docs-agent.svc.cluster.local"</td>
 <td>Milvus server host</td>
 </tr>
 <tr>
