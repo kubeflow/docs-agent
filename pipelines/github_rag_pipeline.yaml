@@ -8,7 +8,7 @@
 #    collection_name: str [Default: 'docs_rag']
 #    directory_path: str [Default: 'content/en']
 #    github_token: str [Default: '']
-#    milvus_host: str [Default: 'milvus-standalone-final.santhosh.svc.cluster.local']
+#    milvus_host: str [Default: 'milvus-standalone-final.docs-agent.svc.cluster.local']
 #    milvus_port: str [Default: '19530']
 #    repo_name: str [Default: 'website']
 #    repo_owner: str [Default: 'kubeflow']
@@ -374,7 +374,7 @@ root:
         isOptional: true
         parameterType: STRING
       milvus_host:
-        defaultValue: milvus-standalone-final.santhosh.svc.cluster.local
+        defaultValue: milvus-standalone-final.docs-agent.svc.cluster.local
         isOptional: true
         parameterType: STRING
       milvus_port:
