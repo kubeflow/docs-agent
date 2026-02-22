@@ -10,7 +10,7 @@ To ensure maximum community adoption, we are scoping three modular architectural
 ## 1. Architectural Blueprints (The "Art of the Possible")
 We are designing the system across four decoupled layers so that users can adopt the components that fit their target environments:
 1. **Frontend:** User-facing conversational interface.
-2. **Middle Agent/Router:** The orchestrator that reasons about the query and invokes tools.
+2. **Middle Agent/Router:** The orchestrator (or an advanced collaborative system of a dedicated 'code agent' and 'docs agent') that reasons about the query and invokes tools.
 3. **Ingestion Pipeline (KFP):** Kubeflow Pipelines responsible for continuous ETL, chunking, and embedding.
 4. **Backend Vector Database:** Scalable ANN storage (e.g., pgvector or Milvus).
 
@@ -64,25 +64,25 @@ kubeflow/docs-agent/
 
 ## 3. Phased Contributor Work Breakdown
 
-### Phase 1: Ingestion & Foundation (Weeks 1-4)
+### Phase 1: Ingestion & Foundation
 **Focus: Data Pipeline and Vector Persistence**
 *   **KFP Ingestion:** Create robust Kubeflow Pipelines to crawl, heavily chunk, and embed the Kubeflow documentation.
 *   **Code Ingestion:** Implement a parallel KFP pipeline to parse standard Kubeflow release code repositories, capturing Abstract Syntax Trees (AST) and context.
 *   **Backend:** Stand up the Vector Database with declarative schemas. 
 *   **Deliverable:** A functional database loaded with fresh embeddings that update on a schedule via KFP.
 
-### Phase 2: Core Agent & Routing (Weeks 5-8)
+### Phase 2: Core Agent & Routing
 **Focus: The "Brain" and Tool Calling**
 *   **Router Implementation:** Build the LangGraph semantic router to detect if a user is asking a conceptual question (route to docs) or a debugging/technical question (route to code).
 *   **Tool Integration:** Implement MCP (Model Context Protocol) bridging the agent capability to internal search APIs securely. 
 *   **Multi-Arch Support:** Write the baseline KServe manifests and Kagent CRD specifications as blueprints.
 *   **Deliverable:** An exposed, queryable API endpoint capable of executing stateful RAG with correct contextual generation.
 
-### Phase 3: Deployment, Security & UX (Weeks 9-12)
+### Phase 3: Deployment, Security & UX
 **Focus: Hardening, Feedback, and Release**
 *   **Infrastructure as Code:** Finalize Terraform and Helm charts. Validate idempotent installations.
 *   **Guardrails & Tracing:** Integrate validation models to sanitize outputs.
-*   **Frontend & Feedback Loop:** Wire up the UI, ensuring all inputs and outputs are explicitly logged, and implement the feedback loop to construct a golden dataset for continuous evaluation.
+*   **Frontend & Feedback Loop:** Tie the frontend directly into the website UI, ensuring all inputs and outputs are explicitly logged, and implement the feedback loop to construct a golden dataset for continuous evaluation.
 *   **Deliverable:** The final dogfooded deployment on the community cluster.
 
 ---
@@ -99,12 +99,12 @@ To ensure this serves as an enterprise reference architecture, the stack is fort
     *   *Data/Model Poisoning:* KFP ingestion pipelines enforce cryptographic signature checks on the source repositories to ensure no tampered code enters the vector DB.
 3.  **Guardrails:** Implement a fast, local guardrail model (e.g., Llama-Guard or explicit heuristics) deployed natively in KServe that intercepts LLM outputs to strip toxic/violent language and ensure Kubeflow brand safety.
 4.  **Idempotent Deployments:** All Helm charts and Terraform modules utilize remote state and declarative drift detection. Deployments are designed to run safely in automated git-sync modes (e.g., ArgoCD) without mutating persistent data destructively. 
-5.  **RetryLogic:** The agent implements exponential backoff with jitter for Vector DB retrievals and LLM API timeouts. If tools strictly fail, the agent is configured to transparently degrade, informing the user that "Live code context is currently unreachable."
-6.  **Feedback Loops & Golden Datasets:** The frontend UI must require a feedback loop (e.g., thumbs up/down mechanism) and ensure all inputs and outputs are logged. When a response evaluates poorly, a server-side webhook collects the prompt, the traced vector context retrieved, and the agent's faulty response. This aggregated data constructs a "golden dataset" used to manually fix outputs or automatically fine-tune the LLM pipeline (e.g., adjusting retrieval logic, optimizing model temperatures, or shifting weights). These efforts integrate nicely with Katib, as called out in the [Optimizing RAG Pipelines with Katib](https://blog.kubeflow.org/katib/rag/) blog post, which can support these hyperparameter tuning efforts over the RAG architecture.
+5.  **RetryLogic:** Robust retry logic is a must for all tools. The agent implements exponential backoff with jitter for Vector DB retrievals and LLM API timeouts. If tools strictly fail, the agent is configured to transparently degrade, informing the user that "Live code context is currently unreachable."
+6.  **Feedback Loops & Golden Datasets:** The frontend UI must require a feedback loop (e.g., thumbs up/down mechanism) and ensure all inputs and outputs are logged. If a user sees a bad response, this explicit feedback is extremely important because it allows us to systematically test and optimize the system for robustness. A server-side webhook collects the prompt, the traced vector context retrieved, and the agent's faulty response. This aggregated data constructs a "golden dataset" used to manually fix outputs or automatically fine-tune the LLM pipeline (e.g., adjusting retrieval logic, optimizing model temperatures, or shifting weights). These efforts integrate nicely with Katib, as called out in the [Optimizing RAG Pipelines with Katib](https://blog.kubeflow.org/katib/rag/) blog post, which can support these hyperparameter tuning efforts over the RAG architecture.
 7.  **CI/CD & Code Scanning:** Custom agent code is scanned on PR via SonarQube/Trivy for vulnerabilities. Telemetry validation is mocked in CI to ensure OpenTelemetry spans correctly propagate.
 8.  **Authentication, Scaling, & Parallelism:** The frontend is secured via standard OAuth2 proxy logic. The backend agent relies heavily on **KServe’s scale-to-zero capabilities** to optimize costs during inactive windows while allowing burst scaling (parallel inference pods) during high community traffic.
 
 ### Additional Enterprise-Grade Considerations
 9.  **Observability & Telemetry Tracing (OpenTelemetry):** End-to-end distributed tracing is mandatory. The framework will emit OpenTelemetry (OTel) spans tracking the exact lifecycle of a prompt: Frontend Request -> Agent Routing -> Vector DB Query Latency -> LLM Generation Time. This enables mentors and operators to graph bottleneck latency and debug complex hallucination chains.
 10. **Data Isolation & Multi-Tenancy (RBAC for Indices):** We must physically or logically isolate Vector Collections. The "Documentation" collection and the "Release Code" collection will have separated RBAC and indexing to prevent "noisy neighbor" semantic overlap. If we expand to multi-tenant capabilities (e.g., separate Kubeflow Sub-projects), namespace-level vector isolation prevents cross-contamination.
-11. **Cost Controls & Adaptive Token Quotas:** LLM calls can easily exhaust budgets if subjected to abuse (DoS attacks). We will configure Envoy/Istio rate limiting on the KServe ingress to throttle rapid user queries, alongside an internal token-counting middleware (e.g., Litellm) to set a hard API budget limit per day.
+11. **Scale, Rate Limiting, & Adaptive Quotas:** The system's target goal is supporting 1,000 concurrent users. Because of this, strict rate limiting must also be applied. LLM calls can easily exhaust budgets if subjected to abuse (DoS attacks) or bursts. We will configure Envoy/Istio rate limiting on the KServe ingress to throttle rapid user queries, alongside an internal token-counting middleware (e.g., Litellm) to set a hard API budget limit per day.
