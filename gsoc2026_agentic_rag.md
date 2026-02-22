@@ -96,7 +96,7 @@ To ensure this serves as an enterprise reference architecture, the stack is fort
 ### Baseline Requirements
 1.  **Security Best Practices:** Agent-to-tool communication is strictly standardized using the **Model Context Protocol (MCP)**. This limits arbitrary remote code execution by confining tool calls to predefined schemas. Traffic between the agent, tools, and the Vector DB is secured via **Istio sidecars** enforcing mTLS policies.
 2.  **OWASP LLM Top 10 Mitigations:**
-    *   *Prompt Injection:* Use segregated system prompts and structural boundary markers for user input. Inputs run through a lightweight classifier before reaching the LLM.
+    *   *Prompt Injection & System Prompting:* We must implement a properly scoped and secure system prompt that establishes strict behavior boundaries. Use segregated system prompts and structural boundary markers for user input. Inputs run through a lightweight classifier before reaching the LLM.
     *   *Excessive Agency:* The agent's service account operates with the principle of least privilege. MCP tools have zero write access to cluster state—they are strictly `Read-Only` (or isolated to issue-templating tools).
     *   *Data/Model Poisoning:* KFP ingestion pipelines enforce cryptographic signature checks on the source repositories to ensure no tampered code enters the vector DB.
 3.  **Guardrails:** Implement a fast, local guardrail model (e.g., Llama-Guard or explicit heuristics) deployed natively in KServe that intercepts LLM outputs to strip toxic/violent language and ensure Kubeflow brand safety.
