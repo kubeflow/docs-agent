@@ -35,6 +35,8 @@ While we will provide documentation and scaffolding for all three, **Architectur
 ## 2. Repository Structure
 The repository is fundamentally decoupled to separate infrastructure from agent logic and pipeline execution. 
 
+This is an iterative effort, and contributors should expect to build and evolve this structure progressively over the duration of the project.
+
 ```text
 kubeflow/docs-agent/
 ├── frontend/                     # Conversational UI (React/Streamlit/Gradio)
@@ -105,6 +107,8 @@ To ensure this serves as an enterprise reference architecture, the stack is fort
 8.  **Authentication, Scaling, & Parallelism:** The frontend is secured via standard OAuth2 proxy logic. The backend agent relies heavily on **KServe’s scale-to-zero capabilities** to optimize costs during inactive windows while allowing burst scaling (parallel inference pods) during high community traffic.
 
 ### Additional Enterprise-Grade Considerations
-9.  **Observability & Telemetry Tracing (OpenTelemetry):** End-to-end distributed tracing is mandatory. The framework will emit OpenTelemetry (OTel) spans tracking the exact lifecycle of a prompt: Frontend Request -> Agent Routing -> Vector DB Query Latency -> LLM Generation Time. This enables mentors and operators to graph bottleneck latency and debug complex hallucination chains.
-10. **Data Isolation & Multi-Tenancy (RBAC for Indices):** We must physically or logically isolate Vector Collections. The "Documentation" collection and the "Release Code" collection will have separated RBAC and indexing to prevent "noisy neighbor" semantic overlap. If we expand to multi-tenant capabilities (e.g., separate Kubeflow Sub-projects), namespace-level vector isolation prevents cross-contamination.
-11. **Scale, Rate Limiting, & Adaptive Quotas:** The system's target goal is supporting 1,000 concurrent users. Because of this, strict rate limiting must also be applied. LLM calls can easily exhaust budgets if subjected to abuse (DoS attacks) or bursts. We will configure Envoy/Istio rate limiting on the KServe ingress to throttle rapid user queries, alongside an internal token-counting middleware (e.g., Litellm) to set a hard API budget limit per day.
+9.  **Websockets & Stateful Connections:** Because of the complex agent reasoning loops, standard HTTP request/response lifecycles may timeout. The architecture must support WebSockets or Server-Sent Events (SSE) for long-lived streaming connections to the frontend.
+10. **Connection Database (State Management):** To support these long-lived connections and iterative human-in-the-loop reasoning (where an agent asks clarifying questions), a dedicated Connection DB (e.g., Redis or a dedicated PostgreSQL table) must be implemented to persist conversation thread IDs and connection state across the stateless backend pods.
+11. **Observability & Telemetry Tracing (OpenTelemetry):** End-to-end distributed tracing is mandatory. The framework will emit OpenTelemetry (OTel) spans tracking the exact lifecycle of a prompt: Frontend Request -> Agent Routing -> Vector DB Query Latency -> LLM Generation Time. This enables mentors and operators to graph bottleneck latency and debug complex hallucination chains.
+12. **Data Isolation & Multi-Tenancy (RBAC for Indices):** We must physically or logically isolate Vector Collections. The "Documentation" collection and the "Release Code" collection will have separated RBAC and indexing to prevent "noisy neighbor" semantic overlap. If we expand to multi-tenant capabilities (e.g., separate Kubeflow Sub-projects), namespace-level vector isolation prevents cross-contamination.
+13. **Scale, Rate Limiting, & Adaptive Quotas:** The system's target goal is supporting 1,000 concurrent users. Because of this, strict rate limiting must also be applied. LLM calls can easily exhaust budgets if subjected to abuse (DoS attacks) or bursts. We will configure Envoy/Istio rate limiting on the KServe ingress to throttle rapid user queries, alongside an internal token-counting middleware (e.g., Litellm) to set a hard API budget limit per day.
