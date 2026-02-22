@@ -8,7 +8,7 @@ from websockets.exceptions import ConnectionClosedError
 import logging
 from typing import Dict, Any, List
 from sentence_transformers import SentenceTransformer
-from pymilvus import connections, Collection
+from pymilvus import connections, Collection, AnnSearchRequest, RRFRanker
 
 # Config
 KSERVE_URL = os.getenv("KSERVE_URL", "http://llama.santhosh.svc.cluster.local/openai/v1/chat/completions")
@@ -66,7 +66,7 @@ Style
 
 
 def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
-    """Execute a semantic search in Milvus and return structured JSON serializable results."""
+    """Execute a hybrid search in Milvus (Dense + Sparse) with RRF and return structured JSON serializable results."""
     try:
         # Connect to Milvus
         connections.connect(alias="default", host=MILVUS_HOST, port=MILVUS_PORT)
@@ -77,29 +77,41 @@ def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
         encoder = SentenceTransformer(EMBEDDING_MODEL)
         query_vec = encoder.encode(query).tolist()
 
-        search_params = {"metric_type": "COSINE", "params": {"nprobe": 32}}
-        results = collection.search(
+        dense_req = AnnSearchRequest(
             data=[query_vec],
             anns_field=MILVUS_VECTOR_FIELD,
-            param=search_params,
+            param={"metric_type": "COSINE", "params": {"ef": 64}},
+            limit=int(top_k) * 2,
+        )
+
+        sparse_req = AnnSearchRequest(
+            data=[query],
+            anns_field="sparse_vector",
+            param={"metric_type": "BM25"},
+            limit=int(top_k) * 2,
+        )
+
+        results = collection.hybrid_search(
+            reqs=[dense_req, sparse_req],
+            rerank=RRFRanker(k=60),
             limit=int(top_k),
             output_fields=["file_path", "content_text", "citation_url"],
         )
 
         hits = []
-        for hit in results[0]:
-            # similarity = 1 - distance for COSINE in Milvus
-            similarity = 1.0 - float(hit.distance)
-            entity = hit.entity
-            content_text = entity.get("content_text") or ""
-            if isinstance(content_text, str) and len(content_text) > 400:
-                content_text = content_text[:400] + "..."
-            hits.append({
-                "similarity": similarity,
-                "file_path": entity.get("file_path"),
-                "citation_url": entity.get("citation_url"),
-                "content_text": content_text,
-            })
+        if results and len(results) > 0:
+            for hit in results[0]:
+                similarity = float(hit.score)
+                entity = hit.entity
+                content_text = entity.get("content_text") or ""
+                if isinstance(content_text, str) and len(content_text) > 400:
+                    content_text = content_text[:400] + "..."
+                hits.append({
+                    "similarity": similarity,
+                    "file_path": entity.get("file_path"),
+                    "citation_url": entity.get("citation_url"),
+                    "content_text": content_text,
+                })
         return {"results": hits}
     except Exception as e:
         print(f"[ERROR] Milvus search failed: {e}")

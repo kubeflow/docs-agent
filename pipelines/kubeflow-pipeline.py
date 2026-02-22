@@ -175,7 +175,7 @@ def store_milvus(
     milvus_port: str,
     collection_name: str
 ):
-    from pymilvus import connections, utility, FieldSchema, CollectionSchema, DataType, Collection
+    from pymilvus import connections, utility, FieldSchema, CollectionSchema, DataType, Collection, Function, FunctionType
     import json
     from datetime import datetime
 
@@ -186,7 +186,7 @@ def store_milvus(
         utility.drop_collection(collection_name)
         print(f"Dropped existing collection: {collection_name}")
 
-    # Enhanced schema with 768 dimensions
+    # Enhanced schema with 768 dimensions and hybrid search support
     fields = [
         FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
         FieldSchema(name="file_unique_id", dtype=DataType.VARCHAR, max_length=512),
@@ -195,13 +195,21 @@ def store_milvus(
         FieldSchema(name="file_name", dtype=DataType.VARCHAR, max_length=256),
         FieldSchema(name="citation_url", dtype=DataType.VARCHAR, max_length=1024),
         FieldSchema(name="chunk_index", dtype=DataType.INT64),
-        FieldSchema(name="content_text", dtype=DataType.VARCHAR, max_length=2000),
+        FieldSchema(name="content_text", dtype=DataType.VARCHAR, max_length=2000, enable_analyzer=True),
         FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=768),  # Updated for all-mpnet-base-v2
+        FieldSchema(name="sparse_vector", dtype=DataType.SPARSE_FLOAT_VECTOR),
         FieldSchema(name="last_updated", dtype=DataType.INT64)
     ]
 
+    bm25_function = Function(
+        name="bm25",
+        function_type=FunctionType.BM25,
+        input_field_names=["content_text"],
+        output_field_names=["sparse_vector"],
+    )
+
     # Create new collection with correct schema
-    schema = CollectionSchema(fields, "RAG collection for documentation")
+    schema = CollectionSchema(fields, "RAG collection for documentation", functions=[bm25_function])
     collection = Collection(collection_name, schema)
     print(f"Created new collection: {collection_name}")
 
@@ -232,13 +240,19 @@ def store_milvus(
 
         collection.flush()
 
-        # Create index
-        index_params = {
+        dense_index_params = {
             "metric_type": "COSINE",
-            "index_type": "IVF_FLAT", 
-            "params": {"nlist": min(1024, len(records))}
+            "index_type": "HNSW", 
+            "params": {"M": 16, "efConstruction": 256}
         }
-        collection.create_index("vector", index_params)
+        collection.create_index("vector", dense_index_params)
+        
+        sparse_index_params = {
+            "metric_type": "BM25",
+            "index_type": "SPARSE_INVERTED_INDEX"
+        }
+        collection.create_index("sparse_vector", sparse_index_params)
+        
         collection.load()
         print(f"✅ Inserted {len(records)} records. Total: {collection.num_entities}")
 
