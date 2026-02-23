@@ -11,6 +11,8 @@ MILVUS_VECTOR_FIELD = "vector"
 
 # Embedding Model
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
+MILVUS_NPROBE = int(os.getenv("MILVUS_NPROBE", "64"))
+search_params = {"metric_type": "COSINE", "params": {"nprobe": MILVUS_NPROBE}}
 
 # LLM Configuration (for Ragas and Synthetic Dataset Generation)
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "http://localhost:8080/v1")

@@ -14,6 +14,7 @@ from pymilvus import connections, Collection
 KSERVE_URL = os.getenv("KSERVE_URL", "http://llama.docs-agent.svc.cluster.local/openai/v1/chat/completions")
 MODEL = os.getenv("MODEL", "llama3.1-8B")
 PORT = int(os.getenv("PORT", "8000"))
+MILVUS_NPROBE = int(os.getenv("MILVUS_NPROBE", "64"))
 TEMPERATURE = float(os.getenv("TEMPERATURE", "0.0"))
 TOP_P = float(os.getenv("TOP_P", "0.95"))
 
@@ -79,7 +80,7 @@ def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
         encoder = SentenceTransformer(EMBEDDING_MODEL)
         query_vec = encoder.encode(query).tolist()
 
-        search_params = {"metric_type": "COSINE", "params": {"nprobe": 32}}
+        search_params = {"metric_type": "COSINE", "params": {"nprobe": MILVUS_NPROBE}}
         results = collection.search(
             data=[query_vec],
             anns_field=MILVUS_VECTOR_FIELD,

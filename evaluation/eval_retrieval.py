@@ -14,7 +14,7 @@ def milvus_search(query, top_k=5):
     encoder = SentenceTransformer(EMBEDDING_MODEL)
     query_vec = encoder.encode(query).tolist()
 
-    search_params = {"metric_type": "COSINE", "params": {"nprobe": 32}}
+    search_params = {"metric_type": "COSINE", "params": {"nprobe": MILVUS_NPROBE}}
     results = collection.search(
         data=[query_vec],
         anns_field=MILVUS_VECTOR_FIELD,
