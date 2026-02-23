@@ -1,35 +1,26 @@
-import os
-import logging
-
 from fastmcp import FastMCP
-from feast import FeatureStore
+from pymilvus import MilvusClient
 from sentence_transformers import SentenceTransformer
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+MILVUS_URI = "http://milvus.<YOUR_NAMESPACE>.svc.cluster.local:19530"
+MILVUS_USER = "root"
+MILVUS_PASSWORD = "Milvus"
+COLLECTION_NAME = "kubeflow_docs_docs_rag"
+EMBEDDING_MODEL = "sentence-transformers/all-mpnet-base-v2"
+PORT = 8000
 
-FEAST_REPO_PATH = os.getenv("FEAST_REPO_PATH", "/app/feast_repo")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
-PORT = int(os.getenv("PORT", "8000"))
+mcp = FastMCP("Kubeflow Docs MCP Server")
 
-mcp = FastMCP(
-    "Kubeflow Docs MCP Server",
-    description="Search Kubeflow documentation via Feast vector store",
-)
-
-store: FeatureStore = None
 model: SentenceTransformer = None
+client: MilvusClient = None
 
 
 def _init():
-    global store, model
-    if store is None:
-        logger.info("Loading Feast store from %s", FEAST_REPO_PATH)
-        store = FeatureStore(repo_path=FEAST_REPO_PATH)
+    global model, client
     if model is None:
-        logger.info("Loading embedding model %s", EMBEDDING_MODEL)
         model = SentenceTransformer(EMBEDDING_MODEL)
-        logger.info("Model loaded")
+    if client is None:
+        client = MilvusClient(uri=MILVUS_URI, user=MILVUS_USER, password=MILVUS_PASSWORD)
 
 
 @mcp.tool()
@@ -47,26 +38,23 @@ def search_kubeflow_docs(query: str, top_k: int = 5) -> str:
 
     embedding = model.encode(query).tolist()
 
-    response = store.retrieve_online_documents_v2(
-        feature="docs_rag:vector",
-        query=embedding,
-        top_k=top_k,
-    )
+    hits = client.search(
+        collection_name=COLLECTION_NAME,
+        data=[embedding],
+        limit=top_k,
+        output_fields=["content_text", "citation_url", "file_path"],
+    )[0]
 
-    if response is None or response.empty:
+    if not hits:
         return "No results found for your query."
 
     results = []
-    for i, row in response.iterrows():
-        content = row.get("content_text", "")
-        url = row.get("citation_url", "")
-        file_path = row.get("file_path", "")
-        score = row.get("distance", "")
-
-        entry = f"### Result {i + 1}"
-        if score:
-            entry += f" (score: {score:.4f})"
-        entry += f"\n**Source:** {url}\n**File:** {file_path}\n\n{content}\n"
+    for i, hit in enumerate(hits, 1):
+        entity = hit["entity"]
+        entry = f"### Result {i} (score: {hit['distance']:.4f})"
+        entry += f"\n**Source:** {entity.get('citation_url', '')}"
+        entry += f"\n**File:** {entity.get('file_path', '')}"
+        entry += f"\n\n{entity.get('content_text', '')}\n"
         results.append(entry)
 
     return "\n---\n".join(results)

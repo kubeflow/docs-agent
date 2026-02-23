@@ -1,5 +1,4 @@
 fastmcp
-feast[milvus]
+pymilvus
 sentence-transformers
 torch
-pandas

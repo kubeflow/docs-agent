@@ -333,7 +333,8 @@ def store_via_feast(
     from feast import FeatureStore, Entity, FeatureView, Field, FileSource
     from feast.types import String, Int64, Float32, Array, UnixTimestamp
 
-    # Patch Feast VARCHAR limit (hardcoded 512 -> 4096)
+    # Patch Feast VARCHAR limit (hardcoded 512 -> 4096) and reload module
+    import importlib
     import feast.infra.online_stores.milvus_online_store.milvus as milvus_mod
     src_file = inspect.getfile(milvus_mod)
     with open(src_file, "r") as f:
@@ -342,6 +343,18 @@ def store_via_feast(
         with open(src_file, "w") as f:
             f.write(content.replace("max_length=512", "max_length=4096"))
         print("Patched Feast VARCHAR limit to 4096")
+    importlib.reload(milvus_mod)
+    print("Reloaded Feast Milvus module")
+
+    # Drop existing collection so it gets recreated with the patched schema
+    from pymilvus import connections, utility
+    milvus_host = feast_online_store_host.replace("http://", "").replace("https://", "")
+    connections.connect("default", host=milvus_host, port="19530")
+    collection_name = f"{feast_project}_docs_rag"
+    if utility.has_collection(collection_name):
+        utility.drop_collection(collection_name)
+        print(f"Dropped existing collection: {collection_name}")
+    connections.disconnect("default")
 
     feast_dir = "/tmp/feast_repo"
     os.makedirs(f"{feast_dir}/data", exist_ok=True)
@@ -421,7 +434,7 @@ def github_rag_feast_pipeline(
     repo_name: str = "website",
     directory_path: str = "content/en",
     github_token: str = "",
-    base_url: str = "https://www.kubeflow.org/docs",
+    base_url: str = "https://<YOUR_DOCS_BASE_URL>",
     chunk_size: int = 1000,
     chunk_overlap: int = 100,
     feast_online_store_host: str = "http://milvus.<YOUR_NAMESPACE>.svc.cluster.local",

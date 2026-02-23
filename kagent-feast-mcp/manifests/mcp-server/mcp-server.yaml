@@ -19,8 +19,6 @@ spec:
           ports:
             - containerPort: 8000
           env:
-            - name: FEAST_REPO_PATH
-              value: /app/feast_repo
             - name: PORT
               value: "8000"
             - name: PYTHONUNBUFFERED

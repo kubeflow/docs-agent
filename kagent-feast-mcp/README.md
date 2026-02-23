@@ -4,15 +4,7 @@ Deploy the Kubeflow documentation assistant using kagent, MCP, Feast, and Milvus
 
 ## Architecture
 
-```
-GitHub Repos ──> KFP Pipeline ──> Feast ──> Milvus
-                 (crawl, chunk,               │
-                  embed)                       │
-                                               ▼
-                     kagent ──> MCP Server ──> Feast query ──> Milvus
-                     (UI)          │
-                                   └── sentence-transformers (query embedding)
-```
+![Kubeflow Docs Agent Architecture](../assets/kagentarch.png)
 
 ## Prerequisites
 
@@ -48,12 +40,8 @@ GitHub Repos ──> KFP Pipeline ──> Feast ──> Milvus
   - This Secret is referenced by the `ModelConfig` in the same file.
 
 - **Feast / Milvus placeholders in `feast_repo/feature_store.yaml`**
-  - `host`: set to the Milvus service DNS name:
-    - With this Helm chart and namespace, use: `milvus.<YOUR_NAMESPACE>.svc.cluster.local`
-    - You can confirm with: `kubectl get svc -n <YOUR_NAMESPACE> | grep milvus`
-  - `port`: typically `19530` for Milvus.
-  - `username` / `password`: match whatever you configured for Milvus (or leave as default if unchanged).
-  - `embedding_dim`, `index_type`, `metric_type`: align with how you stored vectors (for this example, use the same values as configured in your pipeline / Feast code).
+  - The `feast_repo/` folder is a **legacy/example configuration** and is **not required** for the default pipeline flow. The pipeline code configures Feast and Milvus directly.
+  - You can safely ignore or delete `feast_repo/` unless you explicitly want to experiment with a standalone Feast repo configuration.
 
 ## Deployment Guide
 
@@ -106,17 +94,7 @@ kubectl apply -f manifests/istio/
 python -c "from pymilvus import connections; connections.connect('default', host='milvus.<YOUR_NAMESPACE>.svc.cluster.local', port='19530'); print('Connected!')"
 ```
 
-### Step 4: Configure and Apply Feast
-
-Edit `feast_repo/feature_store.yaml` -- set `host` to your Milvus service:
-
-```bash
-cd feast_repo
-pip install 'feast[milvus]'
-feast apply
-```
-
-### Step 5: Run the KFP Pipeline
+### Step 4: Run the KFP Pipeline
 
 Compile the pipeline:
 
@@ -126,9 +104,19 @@ pip install kfp
 python kubeflow-pipeline.py
 ```
 
-Upload the generated `github_rag_pipeline.yaml` to the KFP dashboard and create a run.
+Upload the generated `github_rag_pipeline.yaml` to the KFP dashboard and create a run. This pipeline is responsible for crawling GitHub docs, chunking, embedding, and registering features in Feast backed by Milvus, so you **do not need** the `feast_repo/` folder for the standard setup.
 
-### Step 6: Deploy MCP Server
+### Step 5: Build, Push, and Deploy MCP Server
+
+From the `mcp-server/` directory, build and push the MCP image to your registry (Docker Hub example shown; adjust `<YOUR_DOCKERHUB_USERNAME>` and tags as needed):
+
+```bash
+cd mcp-server
+docker build -t <YOUR_DOCKERHUB_USERNAME>/mcp-kubeflow-docs:latest .
+docker push <YOUR_DOCKERHUB_USERNAME>/mcp-kubeflow-docs:latest
+```
+
+Ensure `manifests/mcp-server/mcp-server.yaml` is updated to use your pushed image (`image: <YOUR_DOCKERHUB_USERNAME>/mcp-kubeflow-docs:latest`), then deploy the MCP server:
 
 ```bash
 kubectl apply -f manifests/mcp-server/mcp-server.yaml
@@ -140,7 +128,7 @@ Verify:
 kubectl get pods -n <YOUR_NAMESPACE> -l app=mcp-kubeflow-docs
 ```
 
-### Step 7: Install kagent
+### Step 6: Install kagent (CRDs and Controller)
 
 ```bash
 helm install kagent-crds oci://ghcr.io/kagent-dev/kagent/helm/kagent-crds --namespace <YOUR_NAMESPACE>
@@ -161,6 +149,8 @@ helm install kagent oci://ghcr.io/kagent-dev/kagent/helm/kagent \
   --set tools.querydoc.enabled=false
 ```
 
+Before configuring kagent, make sure you have a valid LLM API key (for example, a Groq API key) and that you have set `<YOUR_GROQ_API_KEY>` in `manifests/kagent/setup.yaml` under `stringData.GROQ_API_KEY`.
+
 Apply the custom agent configuration:
 
 ```bash
@@ -174,7 +164,7 @@ kubectl get pods -n <YOUR_NAMESPACE> | grep -E 'kagent|kubeflow-docs-agent'
 kubectl get agents,remotemcpservers,modelconfigs -n <YOUR_NAMESPACE>
 ```
 
-### Step 8: Access kagent UI
+### Step 7: Access kagent UI
 
 ```bash
 kubectl -n <YOUR_NAMESPACE> port-forward service/kagent-ui 8080:8080
