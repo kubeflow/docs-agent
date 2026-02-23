@@ -173,7 +173,9 @@ def store_milvus(
     embedded_data: dsl.Input[dsl.Dataset],
     milvus_host: str,
     milvus_port: str,
-    collection_name: str
+    collection_name: str,
+    repo_name: str,
+    source_type: str = "docs"
 ):
     from pymilvus import connections, utility, FieldSchema, CollectionSchema, DataType, Collection
     import json
@@ -181,12 +183,10 @@ def store_milvus(
 
     connections.connect("default", host=milvus_host, port=milvus_port)
 
-    # DROP existing collection to fix schema mismatch
-    if utility.has_collection(collection_name):
-        utility.drop_collection(collection_name)
-        print(f"Dropped existing collection: {collection_name}")
+    # Use a clean partition name
+    partition_name = f"{source_type}__{repo_name.replace('/', '_').replace('-', '_')}"
 
-    # Enhanced schema with 768 dimensions
+    # Schema definition (keep consistent with current)
     fields = [
         FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
         FieldSchema(name="file_unique_id", dtype=DataType.VARCHAR, max_length=512),
@@ -196,14 +196,27 @@ def store_milvus(
         FieldSchema(name="citation_url", dtype=DataType.VARCHAR, max_length=1024),
         FieldSchema(name="chunk_index", dtype=DataType.INT64),
         FieldSchema(name="content_text", dtype=DataType.VARCHAR, max_length=2000),
-        FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=768),  # Updated for all-mpnet-base-v2
+        FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=768),
         FieldSchema(name="last_updated", dtype=DataType.INT64)
     ]
-
-    # Create new collection with correct schema
     schema = CollectionSchema(fields, "RAG collection for documentation")
-    collection = Collection(collection_name, schema)
-    print(f"Created new collection: {collection_name}")
+
+    # Create collection if it doesn't exist, instead of dropping it
+    if not utility.has_collection(collection_name):
+        collection = Collection(collection_name, schema)
+        print(f"Created new collection: {collection_name}")
+    else:
+        collection = Collection(collection_name)
+        print(f"Using existing collection: {collection_name}")
+
+    # Drop existing partition to ensure fresh data for THIS source
+    if collection.has_partition(partition_name):
+        collection.drop_partition(partition_name)
+        print(f"Dropped existing partition: {partition_name}")
+
+    # Create and load the partition
+    collection.create_partition(partition_name)
+    print(f"Created partition: {partition_name}")
 
     # Rest of your existing code remains the same...
     records = []
@@ -228,7 +241,7 @@ def store_milvus(
         batch_size = 1000
         for i in range(0, len(records), batch_size):
             batch = records[i:i + batch_size]
-            collection.insert(batch)
+            collection.insert(batch, partition_name=partition_name)
 
         collection.flush()
 
@@ -257,7 +270,8 @@ def github_rag_pipeline(
     chunk_overlap: int = 100,
     milvus_host: str = "milvus-standalone-final.santhosh.svc.cluster.local",
     milvus_port: str = "19530",
-    collection_name: str = "docs_rag"
+    collection_name: str = "docs_rag",
+    source_type: str = "docs"
 ):
     # Download GitHub directory
     download_task = download_github_directory(
@@ -281,7 +295,9 @@ def github_rag_pipeline(
         embedded_data=chunk_task.outputs["embedded_data"],
         milvus_host=milvus_host,
         milvus_port=milvus_port,
-        collection_name=collection_name
+        collection_name=collection_name,
+        repo_name=repo_name,
+        source_type=source_type
     )
 
 if __name__ == "__main__":
