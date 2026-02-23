@@ -22,6 +22,16 @@ MILVUS_COLLECTION = os.getenv("MILVUS_COLLECTION", "docs_rag")
 MILVUS_VECTOR_FIELD = os.getenv("MILVUS_VECTOR_FIELD", "vector")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
 
+# Preload embedding model once (used by /health and searches)
+_EMBEDDER = None
+_EMBEDDER_LOAD_ERROR = None
+try:
+    _EMBEDDER = SentenceTransformer(EMBEDDING_MODEL)
+except Exception as e:
+    _EMBEDDER = None
+    _EMBEDDER_LOAD_ERROR = str(e)
+    print(f"[WARN] Embedding model failed to load at startup: {_EMBEDDER_LOAD_ERROR}")
+
 # System prompt
 SYSTEM_PROMPT = """
 You are the Kubeflow Docs Assistant.
@@ -175,6 +185,7 @@ async def execute_tool(tool_call: Dict[str, Any]) -> tuple[str, List[str]]:
             formatted_text = "\n".join(formatted_results) if formatted_results else "No relevant results found."
             return formatted_text, citations
         
+
         return f"Unknown tool: {function_name}", []
         
     except Exception as e:
@@ -303,7 +314,7 @@ async def handle_tool_follow_up(original_payload: Dict[str, Any], tool_call: Dic
         
         # Create messages with tool call and result
         messages = original_payload["messages"].copy()
-        
+
         # Add assistant's tool call message
         messages.append({
             "role": "assistant",
@@ -417,11 +428,71 @@ async def handle_websocket(websocket, path):
     except Exception as e:
         print(f"[ERROR] WebSocket error: {e}")
 
+
+def _http_response(status: int, body: str):
+    return status, [("Content-Type", "text/plain; charset=utf-8")], body.encode("utf-8")
+
+
 async def health_check(path, request_headers):
-    """Handle HTTP health checks"""
-    if path == "/health":
-        return 200, [("Content-Type", "text/plain")], b"OK"
-    return None
+    """
+    /health endpoint for legacy websockets server.
+
+    Validates:
+      - Milvus connectivity
+      - Embedding model readiness
+
+    IMPORTANT:
+    - Must return (status, headers, body_bytes) tuple.
+    - Must NEVER raise, otherwise clients may see empty response.
+    """
+    if path != "/health":
+        return None
+
+    try:
+        results = []
+
+        # ---- Milvus connectivity check ----
+        milvus_ok = False
+        milvus_err = None
+
+        for _ in range(2):  # small retry
+            try:
+                connections.connect(
+                    alias="health_test",
+                    host=MILVUS_HOST,
+                    port=MILVUS_PORT,
+                    timeout=2,
+                )
+                connections.disconnect(alias="health_test")
+                milvus_ok = True
+                break
+            except Exception as e:
+                milvus_err = str(e)
+                await asyncio.sleep(0.2)
+
+        if milvus_ok:
+            results.append("Milvus: OK")
+        else:
+            results.append(f"Milvus: UNAVAILABLE ({(milvus_err or 'unknown')[:120]})")
+
+        # ---- Embedding readiness check ----
+        if _EMBEDDER is None:
+            results.append(f"Embedding: FAILED ({(_EMBEDDER_LOAD_ERROR or 'model not loaded')[:120]})")
+        else:
+            try:
+                _ = _EMBEDDER.encode("health check")
+                results.append("Embedding: OK")
+            except Exception as e:
+                results.append(f"Embedding: FAILED ({str(e)[:120]})")
+
+        overall = "OK" if all("OK" in r for r in results) else "DEGRADED"
+        body = overall + "\n" + "\n".join(results)
+
+        return _http_response(200, body)
+
+    except Exception as e:
+        return _http_response(500, f"ERROR\nhealth_check crashed: {str(e)[:200]}")
+
 
 async def main():
     """Start the WebSocket server"""
