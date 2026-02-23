@@ -1,0 +1,5 @@
+fastmcp
+feast[milvus]
+sentence-transformers
+torch
+pandas

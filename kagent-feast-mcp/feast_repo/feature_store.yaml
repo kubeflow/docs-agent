@@ -1,0 +1,18 @@
+project: kubeflow_docs
+provider: local
+registry: data/registry.db
+online_store:
+  type: milvus
+  host: <milvus_host>
+  port: <milvus_port>
+  username: <milvus_username>
+  password: <milvus_password>
+  vector_enabled: true
+  embedding_dim: <embedding_dim>
+  index_type: <index_type>
+  metric_type: <metric_type>
+offline_store:
+  type: file
+entity_key_serialization_version: 3
+auth:
+  type: no_auth

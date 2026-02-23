@@ -23,7 +23,7 @@ spec:
     spec:
       containers:
         - name: ws-proxy
-          image: santhoshtoorpu/ws-proxy:latest
+          image: <YOUR_DOCKERHUB_USERNAME>/ws-proxy:latest
           imagePullPolicy: IfNotPresent # actually reduce pulls
           resources:
             requests:

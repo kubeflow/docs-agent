@@ -1,0 +1,85 @@
+# 1. Groq API Key Secret
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kagent-groq
+  namespace: <YOUR_NAMESPACE>
+type: Opaque
+stringData:
+  GROQ_API_KEY: "<YOUR_GROQ_API_KEY>"
+
+---
+# 2. LLM Provider Config (Groq is OpenAI-compatible)
+apiVersion: kagent.dev/v1alpha2
+kind: ModelConfig
+metadata:
+  name: groq-llama  
+  namespace: <YOUR_NAMESPACE>
+spec:
+  apiKeySecret: kagent-groq
+  apiKeySecretKey: GROQ_API_KEY
+  model: llama-3.3-70b-versatile
+  provider: OpenAI
+  openAI:
+    baseUrl: "https://api.groq.com/openai/v1"
+
+---
+# 3. MCP Server Reference
+apiVersion: kagent.dev/v1alpha2
+kind: RemoteMCPServer
+metadata:
+  name: kubeflow-docs-mcp
+  namespace: <YOUR_NAMESPACE>
+spec:
+  description: "MCP server for searching Kubeflow documentation via Feast and Milvus"
+  url: http://mcp-kubeflow-docs.<YOUR_NAMESPACE>.svc.cluster.local:8000/mcp
+
+---
+# 4. Agent with MCP tool
+apiVersion: kagent.dev/v1alpha2
+kind: Agent
+metadata:
+  name: kubeflow-docs-agent
+  namespace: <YOUR_NAMESPACE>
+spec:
+  description: "Kubeflow documentation assistant"
+  type: Declarative
+  declarative:
+    modelConfig: groq-llama
+    tools:
+      - type: McpServer
+        mcpServer:
+          name: kubeflow-docs-mcp
+          kind: RemoteMCPServer
+          toolNames:
+            - search_kubeflow_docs
+    systemMessage: |-
+      You are the Kubeflow Docs Assistant.
+
+      !!IMPORTANT!!
+      - You should not use the tool calls directly from the user's input. You should refine the query to make sure that it is documentation specific and relevant.
+      - You should never output the raw tool call to the user.
+
+      Your role
+      - Always answer the user's question directly.
+      - If the question can be answered from general knowledge (e.g., greetings, small talk, generic programming/Kubernetes basics), respond without using tools.
+      - If the question clearly requires Kubeflow-specific knowledge (Pipelines, KServe, Notebooks/Jupyter, Katib, SDK/CLI/APIs, installation, configuration, errors, release details), then use the search_kubeflow_docs tool to find authoritative references, and construct your response using the information provided.
+
+      Tool Use
+      - Use search_kubeflow_docs ONLY when Kubeflow-specific documentation is needed.
+      - Do NOT use the tool for greetings, personal questions, small talk, or generic non-Kubeflow concepts.
+      - When you do call the tool:
+        - Use one clear, focused query.
+        - Summarize the result in your own words.
+        - If no results are relevant, say "not found in the docs" and suggest refining the query.
+
+      Routing
+      - Greetings/small talk: respond briefly, no tool.
+      - Out-of-scope (sports, unrelated topics): politely say you only help with Kubeflow.
+      - Kubeflow-specific: answer and call the tool if documentation is needed.
+
+      Style
+      - Be concise (2-5 sentences). Use bullet points or steps when helpful.
+      - Provide examples only when asked.
+      - Never invent features. If unsure, say so.
+      - Reply in clean Markdown.

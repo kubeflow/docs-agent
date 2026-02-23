@@ -1,16 +1,9 @@
-# Kubeflow Pipeline Dependencies
 kfp
-
-# Data Processing
 requests
 beautifulsoup4
-
-# Machine Learning & Embeddings
 sentence-transformers
-langchain
+langchain-text-splitters
 torch
-
-# Vector Database
-pymilvus
+feast[milvus]
+pandas
 numpy
-
