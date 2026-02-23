@@ -176,7 +176,7 @@ async def execute_tool(tool_call: Dict[str, Any]) -> tuple[str, List[str]]:
 
             print(f"[TOOL] Executing Milvus search for: '{query}' (top_k={top_k})")
             result = milvus_search(query, top_k)
-            
+
             # Collect citations
             citations = []
             formatted_results = []

@@ -11,7 +11,9 @@ from websockets.exceptions import ConnectionClosedError
 from websockets.server import serve
 
 # Config
-KSERVE_URL = os.getenv("KSERVE_URL", "http://llama.docs-agent.svc.cluster.local/openai/v1/chat/completions")
+KSERVE_URL = os.getenv(
+    "KSERVE_URL", "http://llama.docs-agent.svc.cluster.local/openai/v1/chat/completions"
+)
 MODEL = os.getenv("MODEL", "llama3.1-8B")
 PORT = int(os.getenv("PORT", "8000"))
 
@@ -158,7 +160,7 @@ async def execute_tool(tool_call: Dict[str, Any]) -> tuple[str, List[str]]:
 
             print(f"[TOOL] Executing Milvus search for: '{query}' (top_k={top_k})")
             result = milvus_search(query, top_k)
-            
+
             # Collect citations
             citations = []
             formatted_results = []
