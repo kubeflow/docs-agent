@@ -25,10 +25,12 @@ While we will provide documentation and scaffolding for all three, **Architectur
     *   *Concept:* Leverages Kubernetes-native agent management (`Kagent`). Agents are declared as Kubernetes Custom Resource Definitions (CRDs).
     *   *Pros:* Aligns closely with GitOps and Kubernetes-native lifecycle management. Native observability via K8s control plane.
     *   *Cons:* Tightly coupled to the Kagent ecosystem; potentially restricts the use of highly customized cyclical reasoning loops.
-*   **Architecture C: Advanced Agent Framework (LangGraph via KServe)**
-    *   *Concept:* A stateful, graph-based deterministic agent reasoning loop (e.g., LangGraph) that handles complex multi-tool routing (e.g., deciding whether to query the Docs Vector DB vs. the Code AST Vector DB).
-    *   *Pros:* Capable of deep "Plan-Act-Observe" reasoning loops, robust human-in-the-loop state pausing, and cyclic error correction. 
-    *   *Cons:* Highest complexity; requires robust tracing to debug infinite loops.
+*   **Architecture C: Advanced Agent Framework (LangGraph / Google ADK via KServe)**
+    *   *Concept:* A stateful, graph-based agent reasoning loop served via KServe that handles complex multi-tool routing (e.g., deciding whether to query the Docs Vector DB vs. the Code AST Vector DB). Two framework options are provided:
+        *   **LangGraph:** A cyclic, graph-based orchestration framework that models agent reasoning as stateful directed graphs with support for conditional branching, loops, and human-in-the-loop checkpoints.
+        *   **Google Agent Development Kit (ADK):** Google's open-source agent framework with deterministic workflow primitives (sequential, parallel, loop). Offers predictable control flow without unbounded cycles and native multi-agent orchestration.
+    *   *Pros:* Capable of deep "Plan-Act-Observe" reasoning loops, robust human-in-the-loop state pausing, and cyclic error correction (LangGraph). Deterministic, reproducible workflow execution with explicit pipeline composition and built-in multi-agent coordination (ADK).
+    *   *Cons:* Highest complexity; LangGraph requires robust tracing to debug infinite loops. ADK's deterministic flow trades off some flexibility for predictability.
 
 ---
 
@@ -75,9 +77,9 @@ kubeflow/docs-agent/
 
 ### Phase 2: Core Agent & Routing
 **Focus: The "Brain" and Tool Calling**
-*   **Router Implementation:** Build the LangGraph semantic router to detect if a user is asking a conceptual question (route to docs) or a debugging/technical question (route to code).
+*   **Router Implementation:** Build the semantic router / intent detection layer (LangGraph or Google ADK) to detect if a user is asking a conceptual question (route to docs) or a debugging/technical question (route to code).
 *   **Tool Integration:** Implement MCP (Model Context Protocol) bridging the agent capability to internal search APIs securely. 
-*   **Multi-Arch Support:** Write the baseline KServe manifests and Kagent CRD specifications as blueprints.
+*   **Multi-Arch Support:** Write the baseline KServe manifests, Kagent CRD specifications, and ADK agent definitions as blueprints.
 *   **Deliverable:** An exposed, queryable API endpoint capable of executing stateful RAG with correct contextual generation.
 
 ### Phase 3: Deployment, Security & UX
