@@ -11,3 +11,36 @@ The contributor's guide:
 * Helps you get started with your first contribution to Kubeflow
 * Describes the pull request and review workflow in detail, including the
   OWNERS files and automated workflow tool
+
+---
+
+## Development Setup
+
+### Pre-commit Hooks
+
+This repository uses `pre-commit` to enforce basic code quality checks such as:
+
+- Trailing whitespace removal
+- End-of-file fixes
+- Basic formatting
+- Import ordering (if applicable)
+
+### Install Pre-commit
+
+```bash
+pip install pre-commit
+```
+
+Then install the git hooks:
+
+```bash
+pre-commit install
+```
+
+To run hooks on all files:
+
+```bash
+pre-commit run --all-files
+```
+
+Note: If hook modify files, make sure to review changes, stage them and commit again!
