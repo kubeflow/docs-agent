@@ -29,7 +29,10 @@ def get_assistant_response(client, question):
     try:
         response = client.chat.completions.create(
             model=EVAL_MODEL,
-            messages=[{"role": "user", "content": prompt}]
+            messages=[{"role": "user", "content": prompt}],
+            temperature=TEMPERATURE,
+            top_p=TOP_P,
+            max_tokens=MAX_TOKENS
         )
         return {
             "answer": response.choices[0].message.content,

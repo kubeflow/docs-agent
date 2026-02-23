@@ -14,6 +14,8 @@ from pymilvus import connections, Collection
 KSERVE_URL = os.getenv("KSERVE_URL", "http://llama.docs-agent.svc.cluster.local/openai/v1/chat/completions")
 MODEL = os.getenv("MODEL", "llama3.1-8B")
 PORT = int(os.getenv("PORT", "8000"))
+TEMPERATURE = float(os.getenv("TEMPERATURE", "0.0"))
+TOP_P = float(os.getenv("TOP_P", "0.95"))
 
 # Milvus Config
 MILVUS_HOST = os.getenv("MILVUS_HOST", "my-release-milvus.docs-agent.svc.cluster.local")
@@ -409,6 +411,8 @@ async def chat(request: ChatRequest):
             "tools": TOOLS,
             "tool_choice": "auto",
             "stream": True,
+            "temperature": TEMPERATURE,
+            "top_p": TOP_P,
             "max_tokens": 1500
         }
         

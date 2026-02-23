@@ -15,9 +15,12 @@ EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-
 # LLM Configuration (for Ragas and Synthetic Dataset Generation)
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "http://localhost:8080/v1")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "dummy")
-EVAL_MODEL = os.getenv("EVAL_MODEL", "llama3.1-8B")
+EVAL_MODEL = os.getenv("EVAL_MODEL", "llama3.1-8B-instant")
 
 # Evaluation Settings
-TOP_K = 5
+TOP_K = 10
+TEMPERATURE = 0.0
+TOP_P = 0.95
+MAX_TOKENS = 1024
 DATASET_PATH = "evaluation/dataset.jsonl"
 RESULTS_PATH = "evaluation/results.csv"
