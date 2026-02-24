@@ -1,0 +1,16 @@
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-milvus-minio
+  namespace: <YOUR_NAMESPACE>
+spec:
+  selector:
+    matchLabels:
+      app: minio
+  action: ALLOW
+  rules:
+  - to:
+    - operation:
+        ports:
+        - "9000"
+        - "9001"

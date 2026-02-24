@@ -1,0 +1,17 @@
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-milvus-standalone
+  namespace: <YOUR_NAMESPACE>
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: milvus
+      component: standalone
+  action: ALLOW
+  rules:
+  - to:
+    - operation:
+        ports:
+        - "19530"
+        - "9091"

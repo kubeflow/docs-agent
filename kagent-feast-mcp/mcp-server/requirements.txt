@@ -1,0 +1,4 @@
+fastmcp
+pymilvus
+sentence-transformers
+torch
