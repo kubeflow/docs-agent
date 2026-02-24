@@ -17,6 +17,8 @@ The official LLM implementation of the Kubeflow Documentation Assistant powered 
 - [Usage](#usage)
 - [Configuration](#configuration)
 - [Troubleshooting](#troubleshooting)
+- [Development](#development)
+  - [Makefile Commands](#makefile-commands)
 - [Contributing](#contributing)
 
 ## Overview
@@ -675,6 +677,79 @@ kubectl logs -f deployment/docs-assistant-api
 python -c "from pymilvus import connections; connections.connect('default', host='your-milvus-host', port='19530'); print('Connected!')"
 ```
 
+## Development
+
+### Makefile Commands
+
+This project includes a Makefile for automating common development tasks. Run `make help` to see all available commands.
+
+#### Quick Reference
+
+| Command | Description |
+|---------|-------------|
+| `make build` | Build all Docker images (server and server-https) |
+| `make compile` | Compile all Kubeflow pipelines to YAML |
+| `make test` | Run all tests with pytest |
+| `make lint` | Run code quality checks (flake8, black) |
+| `make format` | Auto-format code with black |
+| `make clean` | Remove build artifacts and `__pycache__` |
+| `make install` | Install development dependencies |
+| `make help` | Display all available commands |
+
+#### Build Commands
+
+```bash
+# Build all Docker images
+make build
+
+# Build individual images
+make build-server        # WebSocket server
+make build-server-https  # HTTPS server
+
+# Build with custom registry and tag
+make build DOCKER_REGISTRY=docker.io/username IMAGE_TAG=v1.0.0
+
+# Push images to registry
+make push DOCKER_REGISTRY=docker.io/username IMAGE_TAG=v1.0.0
+```
+
+#### Pipeline Compilation
+
+```bash
+# Compile all pipelines
+make compile
+
+# Compile individual pipelines
+make compile-main         # Main RAG pipeline
+make compile-incremental  # Incremental update pipeline
+```
+
+#### Code Quality
+
+```bash
+# Run linting checks
+make lint
+
+# Auto-format code
+make format
+
+# Run tests
+make test
+
+# Run tests with coverage
+make test-cov
+```
+
+#### Cleanup
+
+```bash
+# Remove Python caches and build artifacts (__pycache__, etc.)
+make clean
+
+# Remove Docker images
+make clean-docker
+```
+
 ## Contributing
 
 We welcome contributions! Please see our [contributing guidelines](CONTRIBUTING.md) for details.
@@ -683,9 +758,11 @@ We welcome contributions! Please see our [contributing guidelines](CONTRIBUTING.
 
 1. Fork the repository
 2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
+3. Install dependencies: `make install`
+4. Make your changes
+5. Run linting: `make lint`
+6. Run tests: `make test`
+7. Submit a pull request
 
 ## License
 
