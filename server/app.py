@@ -3,6 +3,7 @@ import asyncio
 import logging
 import sys
 import os
+import httpx
 
 import websockets
 from websockets.server import serve
@@ -39,7 +40,6 @@ async def stream_llm_response(
     if citations_collector is None:
         citations_collector = []
     try:
-        import httpx
 
         async with httpx.AsyncClient(timeout=120) as client:
             async with client.stream("POST", KSERVE_URL, json=payload) as response:

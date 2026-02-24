@@ -12,6 +12,8 @@ from typing import Dict, Any, List, Tuple
 
 from sentence_transformers import SentenceTransformer
 from pymilvus import connections, Collection
+import httpx
+from bs4 import BeautifulSoup
 
 # ---------------------------------------------------------------------------
 # Configuration (environment-driven with sensible defaults)
