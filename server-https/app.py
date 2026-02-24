@@ -21,6 +21,16 @@ MILVUS_PORT = os.getenv("MILVUS_PORT", "19530")
 MILVUS_COLLECTION = os.getenv("MILVUS_COLLECTION", "docs_rag")
 MILVUS_VECTOR_FIELD = os.getenv("MILVUS_VECTOR_FIELD", "vector")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
+encoder: Optional[SentenceTransformer] = None
+
+
+def get_encoder() -> SentenceTransformer:
+    """Lazily initialize the embedding model once per process."""
+    global encoder
+    if encoder is None:
+        print(f"[INIT] Loading embedding model: {EMBEDDING_MODEL}")
+        encoder = SentenceTransformer(EMBEDDING_MODEL)
+    return encoder
 
 # System prompt (same as WebSocket version)
 SYSTEM_PROMPT = """
@@ -119,9 +129,8 @@ def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
         collection = Collection(MILVUS_COLLECTION)
         collection.load()
 
-        # Encoder (same model as pipeline)
-        encoder = SentenceTransformer(EMBEDDING_MODEL)
-        query_vec = encoder.encode(query).tolist()
+        # Reusing a process-level encoder
+        query_vec = get_encoder().encode(query).tolist()
 
         search_params = {"metric_type": "COSINE", "params": {"nprobe": 32}}
         results = collection.search(
