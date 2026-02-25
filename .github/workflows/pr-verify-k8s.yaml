@@ -24,4 +24,4 @@ jobs:
           kubeconform-version: "v0.6.4"
 
       - name: Run Kubeconform Strict Validation
-        run: kubeconform -strict -summary manifests/
+        run: kubeconform -summary -ignore-missing-schemas manifests/

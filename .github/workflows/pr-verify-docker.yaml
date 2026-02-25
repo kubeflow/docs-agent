@@ -45,7 +45,7 @@ jobs:
           fi
 
       - name: Validate Container Build (${{ matrix.image_name }})
-        if: env.exists == 'true'
+        if: ${{ env.exists == 'true' }}
         uses: docker/build-push-action@v6
         with:
           context: ./${{ matrix.service_path }}
