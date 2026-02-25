@@ -1,0 +1,12 @@
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = [
+    "F403", # 'from module import *' used; unable to detect undefined names
+    "F405", # name may be undefined, or defined from star imports
+    "E741", # ambiguous variable name
+    "F841", # local variable assigned but never used
+]
