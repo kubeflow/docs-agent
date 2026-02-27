@@ -1,9 +1,11 @@
 import json
 import asyncio
 import logging
+import secrets
 import sys
 import os
 from typing import Dict, Any, List
+from urllib.parse import parse_qs
 
 import httpx
 from websockets.server import serve
@@ -55,7 +57,7 @@ logger = logging.getLogger(__name__)
 # allowed (backwards-compatible with the current deployment).
 # The /health endpoint is always unauthenticated.
 
-_API_KEY: str = os.getenv("API_KEY", "")
+_API_KEY: str = os.getenv("API_KEY", "").strip()
 
 
 async def stream_llm_response(
@@ -369,15 +371,14 @@ async def health_check(path, request_headers):
     elif x_api_key:
         token = x_api_key
     else:
-        # Check for ?token= query parameter
+        # Check for ?token= query parameter (URL-decoded safely)
         if "?" in path:
-            query = path.split("?", 1)[1]
-            for param in query.split("&"):
-                if param.startswith("token="):
-                    token = param[6:]
-                    break
+            query_string = path.split("?", 1)[1]
+            token_values = parse_qs(query_string).get("token", [])
+            if token_values:
+                token = token_values[0]
 
-    if token != _API_KEY:
+    if not secrets.compare_digest(token, _API_KEY):
         logger.warning("Rejected unauthenticated WebSocket connection to %s", path)
         return 401, [("Content-Type", "text/plain")], b"Unauthorized: invalid or missing API key"
 

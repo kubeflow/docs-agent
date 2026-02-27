@@ -1,5 +1,6 @@
 import json
 import logging
+import secrets
 import sys
 import os
 from typing import Dict, Any, List, AsyncGenerator
@@ -68,7 +69,7 @@ app.add_middleware(
 # allowed through (backwards-compatible with the current deployment).
 # Health and OPTIONS endpoints are always unauthenticated.
 
-_API_KEY: str = os.getenv("API_KEY", "")
+_API_KEY: str = os.getenv("API_KEY", "").strip()
 
 _PUBLIC_PATHS = frozenset({"/health", "/", "/openapi.json", "/docs", "/redoc"})
 
@@ -94,7 +95,7 @@ async def api_key_auth(request: Request, call_next):
     elif x_api_key:
         token = x_api_key
 
-    if token != _API_KEY:
+    if not secrets.compare_digest(token, _API_KEY):
         logger.warning(
             "Rejected unauthenticated request to %s from %s",
             request.url.path,
