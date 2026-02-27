@@ -48,6 +48,15 @@ except ModuleNotFoundError as _original_exc:
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# API key authentication
+# ---------------------------------------------------------------------------
+# Set the API_KEY env var to enable auth.  When unset, all connections are
+# allowed (backwards-compatible with the current deployment).
+# The /health endpoint is always unauthenticated.
+
+_API_KEY: str = os.getenv("API_KEY", "")
+
 
 async def stream_llm_response(
     payload: Dict[str, Any],
@@ -334,9 +343,44 @@ async def handle_websocket(websocket, path):
 
 
 async def health_check(path, request_headers):
-    """Handle HTTP health checks"""
+    """Handle HTTP health checks and authenticate WebSocket upgrades.
+
+    When ``API_KEY`` is set, every non-health request must include a valid
+    token.  The key can be sent as:
+      - ``Authorization: Bearer <key>`` header
+      - ``X-API-Key: <key>`` header
+      - ``?token=<key>`` query parameter (convenient for browser WS clients)
+    """
+    # Health endpoint — always unauthenticated
     if path == "/health":
         return 200, [("Content-Type", "text/plain")], b"OK"
+
+    # If API_KEY is not configured, skip auth
+    if not _API_KEY:
+        return None
+
+    # Check Authorization header
+    auth_header = request_headers.get("Authorization", "")
+    x_api_key = request_headers.get("X-API-Key", "")
+
+    token = ""
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+    elif x_api_key:
+        token = x_api_key
+    else:
+        # Check for ?token= query parameter
+        if "?" in path:
+            query = path.split("?", 1)[1]
+            for param in query.split("&"):
+                if param.startswith("token="):
+                    token = param[6:]
+                    break
+
+    if token != _API_KEY:
+        logger.warning("Rejected unauthenticated WebSocket connection to %s", path)
+        return 401, [("Content-Type", "text/plain")], b"Unauthorized: invalid or missing API key"
+
     return None
 
 

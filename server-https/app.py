@@ -5,8 +5,8 @@ import os
 from typing import Dict, Any, List, AsyncGenerator
 
 import httpx
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
@@ -60,6 +60,52 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ---------------------------------------------------------------------------
+# API key authentication middleware
+# ---------------------------------------------------------------------------
+# Set the API_KEY env var to enable auth.  When unset, all requests are
+# allowed through (backwards-compatible with the current deployment).
+# Health and OPTIONS endpoints are always unauthenticated.
+
+_API_KEY: str = os.getenv("API_KEY", "")
+
+_PUBLIC_PATHS = frozenset({"/health", "/", "/openapi.json", "/docs", "/redoc"})
+
+
+@app.middleware("http")
+async def api_key_auth(request: Request, call_next):
+    """Reject requests that lack a valid API key (when API_KEY is set)."""
+    if not _API_KEY:
+        # Auth disabled — pass through
+        return await call_next(request)
+
+    # Always allow health checks, OPTIONS preflight, and docs
+    if request.url.path in _PUBLIC_PATHS or request.method == "OPTIONS":
+        return await call_next(request)
+
+    # Accept key from Authorization header or X-API-Key header
+    auth_header = request.headers.get("Authorization", "")
+    x_api_key = request.headers.get("X-API-Key", "")
+
+    token = ""
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+    elif x_api_key:
+        token = x_api_key
+
+    if token != _API_KEY:
+        logger.warning(
+            "Rejected unauthenticated request to %s from %s",
+            request.url.path,
+            request.client.host if request.client else "unknown",
+        )
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Invalid or missing API key."},
+        )
+
+    return await call_next(request)
 
 
 class ChatRequest(BaseModel):
