@@ -20,7 +20,7 @@ variable "fingerprint" {
 }
 
 variable "private_key" {
-  description = "Private key content (or path via file()) for OCI API auth."
+  description = "PEM-encoded private key for OCI API auth. Use file() or a secrets manager — never commit raw key material."
   type        = string
   sensitive   = true
 }
@@ -47,7 +47,7 @@ variable "cluster_name" {
 variable "kubernetes_version" {
   description = "Kubernetes version for the OKE cluster."
   type        = string
-  default     = "v1.28.2"
+  default     = "v1.30.0"
 }
 
 variable "vcn_cidr" {

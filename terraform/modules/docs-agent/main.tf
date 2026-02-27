@@ -1,6 +1,10 @@
 # ---------------------------------------------------------------------------
 # Docs-Agent Module — Deploy the WebSocket + HTTPS API servers
 # ---------------------------------------------------------------------------
+#
+# The container image should be built from the repository root so that
+# both server/ and shared/ directories are in the build context:
+#   docker build -f server/Dockerfile -t docs-agent:latest .
 
 terraform {
   required_providers {
@@ -106,6 +110,14 @@ resource "kubernetes_deployment" "ws_server" {
             initial_delay_seconds = 10
             period_seconds        = 30
           }
+
+          readiness_probe {
+            tcp_socket {
+              port = 8765
+            }
+            initial_delay_seconds = 5
+            period_seconds        = 10
+          }
         }
       }
     }
@@ -197,6 +209,15 @@ resource "kubernetes_deployment" "https_server" {
             }
             initial_delay_seconds = 10
             period_seconds        = 30
+          }
+
+          readiness_probe {
+            http_get {
+              path = "/health"
+              port = 8000
+            }
+            initial_delay_seconds = 5
+            period_seconds        = 10
           }
         }
       }

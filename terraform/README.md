@@ -26,7 +26,7 @@ docs-agent stack on **Oracle Cloud Infrastructure (OCI)**.
 | `oke`        | OKE cluster with CPU + GPU node pools            |
 | `milvus`     | Milvus vector DB via Helm chart                  |
 | `kserve`     | KServe + Knative + cert-manager for LLM serving  |
-| `docs-agent` | docs-agent Deployment, Service, Ingress          |
+| `docs-agent` | docs-agent Deployment + ClusterIP Services       |
 
 ## Quick start
 
@@ -38,6 +38,17 @@ terraform init
 terraform plan
 terraform apply
 ```
+
+## Data ingestion
+
+After the infrastructure is provisioned, populate the Milvus vector
+database by running the KFP pipelines:
+
+1. **Kubeflow docs** — use the existing `pipelines/kubeflow-pipeline.py`
+2. **Platform architecture** — use `pipelines/platform-architecture-pipeline.py`
+
+Both pipelines can be compiled locally and submitted to a KFP-enabled
+cluster, or run manually with a port-forward to the Milvus service.
 
 ## Prerequisites
 

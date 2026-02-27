@@ -20,6 +20,12 @@ variable "namespace" {
   default = "docs-agent"
 }
 
+variable "inference_service_name" {
+  description = "Name of the KServe InferenceService resource for the LLM."
+  type        = string
+  default     = "llama"
+}
+
 # -- cert-manager (required by KServe) ------------------------------------
 
 resource "helm_release" "cert_manager" {
@@ -28,7 +34,9 @@ resource "helm_release" "cert_manager" {
   create_namespace = true
   repository       = "https://charts.jetstack.io"
   chart            = "cert-manager"
-  version          = "v1.13.3"
+  version          = "v1.16.3"
+  wait             = true
+  timeout          = 300
 
   set {
     name  = "installCRDs"
@@ -45,6 +53,8 @@ resource "helm_release" "knative_serving" {
   repository       = "https://knative.github.io/operator"
   chart            = "knative-serving"
   version          = "1.12.0"
+  wait             = true
+  timeout          = 600
 
   depends_on = [helm_release.cert_manager]
 }
@@ -58,6 +68,8 @@ resource "helm_release" "kserve" {
   repository       = "https://kserve.github.io/kserve"
   chart            = "kserve"
   version          = "0.12.0"
+  wait             = true
+  timeout          = 600
 
   set {
     name  = "kserve.controller.deploymentMode"
@@ -70,6 +82,6 @@ resource "helm_release" "kserve" {
 # -- Outputs ---------------------------------------------------------------
 
 output "inference_url" {
-  description = "Default KServe inference endpoint pattern."
-  value       = "http://llama.${var.namespace}.svc.cluster.local/openai/v1/chat/completions"
+  description = "KServe inference endpoint for the LLM InferenceService."
+  value       = "http://${var.inference_service_name}.${var.namespace}.svc.cluster.local/openai/v1/chat/completions"
 }

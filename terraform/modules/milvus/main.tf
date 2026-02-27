@@ -42,6 +42,8 @@ resource "helm_release" "milvus" {
   repository = "https://zilliztech.github.io/milvus-helm"
   chart      = "milvus"
   version    = "4.1.26"
+  wait       = true
+  timeout    = 600
 
   # Standalone mode (suitable for dev/small deployments)
   set {
@@ -76,8 +78,9 @@ resource "helm_release" "milvus" {
 
 # -- Outputs ---------------------------------------------------------------
 
+# The Helm chart creates a service named "<release>-milvus" by default.
 output "service_host" {
-  value = "milvus.${var.namespace}.svc.cluster.local"
+  value = "milvus-milvus.${var.namespace}.svc.cluster.local"
 }
 
 output "service_port" {

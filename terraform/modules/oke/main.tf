@@ -2,8 +2,9 @@
 # OKE Cluster Module — Oracle Kubernetes Engine
 # ---------------------------------------------------------------------------
 #
-# Creates a VCN, subnets, and an OKE cluster with CPU and optional GPU
-# node pools for running the docs-agent stack.
+# Creates a VCN, subnets, networking resources (Internet Gateway, NAT
+# Gateway, security lists, route tables), and an OKE cluster with CPU
+# and optional GPU node pools for running the docs-agent stack.
 
 terraform {
   required_providers {
@@ -27,7 +28,7 @@ variable "cluster_name" {
 
 variable "kubernetes_version" {
   type    = string
-  default = "v1.28.2"
+  default = "v1.30.0"
 }
 
 variable "vcn_cidr" {
@@ -67,25 +68,119 @@ resource "oci_core_vcn" "this" {
   cidr_blocks    = [var.vcn_cidr]
 }
 
-resource "oci_core_subnet" "api" {
+# -- Internet Gateway (public subnets) ------------------------------------
+
+resource "oci_core_internet_gateway" "this" {
   compartment_id = var.compartment_id
   vcn_id         = oci_core_vcn.this.id
-  display_name   = "${var.cluster_name}-api-subnet"
-  cidr_block     = cidrsubnet(var.vcn_cidr, 8, 0)
+  display_name   = "${var.cluster_name}-igw"
+  enabled        = true
+}
+
+# -- NAT Gateway (private subnets) ----------------------------------------
+
+resource "oci_core_nat_gateway" "this" {
+  compartment_id = var.compartment_id
+  vcn_id         = oci_core_vcn.this.id
+  display_name   = "${var.cluster_name}-natgw"
+}
+
+# -- Route Tables ----------------------------------------------------------
+
+resource "oci_core_route_table" "public" {
+  compartment_id = var.compartment_id
+  vcn_id         = oci_core_vcn.this.id
+  display_name   = "${var.cluster_name}-public-rt"
+
+  route_rules {
+    destination       = "0.0.0.0/0"
+    network_entity_id = oci_core_internet_gateway.this.id
+  }
+}
+
+resource "oci_core_route_table" "private" {
+  compartment_id = var.compartment_id
+  vcn_id         = oci_core_vcn.this.id
+  display_name   = "${var.cluster_name}-private-rt"
+
+  route_rules {
+    destination       = "0.0.0.0/0"
+    network_entity_id = oci_core_nat_gateway.this.id
+  }
+}
+
+# -- Security Lists --------------------------------------------------------
+
+resource "oci_core_security_list" "api" {
+  compartment_id = var.compartment_id
+  vcn_id         = oci_core_vcn.this.id
+  display_name   = "${var.cluster_name}-api-seclist"
+
+  # Allow inbound HTTPS to the K8s API server
+  ingress_security_rules {
+    protocol = "6" # TCP
+    source   = "0.0.0.0/0"
+    tcp_options {
+      min = 6443
+      max = 6443
+    }
+  }
+
+  # Allow all egress
+  egress_security_rules {
+    protocol    = "all"
+    destination = "0.0.0.0/0"
+  }
+}
+
+resource "oci_core_security_list" "workers" {
+  compartment_id = var.compartment_id
+  vcn_id         = oci_core_vcn.this.id
+  display_name   = "${var.cluster_name}-worker-seclist"
+
+  # Allow all traffic within the VCN
+  ingress_security_rules {
+    protocol = "all"
+    source   = var.vcn_cidr
+  }
+
+  # Allow all egress (workers need to pull images, talk to API, etc.)
+  egress_security_rules {
+    protocol    = "all"
+    destination = "0.0.0.0/0"
+  }
+}
+
+# -- Subnets ---------------------------------------------------------------
+
+resource "oci_core_subnet" "api" {
+  compartment_id             = var.compartment_id
+  vcn_id                     = oci_core_vcn.this.id
+  display_name               = "${var.cluster_name}-api-subnet"
+  cidr_block                 = cidrsubnet(var.vcn_cidr, 8, 0)
+  prohibit_public_ip_on_vnic = false # public subnet for API endpoint
+  route_table_id             = oci_core_route_table.public.id
+  security_list_ids          = [oci_core_security_list.api.id]
 }
 
 resource "oci_core_subnet" "workers" {
-  compartment_id = var.compartment_id
-  vcn_id         = oci_core_vcn.this.id
-  display_name   = "${var.cluster_name}-worker-subnet"
-  cidr_block     = cidrsubnet(var.vcn_cidr, 8, 1)
+  compartment_id             = var.compartment_id
+  vcn_id                     = oci_core_vcn.this.id
+  display_name               = "${var.cluster_name}-worker-subnet"
+  cidr_block                 = cidrsubnet(var.vcn_cidr, 8, 1)
+  prohibit_public_ip_on_vnic = true # private subnet for worker nodes
+  route_table_id             = oci_core_route_table.private.id
+  security_list_ids          = [oci_core_security_list.workers.id]
 }
 
 resource "oci_core_subnet" "lb" {
-  compartment_id = var.compartment_id
-  vcn_id         = oci_core_vcn.this.id
-  display_name   = "${var.cluster_name}-lb-subnet"
-  cidr_block     = cidrsubnet(var.vcn_cidr, 8, 2)
+  compartment_id             = var.compartment_id
+  vcn_id                     = oci_core_vcn.this.id
+  display_name               = "${var.cluster_name}-lb-subnet"
+  cidr_block                 = cidrsubnet(var.vcn_cidr, 8, 2)
+  prohibit_public_ip_on_vnic = false # public subnet for load balancers
+  route_table_id             = oci_core_route_table.public.id
+  security_list_ids          = [oci_core_security_list.api.id]
 }
 
 # -- OKE Cluster -----------------------------------------------------------
@@ -142,6 +237,13 @@ resource "oci_containerengine_node_pool" "gpu" {
   name               = "${var.cluster_name}-gpu-pool"
   node_shape         = var.gpu_node_shape
 
+  # GPU shapes are fixed (not Flex), but node_shape_config is still
+  # required by the OCI provider to acknowledge the shape's resources.
+  node_shape_config {
+    ocpus         = 16
+    memory_in_gbs = 240
+  }
+
   node_config_details {
     size = var.gpu_node_count
 
@@ -169,6 +271,7 @@ output "cluster_endpoint" {
 }
 
 output "cluster_ca_certificate" {
-  value     = base64decode(oci_containerengine_cluster.this.endpoints[0].public_endpoint)
-  sensitive = true
+  description = "Base64-decoded CA certificate for the OKE cluster."
+  value       = base64decode(oci_containerengine_cluster.this.metadata[0].cluster_ca_certificate)
+  sensitive   = true
 }
