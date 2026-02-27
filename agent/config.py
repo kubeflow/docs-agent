@@ -104,8 +104,8 @@ MAX_RETRIEVAL_ATTEMPTS: int = int(
 # ---------------------------------------------------------------------------
 
 #: Maps intent categories to Milvus collection partition names.
-#: The platform_arch partition is populated by the platform architecture
-#: ingestion pipeline (see ``pipelines/platform-architecture-pipeline.py``).
+#: The ``platform_arch`` partition is populated by the platform architecture
+#: ingestion pipeline defined in ``pipelines/platform-architecture-pipeline.py``.
 PARTITION_MAP: Dict[str, str] = {
     Intent.KUBEFLOW_DOCS: os.getenv("MILVUS_PARTITION_DOCS", ""),
     Intent.PLATFORM_ARCH: os.getenv("MILVUS_PARTITION_PLATFORM", "platform_arch"),

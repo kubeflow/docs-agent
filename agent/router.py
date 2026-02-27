@@ -5,7 +5,8 @@ following topology::
 
     classify ──► retrieve ──► evaluate ──┬──► synthesize
                                          │
-                                         └──► re_retrieve ──► synthesize
+                                         └──► re_retrieve ──► evaluate
+                                                              (loops back)
 
 Each node is a pure function ``(AgentState) -> dict`` that returns only
 the keys it wants to update, keeping the graph easy to test and extend.
@@ -25,17 +26,11 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, TypedDict
 
 # Ensure the project root is importable (mirrors the pattern in server/app.py)
 try:
     from shared.rag_core import (
-        KSERVE_URL,
-        MODEL,
-        SYSTEM_PROMPT,
-        MilvusConnectionManager,
-        _get_encoder,
-        build_chat_payload,
         deduplicate_citations,
         milvus_search,
     )
@@ -44,17 +39,17 @@ except ModuleNotFoundError:
     if _project_root not in sys.path:
         sys.path.insert(0, _project_root)
     from shared.rag_core import (  # noqa: E402
-        KSERVE_URL,
-        MODEL,
-        SYSTEM_PROMPT,
-        MilvusConnectionManager,
-        _get_encoder,
-        build_chat_payload,
         deduplicate_citations,
         milvus_search,
     )
 
-from langgraph.graph import END, StateGraph
+try:
+    from langgraph.graph import END, StateGraph
+except ImportError:
+    raise ImportError(
+        "langgraph is required for the agentic router. "
+        "Install it with: pip install langgraph"
+    )
 
 from agent.config import (
     DEFAULT_TOP_K,
@@ -154,7 +149,9 @@ def retrieve(state: AgentState) -> dict:
         attempts,
     )
 
-    # Use the shared milvus_search which now uses the connection pool
+    # Use the shared milvus_search helper; partition filtering is logged
+    # above but not yet passed through — milvus_search searches the full
+    # collection.  A future enhancement will add a partition_name kwarg.
     result = milvus_search(query, top_k=DEFAULT_TOP_K)
     hits = result.get("results", [])
 
@@ -182,8 +179,15 @@ def evaluate(state: AgentState) -> dict:
     intent = state.get("intent", Intent.GENERAL)
 
     # General queries skip evaluation entirely
-    if intent == Intent.GENERAL or not context:
+    if intent == Intent.GENERAL:
         return {"avg_similarity": 0.0, "context_sufficient": True}
+
+    # No results for a specific intent — allow re-retrieval if attempts remain
+    if not context:
+        return {
+            "avg_similarity": 0.0,
+            "context_sufficient": attempts >= MAX_RETRIEVAL_ATTEMPTS,
+        }
 
     avg_sim = sum(h.get("similarity", 0) for h in context) / len(context)
     sufficient = avg_sim >= RELEVANCE_THRESHOLD or attempts >= MAX_RETRIEVAL_ATTEMPTS
@@ -208,6 +212,10 @@ def re_retrieve(state: AgentState) -> dict:
     Strategy: append "overview setup getting started" to encourage broader
     matches.  A more sophisticated version could use the LLM to rewrite
     the query, but this keeps latency low.
+
+    The broadened query is persisted in the returned state so that
+    downstream nodes (e.g. synthesize) can reference the actual query
+    used for retrieval.
     """
     original_query = state["query"]
     broadened = f"{original_query} overview setup getting started"
@@ -215,7 +223,10 @@ def re_retrieve(state: AgentState) -> dict:
 
     # Temporarily override the query for retrieval
     modified_state: AgentState = {**state, "query": broadened}  # type: ignore[typeddict-item]
-    return retrieve(modified_state)
+    result = retrieve(modified_state)
+    # Persist the broadened query so downstream nodes see what was searched
+    result["query"] = broadened
+    return result
 
 
 def synthesize(state: AgentState) -> dict:
