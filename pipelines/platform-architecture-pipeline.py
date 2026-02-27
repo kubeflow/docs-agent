@@ -124,7 +124,7 @@ def chunk_and_embed_platform(
 
     import torch
     from sentence_transformers import SentenceTransformer
-    from langchain.text_splitter import RecursiveCharacterTextSplitter
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
 
     print(f"CUDA available: {torch.cuda.is_available()}")
 
@@ -215,6 +215,9 @@ def store_milvus_partition(
     connections.connect("default", host=milvus_host, port=milvus_port)
 
     # -- Ensure collection exists (shared schema with the docs pipeline) ----
+    # NOTE: When multiple pipeline runs target the same partition concurrently,
+    # the delete-then-insert below is NOT atomic.  Serialise runs via KFP
+    # caching or an external lock if concurrent ingestion is expected.
     if not utility.has_collection(collection_name):
         fields = [
             FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
@@ -272,7 +275,9 @@ def store_milvus_partition(
         collection.load()
         for fid in file_ids_seen:
             try:
-                partition.delete(f'file_unique_id == "{fid}"')
+                # Use json.dumps for safe quoting to prevent expression injection
+                safe_fid = json.dumps(fid)
+                partition.delete(f"file_unique_id == {safe_fid}")
             except Exception as e:
                 print(f"Warning: could not delete stale records for {fid}: {e}")
         collection.flush()
@@ -321,7 +326,7 @@ def platform_architecture_pipeline(
     # -- Source 1: kubeflow/manifests --
     manifests_repo_owner: str = "kubeflow",
     manifests_repo_name: str = "manifests",
-    manifests_directory: str = ".",
+    manifests_directory: str = "docs/",
     manifests_file_ext: str = ".md,.yaml,.yml",
     # -- Source 2: website platform/infra docs --
     website_repo_owner: str = "kubeflow",
@@ -389,7 +394,8 @@ def platform_architecture_pipeline(
         collection_name=collection_name,
         partition_name=partition_name,
     )
-    # store_website runs after store_manifests to avoid partition conflicts
+    # store_website runs after store_manifests to avoid race conditions
+    # on the shared partition (concurrent inserts can cause index issues)
     store_website.after(store_manifests)
 
 
