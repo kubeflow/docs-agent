@@ -8,10 +8,11 @@ functions used by both the WebSocket and HTTPS API servers.
 import os
 import json
 import logging
-from typing import Dict, Any, List, Set, Tuple
+import threading
+from typing import Dict, Any, List, Optional, Set, Tuple
 
 from sentence_transformers import SentenceTransformer
-from pymilvus import connections, Collection
+from pymilvus import connections, Collection, utility
 
 # ---------------------------------------------------------------------------
 # Configuration (environment-driven with sensible defaults)
@@ -36,6 +37,141 @@ EMBEDDING_MODEL = os.getenv(
 )
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Singleton embedding encoder (loaded once, reused across requests)
+# ---------------------------------------------------------------------------
+
+_encoder: Optional[SentenceTransformer] = None
+_encoder_lock = threading.Lock()
+
+
+def _get_encoder() -> SentenceTransformer:
+    """Return (and lazily initialise) the shared SentenceTransformer instance."""
+    global _encoder
+    # Fast path without lock for already-initialised encoder
+    if _encoder is not None:
+        return _encoder
+    # Thread-safe lazy initialisation
+    with _encoder_lock:
+        if _encoder is None:
+            logger.info("Loading embedding model: %s", EMBEDDING_MODEL)
+            _encoder = SentenceTransformer(EMBEDDING_MODEL)
+        return _encoder
+
+
+# ---------------------------------------------------------------------------
+# Milvus persistent connection manager  (addresses Issue #28)
+# ---------------------------------------------------------------------------
+
+
+class MilvusConnectionManager:
+    """Thread-safe singleton that maintains a persistent Milvus connection.
+
+    Instead of connecting and disconnecting on every request, this manager
+    keeps a single long-lived connection and transparently reconnects when
+    the link drops.  This eliminates per-request TCP/TLS handshake overhead
+    and avoids the server-side session churn described in Issue #28.
+
+    Usage::
+
+        mgr = MilvusConnectionManager.get_instance()
+        collection = mgr.get_collection("docs_rag")
+        results = collection.search(...)
+    """
+
+    _instance: Optional["MilvusConnectionManager"] = None
+    _lock: threading.Lock = threading.Lock()
+
+    def __init__(
+        self,
+        host: str = MILVUS_HOST,
+        port: str = MILVUS_PORT,
+        alias: str = "default",
+    ) -> None:
+        self._host = host
+        self._port = port
+        self._alias = alias
+        self._connected = False
+        self._conn_lock = threading.Lock()
+
+    # -- singleton accessor --------------------------------------------------
+
+    @classmethod
+    def get_instance(
+        cls,
+        host: str = MILVUS_HOST,
+        port: str = MILVUS_PORT,
+        alias: str = "default",
+    ) -> "MilvusConnectionManager":
+        """Return the singleton manager, creating it on first call."""
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = cls(host=host, port=port, alias=alias)
+        return cls._instance
+
+    # -- connection helpers --------------------------------------------------
+
+    def _is_alive(self) -> bool:
+        """Return *True* if the current connection is still usable."""
+        try:
+            # ``utility.list_collections`` is a lightweight RPC that will
+            # fail fast when the connection is stale.
+            utility.list_collections(using=self._alias)
+            return True
+        except Exception:
+            return False
+
+    def ensure_connected(self) -> None:
+        """Guarantee that a healthy Milvus connection exists.
+
+        This is safe to call on every request — it is a no-op when the
+        connection is already alive and only performs a reconnect when the
+        link has been lost.
+        """
+        with self._conn_lock:
+            if self._connected and self._is_alive():
+                return
+            # (Re-)establish the connection
+            try:
+                connections.disconnect(alias=self._alias)
+            except Exception:
+                pass
+            logger.info(
+                "Connecting to Milvus at %s:%s (alias=%s)",
+                self._host,
+                self._port,
+                self._alias,
+            )
+            connections.connect(
+                alias=self._alias, host=self._host, port=self._port
+            )
+            self._connected = True
+
+    def get_collection(self, name: str) -> Collection:
+        """Return a loaded :class:`Collection`, reconnecting if necessary."""
+        self.ensure_connected()
+        collection = Collection(name, using=self._alias)
+        collection.load()
+        return collection
+
+    def disconnect(self) -> None:
+        """Explicitly tear down the connection (e.g. at shutdown)."""
+        with self._conn_lock:
+            try:
+                connections.disconnect(alias=self._alias)
+            except Exception:
+                pass
+            self._connected = False
+
+    @classmethod
+    def reset_instance(cls) -> None:
+        """Reset the singleton (useful for testing)."""
+        with cls._lock:
+            if cls._instance is not None:
+                cls._instance.disconnect()
+                cls._instance = None
 
 # ---------------------------------------------------------------------------
 # System prompt
@@ -126,11 +262,10 @@ TOOLS = [
 def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
     """Execute a semantic search in Milvus and return structured JSON-serializable results."""
     try:
-        connections.connect(alias="default", host=MILVUS_HOST, port=MILVUS_PORT)
-        collection = Collection(MILVUS_COLLECTION)
-        collection.load()
+        mgr = MilvusConnectionManager.get_instance()
+        collection = mgr.get_collection(MILVUS_COLLECTION)
 
-        encoder = SentenceTransformer(EMBEDDING_MODEL)
+        encoder = _get_encoder()
         query_vec = encoder.encode(query).tolist()
 
         search_params = {"metric_type": "COSINE", "params": {"nprobe": 32}}
@@ -158,14 +293,9 @@ def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
                 }
             )
         return {"results": hits}
-    except Exception as e:
-        logger.error("Milvus search failed: %s", e)
+    except Exception:
+        logger.exception("Milvus search failed")
         return {"results": []}
-    finally:
-        try:
-            connections.disconnect(alias="default")
-        except Exception:
-            pass
 
 
 # ---------------------------------------------------------------------------
