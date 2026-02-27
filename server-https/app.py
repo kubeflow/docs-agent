@@ -2,6 +2,7 @@ import json
 import logging
 import sys
 import os
+from typing import Dict, Any, List, AsyncGenerator
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -10,22 +11,42 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 
-# Add project root to path so shared module is importable
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from shared.rag_core import (  # noqa: E402
-    KSERVE_URL,
-    MODEL,
-    MILVUS_HOST,
-    MILVUS_PORT,
-    MILVUS_COLLECTION,
-    PORT,
-    execute_tool,
-    deduplicate_citations,
-    build_chat_payload,
-)
-
-from typing import Dict, Any, List, AsyncGenerator
+# Import shared module, supporting both installed-package and repo layouts
+try:
+    from shared.rag_core import (
+        KSERVE_URL,
+        MODEL,
+        MILVUS_HOST,
+        MILVUS_PORT,
+        MILVUS_COLLECTION,
+        PORT,
+        execute_tool,
+        deduplicate_citations,
+        build_chat_payload,
+    )
+except ModuleNotFoundError as _original_exc:
+    # Fallback for development: add project root so ../shared is importable
+    _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    if _project_root not in sys.path:
+        sys.path.insert(0, _project_root)
+    try:
+        from shared.rag_core import (
+            KSERVE_URL,
+            MODEL,
+            MILVUS_HOST,
+            MILVUS_PORT,
+            MILVUS_COLLECTION,
+            PORT,
+            execute_tool,
+            deduplicate_citations,
+            build_chat_payload,
+        )
+    except ModuleNotFoundError:
+        raise ModuleNotFoundError(
+            "Could not import 'shared.rag_core'. Ensure the 'shared/' directory "
+            "is available on PYTHONPATH or copied into the runtime environment "
+            "(for Docker, include 'COPY shared/ /app/shared/')."
+        ) from _original_exc
 
 logger = logging.getLogger(__name__)
 

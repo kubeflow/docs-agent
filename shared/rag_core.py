@@ -8,12 +8,10 @@ functions used by both the WebSocket and HTTPS API servers.
 import os
 import json
 import logging
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Set, Tuple
 
 from sentence_transformers import SentenceTransformer
 from pymilvus import connections, Collection
-import httpx
-from bs4 import BeautifulSoup
 
 # ---------------------------------------------------------------------------
 # Configuration (environment-driven with sensible defaults)
@@ -221,7 +219,7 @@ async def execute_tool(tool_call: Dict[str, Any]) -> Tuple[str, List[str]]:
 
 def deduplicate_citations(citations: List[str]) -> List[str]:
     """Remove duplicate citations while preserving order."""
-    seen: set[str] = set()
+    seen: Set[str] = set()
     unique: List[str] = []
     for citation in citations:
         if citation not in seen:
