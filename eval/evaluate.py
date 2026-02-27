@@ -28,7 +28,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 # Ensure project root is importable
 _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -137,7 +137,15 @@ def evaluate_retrieval(
     # Lazy imports — only needed when actually running retrieval
     if not dry_run:
         from shared.rag_core import milvus_search
-    from agent.router import classify
+
+    try:
+        from agent.router import classify
+    except ImportError:
+        logger.warning(
+            "agent.router is not available (missing langgraph?). "
+            "Intent classification will be skipped."
+        )
+        classify = None  # type: ignore[assignment]
 
     per_query: List[Dict[str, Any]] = []
     total_recall = 0.0
@@ -153,9 +161,12 @@ def evaluate_retrieval(
         expected_sources = entry.get("expected_sources", [])
 
         # -- Intent classification --
-        state = {"query": query}
-        classified = classify(state)
-        predicted_intent = classified["intent"]
+        if classify is not None:
+            state = {"query": query}
+            classified = classify(state)
+            predicted_intent = classified["intent"]
+        else:
+            predicted_intent = "unknown"
         intent_match = predicted_intent == expected_intent
         if intent_match:
             intent_correct += 1
