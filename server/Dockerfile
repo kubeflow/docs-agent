@@ -23,6 +23,7 @@ RUN mkdir -p $HF_HOME $SENTENCE_TRANSFORMERS_HOME $XDG_CACHE_HOME && \
 USER appuser
 
 # App
+COPY shared/ /app/shared/
 COPY app.py /app/
 
 EXPOSE 8000
