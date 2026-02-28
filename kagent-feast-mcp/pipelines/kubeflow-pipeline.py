@@ -4,7 +4,7 @@ from kfp.dsl import *
 from typing import *
 
 @dsl.component(
-    base_image="python:3.13-slim",
+    base_image="python:3.9",
     packages_to_install=["requests", "beautifulsoup4"]
 )
 def download_github_directory(
@@ -61,12 +61,8 @@ def download_github_directory(
 
 
 @dsl.component(
-    base_image="python:3.13-slim",
-    packages_to_install=["requests"]
-)
-@dsl.component(
-    base_image="python:3.13-slim",
-    packages_to_install=["sentence-transformers", "langchain-text-splitters"]
+    base_image="python:3.9",
+    packages_to_install=["requests", "langchain-text-splitters"]
 )
 def chunk_and_embed(
     github_data: dsl.Input[dsl.Dataset],
@@ -74,18 +70,27 @@ def chunk_and_embed(
     base_url: str,
     chunk_size: int,
     chunk_overlap: int,
+    embedding_service_url: str,
     embedded_data: dsl.Output[dsl.Dataset]
 ):
     import json
     import os
     import re
-    from sentence_transformers import SentenceTransformer
+    import requests
     from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-    model = SentenceTransformer('sentence-transformers/all-mpnet-base-v2')
-    print("Model loaded on CPU")
+    BATCH_SIZE = 64
 
-    records = []
+    def get_embeddings(texts: list) -> list:
+        resp = requests.post(
+            f"{embedding_service_url}/embed",
+            json={"texts": texts},
+            timeout=120,
+        )
+        resp.raise_for_status()
+        return resp.json()["embeddings"]
+
+    records_pending = []
 
     with open(github_data.path, 'r', encoding='utf-8') as f:
         for line in f:
@@ -146,10 +151,8 @@ def chunk_and_embed(
 
             print(f"File: {file_data['path']} -> {len(chunks)} chunks (avg: {sum(len(c) for c in chunks)/len(chunks):.0f} chars)")
 
-            # Create embeddings
             for chunk_idx, chunk in enumerate(chunks):
-                embedding = model.encode(chunk).tolist()
-                records.append({
+                records_pending.append({
                     'file_unique_id': f"{file_unique_id}:{chunk_idx}",
                     'repo_name': repo_name,
                     'file_path': file_data['path'],
@@ -157,18 +160,26 @@ def chunk_and_embed(
                     'citation_url': citation_url,
                     'chunk_index': chunk_idx,
                     'content_text': chunk,
-                    'embedding': embedding
                 })
 
-    print(f"Created {len(records)} total chunks")
+    all_chunks = [r['content_text'] for r in records_pending]
+    print(f"Embedding {len(all_chunks)} chunks in batches of {BATCH_SIZE}...")
+
+    for i in range(0, len(all_chunks), BATCH_SIZE):
+        batch = all_chunks[i : i + BATCH_SIZE]
+        embeddings = get_embeddings(batch)
+        for j, emb in enumerate(embeddings):
+            records_pending[i + j]['embedding'] = emb
+
+    print(f"Created {len(records_pending)} total chunks")
 
     with open(embedded_data.path, 'w', encoding='utf-8') as f:
-        for record in records:
+        for record in records_pending:
             f.write(json.dumps(record, ensure_ascii=False) + '\n')
 
 
 @dsl.component(
-    base_image="python:3.13-slim",
+    base_image="python:3.9",
     packages_to_install=["feast[milvus]", "pandas", "marshmallow>=3.13.0"]
 )
 def store_via_feast(
@@ -288,6 +299,7 @@ def github_rag_feast_pipeline(
     base_url: str = "https://<YOUR_DOCS_BASE_URL>",
     chunk_size: int = 1000,
     chunk_overlap: int = 100,
+    embedding_service_url: str = "http://embedding-service.docs-agent.svc.cluster.local:8080",
     feast_online_store_host: str = "http://milvus.<YOUR_NAMESPACE>.svc.cluster.local",
     feast_project: str = "kubeflow_docs",
 ):
@@ -304,6 +316,7 @@ def github_rag_feast_pipeline(
         base_url=base_url,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
+        embedding_service_url=embedding_service_url,
     )
 
     store_via_feast(

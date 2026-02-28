@@ -1,26 +1,34 @@
+import os
+import requests
 from fastmcp import FastMCP
 from pymilvus import MilvusClient
-from sentence_transformers import SentenceTransformer
 
-MILVUS_URI = "http://milvus.<YOUR_NAMESPACE>.svc.cluster.local:19530"
-MILVUS_USER = "root"
-MILVUS_PASSWORD = "Milvus"
-COLLECTION_NAME = "kubeflow_docs_docs_rag"
-EMBEDDING_MODEL = "sentence-transformers/all-mpnet-base-v2"
-PORT = 8000
+MILVUS_URI = os.getenv("MILVUS_URI", "http://milvus.kubeflow.svc.cluster.local:19530")
+MILVUS_USER = os.getenv("MILVUS_USER", "root")
+MILVUS_PASSWORD = os.getenv("MILVUS_PASSWORD", "Milvus")
+COLLECTION_NAME = os.getenv("MILVUS_COLLECTION", "kubeflow_docs_docs_rag")
+EMBEDDING_SERVICE_URL = os.getenv("EMBEDDING_SERVICE_URL", "http://embedding-service.docs-agent.svc.cluster.local:8080")
 
 mcp = FastMCP("Kubeflow Docs MCP Server")
 
-model: SentenceTransformer = None
 client: MilvusClient = None
 
 
 def _init():
-    global model, client
-    if model is None:
-        model = SentenceTransformer(EMBEDDING_MODEL)
+    global client
     if client is None:
         client = MilvusClient(uri=MILVUS_URI, user=MILVUS_USER, password=MILVUS_PASSWORD)
+
+
+def get_query_embedding(query: str) -> list:
+    """Call the centralised embedding service (ADR-004)."""
+    resp = requests.post(
+        f"{EMBEDDING_SERVICE_URL}/embed",
+        json={"texts": [query]},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()["embeddings"][0]
 
 
 @mcp.tool()
@@ -36,7 +44,7 @@ def search_kubeflow_docs(query: str, top_k: int = 5) -> str:
     """
     _init()
 
-    embedding = model.encode(query).tolist()
+    embedding = get_query_embedding(query)
 
     hits = client.search(
         collection_name=COLLECTION_NAME,
@@ -61,4 +69,4 @@ def search_kubeflow_docs(query: str, top_k: int = 5) -> str:
 
 
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http", host="0.0.0.0", port=PORT)
+    mcp.run(transport="stdio")

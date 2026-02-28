@@ -1,9 +1,6 @@
 kfp
 requests
 beautifulsoup4
-sentence-transformers
 langchain-text-splitters
-torch
-feast[milvus]
 pandas
 numpy
