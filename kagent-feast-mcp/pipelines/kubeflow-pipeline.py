@@ -1,3 +1,10 @@
+"""
+LEGACY / EXPERIMENTAL COMPONENT
+
+As per ADR-008, the Feast feature store integration is currently maintained 
+for experimental use. The canonical vector storage path for docs-agent 
+is PyMilvus (MilvusClient). 
+"""
 import kfp
 from kfp import dsl
 from kfp.dsl import *

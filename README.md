@@ -42,6 +42,10 @@ Kubeflow users often struggle to find relevant information across the extensive 
 
 ## Architecture
 
+### Architectural Decisions
+
+- **ADR-008**: Selected PyMilvus as the canonical vector storage path (Feast integration explicitly marked as legacy). See [ADR-008](docs/adr/ADR-008-vector-store-selection.md).
+
 ### High-Level Architecture
 
 ![High-Level Architecture](assets/indexing.svg)
@@ -75,6 +79,7 @@ Milvus is an open-source vector database designed for AI applications. It provid
 #### Installation Steps
 
 1. **Add Helm Repository**:
+
    ```bash
    helm repo add milvus https://milvus-io.github.io/milvus-helm/
    helm repo update
@@ -103,6 +108,7 @@ Milvus is an open-source vector database designed for AI applications. It provid
 - **Istio Sidecar Injection**: Disabled to avoid networking issues
 
 3. **Test Connection**:
+
    ```python
    from pymilvus import connections
    connections.connect("default", host="my-release-milvus.docs-agent.svc.cluster.local", port="19530")
@@ -202,6 +208,7 @@ spec:
 - **HuggingFace Token**: Required for accessing the model
 
 **Connection Details**:
+
 ```python
 KSERVE_URL = os.getenv("KSERVE_URL", "http://llama.docs-agent.svc.cluster.local/openai/v1/chat/completions")
 MODEL = os.getenv("MODEL", "llama3.1-8B")
@@ -320,12 +327,14 @@ Two API implementations are provided for different use cases:
 **Use Case**: Real-time chat applications, interactive interfaces
 
 **Features**:
+
 - Bidirectional communication
 - Real-time streaming responses
 - Tool call execution with live updates
 - Connection management and error handling
 
 **Key Components**:
+
 ```python
 async def handle_websocket(websocket, path):
     """Handle WebSocket connections with tool calling support"""
@@ -345,6 +354,7 @@ async def stream_llm_response(payload, websocket, citations_collector):
 **Use Case**: RESTful integrations, server-to-server communication, web applications
 
 **Key Features**:
+
 - **Dual Response Modes**: Both streaming (Server-Sent Events) and non-streaming JSON responses
 - **RAG Integration**: Automatic tool calling for Kubeflow documentation search
 - **CORS Support**: Full cross-origin resource sharing for web applications
@@ -355,6 +365,7 @@ async def stream_llm_response(payload, websocket, citations_collector):
 **API Endpoints**:
 
 **Main Chat Endpoint**:
+
 ```python
 @app.post("/chat")
 async def chat(request: ChatRequest):
@@ -365,6 +376,7 @@ async def chat(request: ChatRequest):
 ```
 
 **Health Check Endpoint**:
+
 ```python
 @app.get("/health")
 async def health_check():
@@ -374,6 +386,7 @@ async def health_check():
 ```
 
 **Request/Response Models**:
+
 ```python
 class ChatRequest(BaseModel):
     message: str
@@ -412,11 +425,13 @@ data: {"type": "done"}
 1. **Deploy Milvus and KServe** (as described above)
 
 2. **Run the Pipeline**:
+
    ```bash
    python pipelines/kubeflow-pipeline.py
    ```
 
 3. **Start the API Server**:
+
    ```bash
    # WebSocket API
    python server/app.py
@@ -430,31 +445,34 @@ data: {"type": "done"}
 #### WebSocket API
 
 ```javascript
-const ws = new WebSocket('wss://your-domain.com:8000');
+const ws = new WebSocket("wss://your-domain.com:8000");
 
-ws.onmessage = function(event) {
-    const data = JSON.parse(event.data);
-    switch(data.type) {
-        case 'content':
-            // Handle streaming content
-            break;
-        case 'citations':
-            // Handle citations
-            break;
-        case 'done':
-            // Handle completion
-            break;
-    }
+ws.onmessage = function (event) {
+  const data = JSON.parse(event.data);
+  switch (data.type) {
+    case "content":
+      // Handle streaming content
+      break;
+    case "citations":
+      // Handle citations
+      break;
+    case "done":
+      // Handle completion
+      break;
+  }
 };
 
-ws.send(JSON.stringify({
-    message: "How do I create a Kubeflow pipeline?"
-}));
+ws.send(
+  JSON.stringify({
+    message: "How do I create a Kubeflow pipeline?",
+  }),
+);
 ```
 
 #### HTTPS API
 
 **Streaming Request (Server-Sent Events)**:
+
 ```bash
 curl -X POST "https://your-domain.com/chat" \
   -H "Content-Type: application/json" \
@@ -463,6 +481,7 @@ curl -X POST "https://your-domain.com/chat" \
 ```
 
 **Non-streaming Request (JSON Response)**:
+
 ```bash
 curl -X POST "https://your-domain.com/chat" \
   -H "Content-Type: application/json" \
@@ -470,18 +489,19 @@ curl -X POST "https://your-domain.com/chat" \
 ```
 
 **JavaScript Integration Example**:
+
 ```javascript
 // Streaming request
-const response = await fetch('https://your-domain.com/chat', {
-  method: 'POST',
+const response = await fetch("https://your-domain.com/chat", {
+  method: "POST",
   headers: {
-    'Content-Type': 'application/json',
-    'Accept': 'text/event-stream'
+    "Content-Type": "application/json",
+    Accept: "text/event-stream",
   },
   body: JSON.stringify({
-    message: 'How do I create a Kubeflow pipeline?',
-    stream: true
-  })
+    message: "How do I create a Kubeflow pipeline?",
+    stream: true,
+  }),
 });
 
 const reader = response.body.getReader();
@@ -490,25 +510,25 @@ const decoder = new TextDecoder();
 while (true) {
   const { done, value } = await reader.read();
   if (done) break;
-  
+
   const chunk = decoder.decode(value);
-  const lines = chunk.split('\n');
-  
+  const lines = chunk.split("\n");
+
   for (const line of lines) {
-    if (line.startsWith('data: ')) {
+    if (line.startsWith("data: ")) {
       const data = JSON.parse(line.slice(6));
-      switch(data.type) {
-        case 'content':
-          console.log('Content:', data.content);
+      switch (data.type) {
+        case "content":
+          console.log("Content:", data.content);
           break;
-        case 'tool_result':
-          console.log('Tool:', data.tool_name, data.content);
+        case "tool_result":
+          console.log("Tool:", data.tool_name, data.content);
           break;
-        case 'citations':
-          console.log('Citations:', data.citations);
+        case "citations":
+          console.log("Citations:", data.citations);
           break;
-        case 'done':
-          console.log('Response complete');
+        case "done":
+          console.log("Response complete");
           break;
       }
     }
@@ -517,6 +537,7 @@ while (true) {
 ```
 
 **Python Integration Example**:
+
 ```python
 import requests
 import json
@@ -694,16 +715,19 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 ## Acknowledgments
 
 ### Mentors
+
 - [Francisco Javier Arceo](https://www.linkedin.com/in/franciscojavierarceo/) - Project mentor and guidance
 - [Chase Christensen](https://www.linkedin.com/in/chase-c-695463162/) - Project mentor and technical support
 
 ### Organizations
+
 - [Google Summer of Code (GSoC)](https://summerofcode.withgoogle.com/) for providing this incredible opportunity
 - [Red Hat AI](https://www.redhat.com/en/topics/ai) for providing the Llama 3.1-8B model
 - [Hugging Face](https://huggingface.co/) for the model hosting and sentence transformers library
 - [Oracle Cloud Infrastructure (OCI)](https://www.oracle.com/cloud/) for providing cloud resources and infrastructure
 
 ### Open Source Community
+
 - [Kubeflow Community](https://github.com/kubeflow/community) for the KEP-867 proposal
 - [Milvus](https://milvus.io/) for the vector database
 - [KServe](https://kserve.github.io/website/) for model serving
