@@ -1,5 +1,6 @@
 import os
 import json
+import asyncio
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
@@ -177,7 +178,7 @@ async def execute_tool(tool_call: Dict[str, Any]) -> tuple[str, List[str]]:
             top_k = arguments.get("top_k", 5)
             
             print(f"[TOOL] Executing Milvus search for: '{query}' (top_k={top_k})")
-            result = milvus_search(query, top_k)
+            result = await asyncio.to_thread(milvus_search, query, top_k)
             
             # Collect citations
             citations = []
