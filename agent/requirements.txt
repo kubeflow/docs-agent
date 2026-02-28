@@ -1,0 +1,5 @@
+# Agentic RAG router dependencies
+# These are in addition to the shared/ module's transitive requirements
+# (pymilvus, sentence-transformers, torch, numpy).
+
+langgraph>=0.2.0
