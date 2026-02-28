@@ -15,6 +15,7 @@ ENV PORT=8000
 USER appuser
 
 # App
+COPY shared/ /app/shared/
 COPY app.py /app/
 
 EXPOSE 8000

@@ -1,0 +1,29 @@
+# ---------------------------------------------------------------------------
+# Example variable values — copy to terraform.tfvars and fill in.
+# NEVER commit terraform.tfvars (it may contain secrets).
+# ---------------------------------------------------------------------------
+
+# -- OCI authentication (required) ----------------------------------------
+tenancy_ocid   = "ocid1.tenancy.oc1..aaaaaaaaexample"
+user_ocid      = "ocid1.user.oc1..aaaaaaaaexample"
+fingerprint    = "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99"
+private_key    = "" # Use: file("~/.oci/oci_api_key.pem")
+region         = "us-ashburn-1"
+compartment_id = "ocid1.compartment.oc1..aaaaaaaaexample"
+
+# -- OKE cluster (optional overrides) -------------------------------------
+# cluster_name       = "docs-agent-cluster"
+# kubernetes_version = "v1.30.0"
+# vcn_cidr           = "10.0.0.0/16"
+
+# -- Node pools (optional overrides) --------------------------------------
+# cpu_node_shape = "VM.Standard.E4.Flex"
+# cpu_node_count = 3
+# gpu_node_shape = "VM.GPU.A10.1"
+# gpu_node_count = 1
+
+# -- Application (optional overrides) -------------------------------------
+# namespace           = "docs-agent"
+# docs_agent_image    = "ghcr.io/kubeflow/docs-agent:latest"
+# docs_agent_replicas = 2
+# milvus_storage_gb   = 50
