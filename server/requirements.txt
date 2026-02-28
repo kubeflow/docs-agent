@@ -1,6 +1,7 @@
 # Core dependencies
 websockets
 httpx
+redis
 
 # Milvus client
 pymilvus

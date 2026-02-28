@@ -1,4 +1,5 @@
 fastmcp
 pymilvus
+redis
 sentence-transformers
 torch
