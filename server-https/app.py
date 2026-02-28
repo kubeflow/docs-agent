@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 from typing import Dict, Any, List, Optional, AsyncGenerator
+from contextlib import asynccontextmanager
 from sentence_transformers import SentenceTransformer
 from pymilvus import connections, Collection
 
@@ -96,7 +97,16 @@ TOOLS = [
     }
 ]
 
-app = FastAPI(title="Kubeflow Docs API Service", version="1.0.0")
+http_client: Optional[httpx.AsyncClient] = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global http_client
+    http_client = httpx.AsyncClient(timeout=120)
+    yield
+    await http_client.aclose()
+
+app = FastAPI(title="Kubeflow Docs API Service", version="1.0.0", lifespan=lifespan)
 
 # Add CORS middleware
 app.add_middleware(
@@ -199,9 +209,8 @@ async def stream_llm_response(payload: Dict[str, Any]) -> AsyncGenerator[str, No
     citations_collector = []
     
     try:
-        async with httpx.AsyncClient(timeout=120) as client:
-            async with client.stream("POST", KSERVE_URL, json=payload) as response:
-                if response.status_code != 200:
+        async with http_client.stream("POST", KSERVE_URL, json=payload) as response:
+            if response.status_code != 200:
                     error_msg = f"LLM service error: HTTP {response.status_code}"
                     print(f"[ERROR] {error_msg}")
                     yield f"data: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
