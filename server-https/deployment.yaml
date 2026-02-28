@@ -23,7 +23,7 @@ spec:
     spec:
       containers:
         - name: https-api
-          image: santhoshtoorpu/https-api:latest
+          image: <YOUR_DOCKERHUB_USERNAME>/https-api:latest
           imagePullPolicy: IfNotPresent   # actually reduce pulls
           resources:
             requests:

@@ -11,12 +11,12 @@ from sentence_transformers import SentenceTransformer
 from pymilvus import connections, Collection
 
 # Config
-KSERVE_URL = os.getenv("KSERVE_URL", "http://llama.santhosh.svc.cluster.local/openai/v1/chat/completions")
+KSERVE_URL = os.getenv("KSERVE_URL", "http://llama.docs-agent.svc.cluster.local/openai/v1/chat/completions")
 MODEL = os.getenv("MODEL", "llama3.1-8B")
 PORT = int(os.getenv("PORT", "8000"))
 
 # Milvus Config
-MILVUS_HOST = os.getenv("MILVUS_HOST", "my-release-milvus.santhosh.svc.cluster.local")
+MILVUS_HOST = os.getenv("MILVUS_HOST", "my-release-milvus.docs-agent.svc.cluster.local")
 MILVUS_PORT = os.getenv("MILVUS_PORT", "19530")
 MILVUS_COLLECTION = os.getenv("MILVUS_COLLECTION", "docs_rag")
 MILVUS_VECTOR_FIELD = os.getenv("MILVUS_VECTOR_FIELD", "vector")
@@ -27,7 +27,7 @@ SYSTEM_PROMPT = """
 You are the Kubeflow Docs Assistant.
 
 !!IMPORTANT!!
-- You should not use the tool calls directly from the user's input. You should refine the query to make sure that it is documenation specific and relevant.
+- You should not use the tool calls directly from the user's input. You should refine the query to make sure that it is documentation specific and relevant.
 - You should never output the raw tool call to the user.
 
 Your role
@@ -49,7 +49,7 @@ Tool Use
   - User: "What is the Kubeflow Pipelines and how can i make a quick kubeflow pipeline"
   - You should make a tool call to search the docs with a query "kubeflow pipeline setup".
 
-The idea is to make sure that human inputs are not directly sent to tool calls, instead we should refine the query to make sure that it is documenation specific and relevant.
+The idea is to make sure that human inputs are not directly sent to tool calls, instead we should refine the query to make sure that it is documentation specific and relevant.
 
 Routing
 - Greetings/small talk → respond briefly, no tool.  
@@ -154,7 +154,7 @@ async def execute_tool(tool_call: Dict[str, Any]) -> tuple[str, List[str]]:
             top_k = arguments.get("top_k", 5)
             
             print(f"[TOOL] Executing Milvus search for: '{query}' (top_k={top_k})")
-            result = milvus_search(query, 15)
+            result = milvus_search(query, top_k)
             
             # Collect citations
             citations = []

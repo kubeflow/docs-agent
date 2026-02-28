@@ -61,6 +61,159 @@ def download_github_directory(
 
 
 @dsl.component(
+    base_image="python:3.9",
+    packages_to_install=["requests"]
+)
+def download_github_issues(
+    repos: str,
+    labels: str,
+    state: str,
+    max_issues_per_repo: int,
+    github_token: str,
+    issues_data: dsl.Output[dsl.Dataset]
+):
+    """Fetch GitHub issues and comments from multiple repos for RAG indexing.
+    
+    Args:
+        repos: Comma-separated list of repos (e.g., "kubeflow/kubeflow,kubeflow/pipelines")
+        labels: Comma-separated labels to filter (e.g., "kind/bug,kind/question")
+        state: Issue state - "open", "closed", or "all"
+        max_issues_per_repo: Maximum issues to fetch per repository
+        github_token: GitHub personal access token for API authentication
+        issues_data: Output dataset path
+    """
+    import requests
+    import json
+    import time
+
+    headers = {"Authorization": f"token {github_token}"} if github_token else {}
+    all_issues = []
+
+    def api_request(url, params=None):
+        """Make GitHub API request with rate limit handling."""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                resp = requests.get(url, params=params, headers=headers)
+                
+                # Handle rate limiting
+                if resp.status_code == 403:
+                    remaining = resp.headers.get("X-RateLimit-Remaining", "0")
+                    if remaining == "0":
+                        reset_time = int(resp.headers.get("X-RateLimit-Reset", 0))
+                        wait_time = max(reset_time - int(time.time()), 60)
+                        print(f"Rate limited. Waiting {wait_time}s...")
+                        time.sleep(min(wait_time, 300))  # Max 5 min wait
+                        continue
+                
+                if resp.status_code == 200:
+                    return resp.json()
+                else:
+                    print(f"API error: HTTP {resp.status_code}")
+                    return None
+                    
+            except Exception as e:
+                print(f"Request failed (attempt {attempt+1}): {e}")
+                time.sleep(2 ** attempt)  # Exponential backoff
+        
+        return None
+
+    def fetch_comments(owner, name, issue_number):
+        """Fetch all comments for a single issue."""
+        comments_url = f"https://api.github.com/repos/{owner}/{name}/issues/{issue_number}/comments"
+        comments_text = ""
+        page = 1
+        
+        while True:
+            comments = api_request(comments_url, {"per_page": 100, "page": page})
+            if not comments:
+                break
+                
+            for comment in comments:
+                author = comment.get("user", {}).get("login", "unknown")
+                created = comment.get("created_at", "")[:10]
+                body = comment.get("body", "") or ""
+                comments_text += f"\n\n---\n**Comment by @{author}** ({created}):\n{body}"
+            
+            if len(comments) < 100:
+                break
+            page += 1
+        
+        return comments_text
+
+    for repo in repos.split(","):
+        repo = repo.strip()
+        if "/" not in repo:
+            print(f"Skipping invalid repo format: {repo}")
+            continue
+
+        owner, name = repo.split("/", 1)
+        print(f"Fetching issues from {owner}/{name}...")
+
+        page = 1
+        repo_issues = []
+
+        while len(repo_issues) < max_issues_per_repo:
+            url = f"https://api.github.com/repos/{owner}/{name}/issues"
+            params = {
+                "state": state,
+                "labels": labels,
+                "per_page": 100,
+                "page": page
+            }
+
+            issues = api_request(url, params)
+            if not issues:
+                break
+
+            for issue in issues:
+                if "pull_request" in issue:
+                    continue
+
+                labels_str = ", ".join([l["name"] for l in issue.get("labels", [])])
+                issue_url = issue.get("html_url", "")
+                created_at = issue.get("created_at", "")[:10]
+                updated_at = issue.get("updated_at", "")[:10]
+
+                # Build issue content with full metadata
+                content = f"# {issue['title']}\n\n"
+                content += f"**Repository:** {repo}\n"
+                content += f"**Issue:** #{issue['number']}\n"
+                content += f"**URL:** {issue_url}\n"
+                content += f"**Labels:** {labels_str}\n"
+                content += f"**State:** {issue['state']}\n"
+                content += f"**Created:** {created_at}\n"
+                content += f"**Updated:** {updated_at}\n\n"
+                content += issue.get("body", "") or ""
+
+                # Fetch and append comments
+                if issue.get("comments", 0) > 0:
+                    comments = fetch_comments(owner, name, issue["number"])
+                    content += comments
+
+                repo_issues.append({
+                    "path": f"issues/{name}/{issue['number']}",
+                    "content": content,
+                    "file_name": f"issue-{name}-{issue['number']}.md",
+                    "url": issue_url
+                })
+
+                if len(repo_issues) >= max_issues_per_repo:
+                    break
+
+            page += 1
+
+        all_issues.extend(repo_issues)
+        print(f"  Fetched {len(repo_issues)} issues from {repo}")
+
+    print(f"Total issues fetched: {len(all_issues)}")
+
+    with open(issues_data.path, 'w', encoding='utf-8') as f:
+        for issue_data in all_issues:
+            f.write(json.dumps(issue_data, ensure_ascii=False) + '\n')
+
+
+@dsl.component(
     base_image="pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime",
     packages_to_install=["sentence-transformers", "langchain"]
 )
@@ -255,7 +408,7 @@ def github_rag_pipeline(
     base_url: str = "https://www.kubeflow.org/docs",
     chunk_size: int = 1000,
     chunk_overlap: int = 100,
-    milvus_host: str = "milvus-standalone-final.santhosh.svc.cluster.local",
+    milvus_host: str = "milvus-standalone-final.docs-agent.svc.cluster.local",
     milvus_port: str = "19530",
     collection_name: str = "docs_rag"
 ):
@@ -283,6 +436,7 @@ def github_rag_pipeline(
         milvus_port=milvus_port,
         collection_name=collection_name
     )
+
 
 if __name__ == "__main__":
     import os

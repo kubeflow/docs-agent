@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-kubeflow-docs
+  namespace: <YOUR_NAMESPACE>
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-kubeflow-docs
+  template:
+    metadata:
+      labels:
+        app: mcp-kubeflow-docs
+    spec:
+      containers:
+        - name: mcp-server
+          image: <YOUR_DOCKERHUB_USERNAME>/mcp-kubeflow-docs:latest
+          ports:
+            - containerPort: 8000
+          env:
+            - name: PORT
+              value: "8000"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "1"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-kubeflow-docs
+  namespace: <YOUR_NAMESPACE>
+spec:
+  selector:
+    app: mcp-kubeflow-docs
+  ports:
+    - port: 8000
+      targetPort: 8000
+  type: ClusterIP
