@@ -2,7 +2,5 @@ fastapi
 uvicorn[standard]
 pydantic
 httpx
-sentence-transformers
 pymilvus
-torch --extra-index-url https://download.pytorch.org/whl/cpu
 numpy
