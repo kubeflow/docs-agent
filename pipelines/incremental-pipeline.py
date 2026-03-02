@@ -81,7 +81,8 @@ def delete_old_vectors(
     repo_name: str,
     milvus_host: str,
     milvus_port: str,
-    collection_name: str
+    collection_name: str,
+    backup_file: dsl.Output[dsl.Artifact]
 ):
     from pymilvus import connections, Collection
     import json
@@ -94,6 +95,8 @@ def delete_old_vectors(
         file_paths_list = json.loads(file_paths)
     except json.JSONDecodeError:
         print(f"Error: Invalid JSON in file_paths: {file_paths}")
+        with open(backup_file.path, 'w') as f:
+            json.dump({"deleted_ids": [], "success": False}, f)
         return
     
     # Check if collection exists
@@ -102,23 +105,29 @@ def delete_old_vectors(
         collection.load()
         print(f"Connected to collection: {collection_name}")
         
-        # Delete old vectors for each changed file
+        # Keep track of deleted IDs for potential rollback
+        deleted_ids_by_file = {}
         deleted_count = 0
+        
         for file_path in file_paths_list:
             file_unique_id = f"{repo_name}:{file_path}"
             
             # Delete vectors with matching file_unique_id
             expr = f'file_unique_id == "{file_unique_id}"'
             try:
-                # Get count before deletion for logging
+                # Get IDs before deletion for rollback capability
                 query_result = collection.query(
                     expr=expr,
                     output_fields=["id"],
                     limit=10000
                 )
-                count_before = len(query_result)
+                deleted_ids = [item['id'] for item in query_result]
+                count_before = len(deleted_ids)
                 
                 if count_before > 0:
+                    # Store deleted IDs for potential recovery
+                    deleted_ids_by_file[file_path] = deleted_ids
+                    
                     # Delete the vectors
                     collection.delete(expr)
                     collection.flush()
@@ -129,13 +138,32 @@ def delete_old_vectors(
                     
             except Exception as e:
                 print(f"Error deleting vectors for {file_path}: {e}")
-                continue
+                # Save what we've deleted so far for potential recovery
+                with open(backup_file.path, 'w') as f:
+                    json.dump({
+                        "deleted_ids_by_file": deleted_ids_by_file,
+                        "deleted_count": deleted_count,
+                        "error": str(e),
+                        "success": False
+                    }, f)
+                raise
         
         print(f"✅ Total deleted vectors: {deleted_count}")
+        
+        # Save deletion metadata for recovery if insertion fails
+        with open(backup_file.path, 'w') as f:
+            json.dump({
+                "deleted_ids_by_file": deleted_ids_by_file,
+                "deleted_count": deleted_count,
+                "collection_name": collection_name,
+                "success": True
+            }, f)
         
     except Exception as e:
         print(f"Error connecting to collection {collection_name}: {e}")
         print("Collection might not exist yet - this is okay for first run")
+        with open(backup_file.path, 'w') as f:
+            json.dump({"deleted_ids": [], "error": str(e), "success": False}, f)
 
 
 @dsl.component(
@@ -251,7 +279,9 @@ def store_milvus_incremental(
     embedded_data: dsl.Input[dsl.Dataset],
     milvus_host: str,
     milvus_port: str,
-    collection_name: str
+    collection_name: str,
+    backup_file: dsl.Input[dsl.Artifact],  # Deletion backup for recovery
+    embedding_dimension: int = 768  # Parameterized embedding dimension
 ):
     from pymilvus import connections, utility, FieldSchema, CollectionSchema, DataType, Collection
     import json
@@ -259,11 +289,19 @@ def store_milvus_incremental(
 
     connections.connect("default", host=milvus_host, port=milvus_port)
 
+    # Load backup metadata from deletion step
+    try:
+        with open(backup_file.path, 'r') as f:
+            deletion_backup = json.load(f)
+    except Exception as e:
+        print(f"Warning: Could not read deletion backup: {e}")
+        deletion_backup = {"deleted_ids_by_file": {}, "success": False}
+
     # Check if collection exists, if not create it
     if not utility.has_collection(collection_name):
         print(f"Collection {collection_name} doesn't exist, creating it...")
         
-        # Enhanced schema with 768 dimensions
+        # Enhanced schema with dynamic embedding dimension
         fields = [
             FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
             FieldSchema(name="file_unique_id", dtype=DataType.VARCHAR, max_length=512),
@@ -273,13 +311,13 @@ def store_milvus_incremental(
             FieldSchema(name="citation_url", dtype=DataType.VARCHAR, max_length=1024),
             FieldSchema(name="chunk_index", dtype=DataType.INT64),
             FieldSchema(name="content_text", dtype=DataType.VARCHAR, max_length=2000),
-            FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=768),
+            FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=embedding_dimension),  # Parameterized dimension
             FieldSchema(name="last_updated", dtype=DataType.INT64)
         ]
 
         schema = CollectionSchema(fields, "RAG collection for documentation")
         collection = Collection(collection_name, schema)
-        print(f"Created new collection: {collection_name}")
+        print(f"Created new collection: {collection_name} with embedding dimension: {embedding_dimension}")
     else:
         collection = Collection(collection_name)
         print(f"Using existing collection: {collection_name}")
@@ -307,34 +345,62 @@ def store_milvus_incremental(
             })
 
     if records:
-        # Insert new records
-        batch_size = 1000
-        for i in range(0, len(records), batch_size):
-            batch = records[i:i + batch_size]
-            collection.insert(batch)
-
-        collection.flush()
-
-        # Create/update index if needed
+        collection_size_before = collection.num_entities
+        insertion_failed = False
+        
         try:
-            # Check if index exists
-            index_info = collection.index()
-            if not index_info:
-                print("Creating index...")
-                index_params = {
-                    "metric_type": "COSINE",
-                    "index_type": "IVF_FLAT", 
-                    "params": {"nlist": min(1024, max(100, len(records)))}
-                }
-                collection.create_index("vector", index_params)
-                collection.load()
-                print("Index created successfully")
-            else:
-                print("Index already exists")
-        except Exception as e:
-            print(f"Index operation result: {e}")
+            # Insert new records
+            batch_size = 1000
+            for i in range(0, len(records), batch_size):
+                batch = records[i:i + batch_size]
+                collection.insert(batch)
+                print(f"Inserted batch {i//batch_size + 1}/{(len(records)-1)//batch_size + 1}")
 
-        print(f"✅ Inserted {len(records)} new records. Total collection size: {collection.num_entities}")
+            collection.flush()
+            
+            # Validate insertion success
+            collection_size_after = collection.num_entities
+            expected_final_size = collection_size_before + len(records)
+            
+            if collection_size_after < expected_final_size:
+                print(f"⚠️  WARNING: Insertion validation failed!")
+                print(f"   Expected: {expected_final_size}, Got: {collection_size_after}")
+                insertion_failed = True
+                raise Exception(f"Insertion incomplete: {collection_size_after} < {expected_final_size}")
+
+            # Create/update index if needed
+            try:
+                # Check if index exists
+                index_info = collection.index()
+                if not index_info:
+                    print("Creating index...")
+                    index_params = {
+                        "metric_type": "COSINE",
+                        "index_type": "IVF_FLAT", 
+                        "params": {"nlist": min(1024, max(100, len(records)))}
+                    }
+                    collection.create_index("vector", index_params)
+                    collection.load()
+                    print("Index created successfully")
+                else:
+                    print("Index already exists")
+            except Exception as e:
+                print(f"Index operation result: {e}")
+
+            print(f"✅ Successfully inserted {len(records)} new records. Total collection size: {collection.num_entities}")
+        
+        except Exception as e:
+            print(f"❌ ERROR: Insertion failed: {e}")
+            insertion_failed = True
+            
+            # Attempt recovery: If deletion backup was successful, log it for manual recovery
+            if deletion_backup.get("success") and deletion_backup.get("deleted_ids_by_file"):
+                print(f"ℹ️  Recovery Info: The following vectors were deleted and can be recovered:")
+                print(f"   Deleted IDs by file: {deletion_backup.get('deleted_ids_by_file')}")
+                print(f"   Total deleted: {deletion_backup.get('deleted_count')}")
+                print(f"   Please manually restore these vectors or re-run the full pipeline.")
+            
+            raise Exception(f"Insertion failed with {len(records)} records. Deletion was already committed. Manual recovery may be needed.")
     else:
         print("No records to insert")
 
@@ -353,9 +419,10 @@ def github_rag_incremental_pipeline(
     chunk_overlap: int = 100,
     milvus_host: str = "milvus-standalone-final.docs-agent.svc.cluster.local",
     milvus_port: str = "19530",
-    collection_name: str = "docs_rag"
+    collection_name: str = "docs_rag",
+    embedding_dimension: int = 768  # Parameterized embedding dimension for all-mpnet-base-v2
 ):
-    # Step 1: Delete old vectors for changed files
+    # Step 1: Delete old vectors for changed files (generates backup metadata)
     delete_task = delete_old_vectors(
         file_paths=changed_files,
         repo_name=repo_name,
@@ -381,12 +448,14 @@ def github_rag_incremental_pipeline(
         chunk_overlap=chunk_overlap
     )
     
-    # Step 4: Store new vectors in Milvus (after deletion is complete)
+    # Step 4: Store new vectors in Milvus (after deletion is complete, with backup for recovery)
     store_task = store_milvus_incremental(
         embedded_data=chunk_task.outputs["embedded_data"],
         milvus_host=milvus_host,
         milvus_port=milvus_port,
-        collection_name=collection_name
+        collection_name=collection_name,
+        backup_file=delete_task.outputs["backup_file"],
+        embedding_dimension=embedding_dimension
     )
     
     # Ensure deletion happens before insertion
