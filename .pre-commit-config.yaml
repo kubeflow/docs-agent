@@ -1,0 +1,17 @@
+exclude: '^(\.venv|venv|build|dist)/'
+repos:
+-   repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+    -   id: check-yaml
+        args: [--allow-multiple-documents]
+    -   id: end-of-file-fixer
+    -   id: trailing-whitespace
+    -   id: detect-private-key
+
+-   repo: https://github.com/PyCQA/bandit
+    rev: 1.7.7
+    hooks:
+    -   id: bandit
+        # We remove "-r ." because pre-commit handles the file list automatically
+        args: ["-lll", "--exclude", "./.venv"]

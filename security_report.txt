@@ -1,0 +1,176 @@
+Run started:2026-03-02 10:36:20.024828+00:00
+
+Test results:
+>> Issue: [B108:hardcoded_tmp_directory] Probable insecure usage of temp file/directory.
+   Severity: Medium   Confidence: Medium
+   CWE: CWE-377 (https://cwe.mitre.org/data/definitions/377.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b108_hardcoded_tmp_directory.html
+   Location: ./kagent-feast-mcp/pipelines/kubeflow-pipeline.py:210:16
+209
+210	    feast_dir = "/tmp/feast_repo"
+211	    os.makedirs(f"{feast_dir}/data", exist_ok=True)
+
+--------------------------------------------------
+>> Issue: [B107:hardcoded_password_default] Possible hardcoded password: ''
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b107_hardcoded_password_default.html
+   Location: ./kagent-feast-mcp/pipelines/kubeflow-pipeline.py:283:0
+282	)
+283	def github_rag_feast_pipeline(
+284	    repo_owner: str = "kubeflow",
+285	    repo_name: str = "website",
+286	    directory_path: str = "content/en",
+287	    github_token: str = "",
+288	    base_url: str = "https://<YOUR_DOCS_BASE_URL>",
+289	    chunk_size: int = 1000,
+290	    chunk_overlap: int = 100,
+291	    feast_online_store_host: str = "http://milvus.<YOUR_NAMESPACE>.svc.cluster.local",
+292	    feast_project: str = "kubeflow_docs",
+293	):
+294	    download_task = download_github_directory(
+295	        repo_owner=repo_owner,
+296	        repo_name=repo_name,
+297	        directory_path=directory_path,
+298	        github_token=github_token,
+299	    )
+300
+301	    chunk_task = chunk_and_embed(
+302	        github_data=download_task.outputs["github_data"],
+303	        repo_name=repo_name,
+304	        base_url=base_url,
+305	        chunk_size=chunk_size,
+306	        chunk_overlap=chunk_overlap,
+307	    )
+308
+309	    store_via_feast(
+310	        embedded_data=chunk_task.outputs["embedded_data"],
+311	        feast_online_store_host=feast_online_store_host,
+312	        feast_project=feast_project,
+313	    )
+314
+
+--------------------------------------------------
+>> Issue: [B107:hardcoded_password_default] Possible hardcoded password: ''
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b107_hardcoded_password_default.html
+   Location: ./pipelines/incremental-pipeline.py:346:0
+345	)
+346	def github_rag_incremental_pipeline(
+347	    repo_owner: str = "kubeflow",
+348	    repo_name: str = "website",
+349	    changed_files: str = '[]',  # JSON string of changed file paths
+350	    github_token: str = "",
+351	    base_url: str = "https://www.kubeflow.org/docs",
+352	    chunk_size: int = 1200,
+353	    chunk_overlap: int = 100,
+354	    milvus_host: str = "milvus-standalone-final.docs-agent.svc.cluster.local",
+355	    milvus_port: str = "19530",
+356	    collection_name: str = "docs_rag"
+357	):
+358	    # Step 1: Delete old vectors for changed files
+359	    delete_task = delete_old_vectors(
+360	        file_paths=changed_files,
+361	        repo_name=repo_name,
+362	        milvus_host=milvus_host,
+363	        milvus_port=milvus_port,
+364	        collection_name=collection_name
+365	    )
+366
+367	    # Step 2: Download only the changed files
+368	    download_task = download_specific_files(
+369	        repo_owner=repo_owner,
+370	        repo_name=repo_name,
+371	        file_paths=changed_files,
+372	        github_token=github_token
+373	    )
+374
+375	    # Step 3: Chunk and embed the changed files
+376	    chunk_task = chunk_and_embed_incremental(
+377	        github_data=download_task.outputs["github_data"],
+378	        repo_name=repo_name,
+379	        base_url=base_url,
+380	        chunk_size=chunk_size,
+381	        chunk_overlap=chunk_overlap
+382	    )
+383
+384	    # Step 4: Store new vectors in Milvus (after deletion is complete)
+385	    store_task = store_milvus_incremental(
+386	        embedded_data=chunk_task.outputs["embedded_data"],
+387	        milvus_host=milvus_host,
+388	        milvus_port=milvus_port,
+389	        collection_name=collection_name
+390	    )
+391
+392	    # Ensure deletion happens before insertion
+393	    store_task.after(delete_task)
+394
+
+--------------------------------------------------
+>> Issue: [B107:hardcoded_password_default] Possible hardcoded password: ''
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b107_hardcoded_password_default.html
+   Location: ./pipelines/kubeflow-pipeline.py:403:0
+402	)
+403	def github_rag_pipeline(
+404	    repo_owner: str = "kubeflow",
+405	    repo_name: str = "website",
+406	    directory_path: str = "content/en",
+407	    github_token: str = "",
+408	    base_url: str = "https://www.kubeflow.org/docs",
+409	    chunk_size: int = 1000,
+410	    chunk_overlap: int = 100,
+411	    milvus_host: str = "milvus-standalone-final.docs-agent.svc.cluster.local",
+412	    milvus_port: str = "19530",
+413	    collection_name: str = "docs_rag"
+414	):
+415	    # Download GitHub directory
+416	    download_task = download_github_directory(
+417	        repo_owner=repo_owner,
+418	        repo_name=repo_name,
+419	        directory_path=directory_path,
+420	        github_token=github_token
+421	    )
+422
+423	    # Chunk and embed the content
+424	    chunk_task = chunk_and_embed(
+425	        github_data=download_task.outputs["github_data"],
+426	        repo_name=repo_name,
+427	        base_url=base_url,
+428	        chunk_size=chunk_size,
+429	        chunk_overlap=chunk_overlap
+430	    )
+431
+432	    # Store in Milvus
+433	    store_task = store_milvus(
+434	        embedded_data=chunk_task.outputs["embedded_data"],
+435	        milvus_host=milvus_host,
+436	        milvus_port=milvus_port,
+437	        collection_name=collection_name
+438	    )
+439
+
+--------------------------------------------------
+
+Code scanned:
+	Total lines of code: 1650
+	Total lines skipped (#nosec): 0
+	Total potential issues skipped due to specifically being disabled (e.g., #nosec BXXX): 0
+
+Run metrics:
+	Total issues (by severity):
+		Undefined: 0
+		Low: 3
+		Medium: 1
+		High: 0
+	Total issues (by confidence):
+		Undefined: 0
+		Low: 0
+		Medium: 4
+		High: 0
+Files skipped (3):
+	./kagent-feast-mcp/mcp-server/server.py (syntax error while parsing AST from file)
+	./server-https/app.py (syntax error while parsing AST from file)
+	./server/app.py (syntax error while parsing AST from file)
