@@ -167,7 +167,9 @@ kubectl get agents,remotemcpservers,modelconfigs -n <YOUR_NAMESPACE>
 ### Step 7: Access kagent UI
 
 ```bash
-kubectl -n <YOUR_NAMESPACE> port-forward service/kagent-ui 8080:8080
+# WSL2 users may need to bind to all interfaces to avoid dropped
+# connections (see troubleshooting below).
+kubectl -n <YOUR_NAMESPACE> port-forward --address=0.0.0.0 service/kagent-ui 8080:8080
 ```
 
 Open http://localhost:8080 in your browser to interact with the Kubeflow docs agent.
@@ -186,6 +188,19 @@ kill %1
 
 - **Port-forward works, direct fails** -- Istio blocking. Run `kubectl apply -f ../manifests/istio/`
 
+### WSL2 users: port-forward drops connections
+
+When running in WSL2 the default NAT bridge doesn’t reliably forward
+traffic from the Windows host to `127.0.0.1` inside the VM. If the
+Kagent UI loads but then becomes unresponsive or you see `504 Gateway
+Time-out` errors, re-run the step above using an explicit address:
+
+```bash
+kubectl -n <YOUR_NAMESPACE> port-forward --address=0.0.0.0 service/kagent-ui 8080:8080
+```
+
+This binds the listener to all interfaces and avoids the WSL2 NAT
+limitation.
 ### Debug Commands
 
 ```bash
