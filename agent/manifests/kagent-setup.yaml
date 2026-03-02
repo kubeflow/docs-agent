@@ -1,0 +1,140 @@
+# Kagent CRD manifests for the Kubeflow Docs Agent.
+#
+# This file defines the full Kagent agent stack:
+#   1. Secret        – LLM API key (Groq by default; swap for KServe)
+#   2. ModelConfig    – LLM provider configuration
+#   3. RemoteMCPServer – Points Kagent to the partition-aware MCP server
+#   4. Agent          – The agent definition with system prompt & tool bindings
+#
+# Prerequisites:
+#   - Kagent CRDs and controller installed (see kagent-feast-mcp/README.md)
+#   - MCP server deployed (see agent/manifests/mcp-deployment.yaml)
+#   - Milvus running and populated with embeddings
+#
+# Apply:
+#   kubectl apply -f agent/manifests/kagent-setup.yaml
+#
+# Replace <YOUR_NAMESPACE> and <YOUR_GROQ_API_KEY> before applying.
+
+# ── 1. LLM API Key Secret ─────────────────────────────────────────────────
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kagent-llm-key
+  namespace: <YOUR_NAMESPACE>
+type: Opaque
+stringData:
+  API_KEY: "<YOUR_GROQ_API_KEY>"
+
+---
+# ── 2. ModelConfig (Groq — OpenAI-compatible) ─────────────────────────────
+#
+# To use KServe instead, replace the baseUrl and model below:
+#   baseUrl: "http://llama.docs-agent.svc.cluster.local/openai/v1"
+#   model: "llama3.1-8B"
+#
+apiVersion: kagent.dev/v1alpha2
+kind: ModelConfig
+metadata:
+  name: docs-agent-llm
+  namespace: <YOUR_NAMESPACE>
+spec:
+  apiKeySecret: kagent-llm-key
+  apiKeySecretKey: API_KEY
+  model: llama-3.3-70b-versatile
+  provider: OpenAI
+  openAI:
+    baseUrl: "https://api.groq.com/openai/v1"
+
+---
+# ── 3. RemoteMCPServer ────────────────────────────────────────────────────
+#
+# Points to the partition-aware MCP server deployed by mcp-deployment.yaml.
+# The /mcp path is the FastMCP streamable-http endpoint.
+#
+apiVersion: kagent.dev/v1alpha2
+kind: RemoteMCPServer
+metadata:
+  name: kubeflow-docs-mcp
+  namespace: <YOUR_NAMESPACE>
+spec:
+  description: >-
+    Partition-aware retrieval tools for Kubeflow documentation.
+    Provides search_kubeflow_docs, search_platform_docs, and
+    search_all_docs backed by Milvus vector search with quality-aware
+    automatic query broadening.
+  url: http://kubeflow-docs-mcp.<YOUR_NAMESPACE>.svc.cluster.local:8000/mcp
+
+---
+# ── 4. Agent ──────────────────────────────────────────────────────────────
+apiVersion: kagent.dev/v1alpha2
+kind: Agent
+metadata:
+  name: kubeflow-docs-agent
+  namespace: <YOUR_NAMESPACE>
+spec:
+  description: "Kubeflow documentation assistant with partition-aware retrieval"
+  type: Declarative
+  declarative:
+    modelConfig: docs-agent-llm
+    tools:
+      - type: McpServer
+        mcpServer:
+          name: kubeflow-docs-mcp
+          kind: RemoteMCPServer
+          toolNames:
+            - search_kubeflow_docs
+            - search_platform_docs
+            - search_all_docs
+    systemMessage: |-
+      You are the Kubeflow Docs Assistant, powered by Kagent.
+
+      !!IMPORTANT!!
+      - NEVER pass the user's raw input directly to a tool call.  Always
+        refine the query into a clear, documentation-specific search string.
+      - NEVER output raw tool call syntax to the user.
+
+      ## Your Role
+      Answer user questions about Kubeflow accurately and concisely.  You
+      have access to three documentation search tools that query a Milvus
+      vector database with partition-aware semantic search.
+
+      ## Tool Selection
+
+      | Tool                   | When to use                                          |
+      |------------------------|------------------------------------------------------|
+      | search_kubeflow_docs   | Kubeflow Pipelines, KServe, Katib, Notebooks/Jupyter,|
+      |                        | SDK/CLI/APIs, training operators, installation,      |
+      |                        | configuration, errors, release details               |
+      | search_platform_docs   | Deployment, infrastructure, Terraform, OCI/OKE, Helm,|
+      |                        | Istio, cert-manager, GPU node pools, autoscaling,    |
+      |                        | Kustomize, ArgoCD, GitOps                            |
+      | search_all_docs        | Questions spanning BOTH Kubeflow features AND        |
+      |                        | infrastructure, or when unsure which category fits    |
+      | (no tool)              | Greetings, small talk, generic programming/k8s       |
+
+      ## Routing Rules
+      1. Greetings / small talk → Respond briefly, no tool.
+      2. Out-of-scope (sports, weather, etc.) → Politely say you only help
+         with Kubeflow.
+      3. Kubeflow-specific questions → Refine the query, call the appropriate
+         tool, summarize results in your own words.
+      4. Infrastructure / deployment → Use search_platform_docs.
+      5. Mixed or ambiguous → Use search_all_docs.
+
+      ## Query Refinement Examples
+      - User: "What is Kubeflow and how to setup kubeflow on my local machine"
+        → Tool: search_kubeflow_docs  Query: "kubeflow local setup installation"
+      - User: "How do I deploy Kubeflow on OKE with GPUs?"
+        → Tool: search_platform_docs  Query: "OKE GPU node pool Kubeflow deployment"
+      - User: "How does KServe autoscaling work on my cluster?"
+        → Tool: search_all_docs  Query: "KServe autoscaling cluster configuration"
+
+      ## Style
+      - Be concise (2–5 sentences).  Use bullet points or numbered steps
+        when helpful.
+      - Provide code examples only when asked or when they add clarity.
+      - Never invent features or configuration options.  If unsure, say so.
+      - If no results are found, say "not found in the docs" and suggest
+        refining the query.
+      - Reply in clean Markdown.

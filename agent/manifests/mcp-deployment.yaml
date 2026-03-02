@@ -1,0 +1,100 @@
+# Kubernetes Deployment and Service for the Kagent-native MCP server.
+#
+# The MCP server exposes partition-aware retrieval tools over FastMCP's
+# streamable-http transport.  Kagent's RemoteMCPServer CRD (defined in
+# kagent-setup.yaml) references this Service.
+#
+# Build the image from the repo root:
+#   docker build -f agent/Dockerfile -t <REGISTRY>/kubeflow-docs-mcp:latest .
+#   docker push <REGISTRY>/kubeflow-docs-mcp:latest
+#
+# Deploy:
+#   kubectl apply -f agent/manifests/mcp-deployment.yaml
+#
+# Replace <YOUR_NAMESPACE> and <REGISTRY> before applying.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kubeflow-docs-mcp
+  namespace: <YOUR_NAMESPACE>
+  labels:
+    app: kubeflow-docs-mcp
+    component: mcp-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kubeflow-docs-mcp
+  template:
+    metadata:
+      labels:
+        app: kubeflow-docs-mcp
+        component: mcp-server
+    spec:
+      containers:
+        - name: mcp-server
+          image: <REGISTRY>/kubeflow-docs-mcp:latest
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "8000"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            # ── Milvus connection ────────────────────────────
+            - name: MILVUS_HOST
+              value: "milvus.<YOUR_NAMESPACE>.svc.cluster.local"
+            - name: MILVUS_PORT
+              value: "19530"
+            - name: MILVUS_COLLECTION
+              value: "kubeflow_docs_docs_rag"
+            # ── Partition mapping ────────────────────────────
+            - name: MILVUS_PARTITION_DOCS
+              value: ""
+            - name: MILVUS_PARTITION_PLATFORM
+              value: "platform_arch"
+            # ── Retrieval tuning ─────────────────────────────
+            - name: AGENT_DEFAULT_TOP_K
+              value: "5"
+            - name: AGENT_RELEVANCE_THRESHOLD
+              value: "0.35"
+            - name: AGENT_MAX_RETRIEVAL_ATTEMPTS
+              value: "2"
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "1"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kubeflow-docs-mcp
+  namespace: <YOUR_NAMESPACE>
+  labels:
+    app: kubeflow-docs-mcp
+spec:
+  selector:
+    app: kubeflow-docs-mcp
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      protocol: TCP
+  type: ClusterIP
