@@ -223,7 +223,8 @@ def chunk_and_embed(
     base_url: str,
     chunk_size: int,
     chunk_overlap: int,
-    embedded_data: dsl.Output[dsl.Dataset]
+    embedded_data: dsl.Output[dsl.Dataset],
+    source_type: str = "doc",
 ):
     import json
     import os
@@ -280,7 +281,10 @@ def chunk_and_embed(
                 url_path = os.path.splitext(url_path)[0]
                 citation_url = f"{base_url}/{url_path}"
             else:
-                citation_url = f"{base_url}/{file_data['path']}"
+                if source_type == "issue":
+                    citation_url = file_data.get('url', file_data.get('html_url', ''))
+                else:
+                    citation_url = f"{base_url}/{file_data['path']}"
 
             file_unique_id = f"{repo_name}:{file_data['path']}"
 
@@ -326,7 +330,8 @@ def store_milvus(
     embedded_data: dsl.Input[dsl.Dataset],
     milvus_host: str,
     milvus_port: str,
-    collection_name: str
+    collection_name: str,
+    drop_existing: bool = True
 ):
     from pymilvus import connections, utility, FieldSchema, CollectionSchema, DataType, Collection
     import json
@@ -334,8 +339,7 @@ def store_milvus(
 
     connections.connect("default", host=milvus_host, port=milvus_port)
 
-    # DROP existing collection to fix schema mismatch
-    if utility.has_collection(collection_name):
+    if drop_existing and utility.has_collection(collection_name):
         utility.drop_collection(collection_name)
         print(f"Dropped existing collection: {collection_name}")
 
@@ -352,11 +356,16 @@ def store_milvus(
         FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=768),  # Updated for all-mpnet-base-v2
         FieldSchema(name="last_updated", dtype=DataType.INT64)
     ]
-
-    # Create new collection with correct schema
-    schema = CollectionSchema(fields, "RAG collection for documentation")
-    collection = Collection(collection_name, schema)
-    print(f"Created new collection: {collection_name}")
+    # Use Existing collection
+    if not utility.has_collection(collection_name):
+        print(f"Collection {collection_name} doesn't exist, creating it...")
+        schema = CollectionSchema(fields, "RAG collection for documentation")
+        collection = Collection(collection_name, schema)
+        print(f"Created new collection: {collection_name}")
+    else:
+        # Create new collection with correct schema
+        collection = Collection(collection_name)
+        print(f"Using existing collection: {collection_name}")
 
     # Rest of your existing code remains the same...
     records = []
@@ -385,20 +394,29 @@ def store_milvus(
 
         collection.flush()
 
-        # Create index
-        index_params = {
-            "metric_type": "COSINE",
-            "index_type": "IVF_FLAT", 
-            "params": {"nlist": min(1024, len(records))}
-        }
-        collection.create_index("vector", index_params)
+        # Create/update index 
+        try:
+            index_info = collection.index()
+            if not index_info:
+                print("Creating index...")
+                index_params = {
+                    "metric_type": "COSINE",
+                    "index_type": "IVF_FLAT", 
+                    "params": {"nlist": min(1024, max(100, len(records)))}
+                }
+                collection.create_index("vector", index_params)
+                print("Index created successfully")
+            else:
+                print("Index already exists")
+        except Exception as e:
+            print(f"Index operation result: {e}")
         collection.load()
         print(f"✅ Inserted {len(records)} records. Total: {collection.num_entities}")
 
 
 @dsl.pipeline(
     name="github-rag",
-    description="RAG pipeline for processing GitHub documentation"
+    description="RAG pipeline for processing GitHub documentation and issues"
 )
 def github_rag_pipeline(
     repo_owner: str = "kubeflow",
@@ -410,33 +428,58 @@ def github_rag_pipeline(
     chunk_overlap: int = 100,
     milvus_host: str = "milvus-standalone-final.santhosh.svc.cluster.local",
     milvus_port: str = "19530",
-    collection_name: str = "docs_rag"
+    collection_name: str = "docs_rag",
+    issue_repos: str = "kubeflow/kubeflow,kubeflow/pipelines",
+    issue_labels: str = "kind/bug,kind/question",
+    issue_state: str = "all",
+    max_issues_per_repo: int = 200
 ):
-    # Download GitHub directory
-    download_task = download_github_directory(
+    download_docs = download_github_directory(
         repo_owner=repo_owner,
         repo_name=repo_name,
         directory_path=directory_path,
         github_token=github_token
     )
-    
-    # Chunk and embed the content
-    chunk_task = chunk_and_embed(
-        github_data=download_task.outputs["github_data"],
+    chunk_docs = chunk_and_embed(
+        github_data=download_docs.outputs["github_data"],
         repo_name=repo_name,
+        source_type="doc",
         base_url=base_url,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap
     )
-    
-    # Store in Milvus
-    store_task = store_milvus(
-        embedded_data=chunk_task.outputs["embedded_data"],
+    store_docs = store_milvus(
+        embedded_data=chunk_docs.outputs["embedded_data"],
         milvus_host=milvus_host,
         milvus_port=milvus_port,
-        collection_name=collection_name
+        collection_name=collection_name,
+        drop_existing=True
     )
+    with dsl.If(issue_repos != "", name="process-issues-if-provided"):
+        download_issues = download_github_issues(
+            repos=issue_repos,
+            labels=issue_labels,
+            state=issue_state,
+            max_issues_per_repo=max_issues_per_repo,
+            github_token=github_token
+        )
+        chunk_issues = chunk_and_embed(
+            github_data=download_issues.outputs["issues_data"],
+            repo_name="issues",
+            source_type="issue",
+            base_url="",
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap
+        )
 
+        store_issues = store_milvus(
+            embedded_data=chunk_issues.outputs["embedded_data"],
+            milvus_host=milvus_host,
+            milvus_port=milvus_port,
+            collection_name=collection_name,
+            drop_existing=False
+        )
+        
 
 if __name__ == "__main__":
     import os
