@@ -1,0 +1,69 @@
+# Istio EnvoyFilter for per-IP rate limiting at the ingress gateway
+
+# Uses Envoy's ext_authz filter to call the sliding window log rate limit service.  On every inbound request, Envoy forwards the
+
+# Deploy in istio-system (where ingressgateway pods run)
+
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: docs-agent-ratelimit            # logical name, not a namespace
+  namespace: istio-system
+spec:
+  workloadSelector:
+    labels:
+      istio: ingressgateway
+  configPatches:
+
+  # Register our custom rate limit service as an HTTP cluster
+  - applyTo: CLUSTER
+    patch:
+      operation: ADD
+      value:
+        name: ext_authz_cluster
+        type: STRICT_DNS
+        connect_timeout: 1s
+        lb_policy: ROUND_ROBIN
+        load_assignment:
+          cluster_name: ext_authz_cluster
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  socket_address:
+                    address: ratelimit.<YOUR_NAMESPACE>.svc.cluster.local  # replace namespace
+                    port_value: 8080
+
+  # Insert ext_authz filter before the router
+  - applyTo: HTTP_FILTER
+    match:
+      context: GATEWAY
+      listener:
+        filterChain:
+          filter:
+            name: "envoy.filters.network.http_connection_manager"
+            subFilter:
+              name: "envoy.filters.http.router"
+    patch:
+      operation: INSERT_BEFORE
+      value:
+        name: envoy.filters.http.ext_authz
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthz
+          transport_api_version: V3
+          failure_mode_allow: true  # fail-open: allow if service is down
+          http_service:
+            server_uri:
+              uri: ratelimit.<YOUR_NAMESPACE>.svc.cluster.local  # replace namespace
+              cluster: ext_authz_cluster
+              timeout: 100ms
+            authorization_request:
+              allowed_headers:
+                patterns:
+                - exact: "x-forwarded-for"
+            authorization_response:
+              allowed_upstream_headers:
+                patterns:
+                - exact: "x-ratelimit-limit"
+                - exact: "x-ratelimit-remaining"
+                - exact: "x-ratelimit-reset"

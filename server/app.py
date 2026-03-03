@@ -9,7 +9,6 @@ import logging
 from typing import Dict, Any, List
 from sentence_transformers import SentenceTransformer
 from pymilvus import connections, Collection
-from rate_limiter import RedisRateLimiter, RedisConnectionLimiter
 
 # Config
 KSERVE_URL = os.getenv("KSERVE_URL", "http://llama.docs-agent.svc.cluster.local/openai/v1/chat/completions")
@@ -23,9 +22,7 @@ MILVUS_COLLECTION = os.getenv("MILVUS_COLLECTION", "docs_rag")
 MILVUS_VECTOR_FIELD = os.getenv("MILVUS_VECTOR_FIELD", "vector")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
 
-# Rate Limiter
-rate_limiter = RedisRateLimiter()
-conn_limiter = RedisConnectionLimiter()
+# Rate limiter removed – handled at ingress level
 
 # System prompt
 SYSTEM_PROMPT = """
@@ -342,15 +339,7 @@ async def handle_chat(message: str, websocket, client_ip: str) -> None:
     try:
         print(f"[CHAT] Processing message from {client_ip}: {message[:100]}...")
 
-        # Check rate limit
-        allowed, count, limit = await rate_limiter.check(client_ip)
-        if not allowed:
-            print(f"[RATE_LIMIT] {client_ip} exceeded {limit} msg/min (count: {count})")
-            await websocket.send(json.dumps({
-                "type": "error",
-                "content": f"Rate limited: {limit} messages per minute. Please wait before sending more."
-            }))
-            return
+        # rate limiting handled upstream by ingress; proceed
 
         # Create initial payload
         payload = {

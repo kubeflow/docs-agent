@@ -12,8 +12,6 @@ EMBEDDING_MODEL = "sentence-transformers/all-mpnet-base-v2"
 PORT = int(os.getenv("PORT", "8000"))
 MCP_RATE_LIMIT_RPM = int(os.getenv("MCP_RATE_LIMIT_RPM", "60"))
 
-# Rate Limiter
-rate_limiter = RedisSyncRateLimiter(requests_per_window=MCP_RATE_LIMIT_RPM)
 
 mcp = FastMCP("Kubeflow Docs MCP Server")
 
@@ -42,10 +40,7 @@ def search_kubeflow_docs(query: str, top_k: int = 5) -> str:
     """
     _init()
 
-    # Check rate limit
-    allowed, count, limit = rate_limiter.check_sync("mcp-client")
-    if not allowed:
-        return f"Rate limited: {limit} searches per minute (current: {count}). Please try again shortly."
+    # rate limiting now enforced by ingress; continue
 
     embedding = model.encode(query).tolist()
 
