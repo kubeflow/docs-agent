@@ -1,0 +1,251 @@
+{
+  "description": "Golden dataset for evaluating Kubeflow docs-agent retrieval quality. Each entry specifies a user query, the expected intent category, and a set of expected relevant document paths or URL patterns that a good retrieval system should surface.",
+  "version": "1.0.0",
+  "queries": [
+    {
+      "id": "kfp-001",
+      "query": "How do I create a Kubeflow pipeline?",
+      "intent": "kubeflow_docs",
+      "expected_sources": ["pipelines", "pipeline"],
+      "tags": ["pipelines", "getting-started"]
+    },
+    {
+      "id": "kfp-002",
+      "query": "What is the Kubeflow Pipelines SDK?",
+      "intent": "kubeflow_docs",
+      "expected_sources": ["sdk", "pipelines"],
+      "tags": ["pipelines", "sdk"]
+    },
+    {
+      "id": "kfp-003",
+      "query": "How to disable caching in KFP v2",
+      "intent": "kubeflow_docs",
+      "expected_sources": ["cache", "pipelines"],
+      "tags": ["pipelines", "caching"]
+    },
+    {
+      "id": "kfp-004",
+      "query": "How do I pass data between pipeline components?",
+      "intent": "kubeflow_docs",
+      "expected_sources": ["pipelines", "component"],
+      "tags": ["pipelines", "data-passing"]
+    },
+    {
+      "id": "kfp-005",
+      "query": "What are lightweight Python components in KFP?",
+      "intent": "kubeflow_docs",
+      "expected_sources": ["pipelines", "component", "lightweight"],
+      "tags": ["pipelines", "components"]
+    },
+    {
+      "id": "kserve-001",
+      "query": "How to deploy a model with KServe InferenceService?",
+      "intent": "kubeflow_docs",
+      "expected_sources": ["kserve", "inference"],
+      "tags": ["kserve", "deployment"]
+    },
+    {
+      "id": "kserve-002",
+      "query": "KServe canary rollout configuration",
+      "intent": "kubeflow_docs",
+      "expected_sources": ["kserve", "canary"],
+      "tags": ["kserve", "canary"]
+    },
+    {
+      "id": "kserve-003",
+      "query": "How does KServe scale to zero work?",
+      "intent": "kubeflow_docs",
+      "expected_sources": ["kserve", "scale", "autoscal"],
+      "tags": ["kserve", "autoscaling"]
+    },
+    {
+      "id": "kserve-004",
+      "query": "How to serve a transformer with KServe",
+      "intent": "kubeflow_docs",
+      "expected_sources": ["kserve", "transformer"],
+      "tags": ["kserve", "transformer"]
+    },
+    {
+      "id": "katib-001",
+      "query": "How does Katib hyperparameter tuning work?",
+      "intent": "kubeflow_docs",
+      "expected_sources": ["katib", "hyperparameter"],
+      "tags": ["katib", "tuning"]
+    },
+    {
+      "id": "katib-002",
+      "query": "What algorithms does Katib support?",
+      "intent": "kubeflow_docs",
+      "expected_sources": ["katib", "algorithm"],
+      "tags": ["katib", "algorithms"]
+    },
+    {
+      "id": "katib-003",
+      "query": "Create a Katib experiment with random search",
+      "intent": "kubeflow_docs",
+      "expected_sources": ["katib", "experiment", "random"],
+      "tags": ["katib", "experiment"]
+    },
+    {
+      "id": "nb-001",
+      "query": "How to create a Jupyter notebook server in Kubeflow?",
+      "intent": "kubeflow_docs",
+      "expected_sources": ["notebook", "jupyter"],
+      "tags": ["notebooks", "getting-started"]
+    },
+    {
+      "id": "nb-002",
+      "query": "Configure GPU for Kubeflow notebooks",
+      "intent": "kubeflow_docs",
+      "expected_sources": ["notebook", "gpu"],
+      "tags": ["notebooks", "gpu"]
+    },
+    {
+      "id": "train-001",
+      "query": "How to run distributed PyTorch training on Kubeflow?",
+      "intent": "kubeflow_docs",
+      "expected_sources": ["training", "pytorch", "pytorchjob"],
+      "tags": ["training", "pytorch"]
+    },
+    {
+      "id": "train-002",
+      "query": "TFJob distributed training configuration",
+      "intent": "kubeflow_docs",
+      "expected_sources": ["training", "tfjob", "tensorflow"],
+      "tags": ["training", "tensorflow"]
+    },
+    {
+      "id": "train-003",
+      "query": "How to use the Kubeflow Training Operator?",
+      "intent": "kubeflow_docs",
+      "expected_sources": ["training", "operator"],
+      "tags": ["training", "operator"]
+    },
+    {
+      "id": "install-001",
+      "query": "How to install Kubeflow on a local machine?",
+      "intent": "kubeflow_docs",
+      "expected_sources": ["install", "local", "started"],
+      "tags": ["installation", "local"]
+    },
+    {
+      "id": "install-002",
+      "query": "Kubeflow installation on AWS EKS",
+      "intent": "kubeflow_docs",
+      "expected_sources": ["install", "aws", "eks"],
+      "tags": ["installation", "aws"]
+    },
+    {
+      "id": "install-003",
+      "query": "Install Kubeflow on GKE",
+      "intent": "kubeflow_docs",
+      "expected_sources": ["install", "gke", "google"],
+      "tags": ["installation", "gke"]
+    },
+    {
+      "id": "profile-001",
+      "query": "How do Kubeflow profiles and multi-tenancy work?",
+      "intent": "kubeflow_docs",
+      "expected_sources": ["profile", "multi-tenant"],
+      "tags": ["profiles", "multi-tenancy"]
+    },
+    {
+      "id": "profile-002",
+      "query": "How to manage user permissions in Kubeflow?",
+      "intent": "kubeflow_docs",
+      "expected_sources": ["profile", "permission", "rbac"],
+      "tags": ["profiles", "rbac"]
+    },
+    {
+      "id": "plat-001",
+      "query": "How to deploy Kubeflow with Terraform?",
+      "intent": "platform_arch",
+      "expected_sources": ["terraform", "deploy"],
+      "tags": ["platform", "terraform"]
+    },
+    {
+      "id": "plat-002",
+      "query": "Kubeflow deployment on Oracle Cloud OKE",
+      "intent": "platform_arch",
+      "expected_sources": ["oci", "oke", "oracle"],
+      "tags": ["platform", "oci"]
+    },
+    {
+      "id": "plat-003",
+      "query": "How does Istio work with Kubeflow?",
+      "intent": "platform_arch",
+      "expected_sources": ["istio", "ingress"],
+      "tags": ["platform", "istio"]
+    },
+    {
+      "id": "plat-004",
+      "query": "Configure Dex authentication for Kubeflow",
+      "intent": "platform_arch",
+      "expected_sources": ["dex", "oidc", "auth"],
+      "tags": ["platform", "auth"]
+    },
+    {
+      "id": "plat-005",
+      "query": "Kustomize overlays for Kubeflow manifests",
+      "intent": "platform_arch",
+      "expected_sources": ["kustomize", "manifest"],
+      "tags": ["platform", "kustomize"]
+    },
+    {
+      "id": "plat-006",
+      "query": "How to set up a GPU node pool for Kubeflow",
+      "intent": "platform_arch",
+      "expected_sources": ["gpu", "node pool", "cluster"],
+      "tags": ["platform", "gpu"]
+    },
+    {
+      "id": "plat-007",
+      "query": "Kubeflow Helm chart installation",
+      "intent": "platform_arch",
+      "expected_sources": ["helm", "deploy"],
+      "tags": ["platform", "helm"]
+    },
+    {
+      "id": "gen-001",
+      "query": "Hello, how are you?",
+      "intent": "general",
+      "expected_sources": [],
+      "tags": ["general", "greeting"]
+    },
+    {
+      "id": "gen-002",
+      "query": "What is Kubernetes?",
+      "intent": "general",
+      "expected_sources": [],
+      "tags": ["general", "k8s"]
+    },
+    {
+      "id": "gen-003",
+      "query": "Explain what machine learning is",
+      "intent": "general",
+      "expected_sources": [],
+      "tags": ["general", "ml"]
+    },
+    {
+      "id": "gen-004",
+      "query": "Who won the Super Bowl?",
+      "intent": "general",
+      "expected_sources": [],
+      "tags": ["general", "out-of-scope"]
+    },
+    {
+      "id": "gen-005",
+      "query": "What is a Docker container?",
+      "intent": "general",
+      "expected_sources": [],
+      "tags": ["general", "docker"]
+    },
+    {
+      "id": "misc-001",
+      "query": "What version of Kubeflow is the latest?",
+      "intent": "kubeflow_docs",
+      "expected_sources": ["version", "release"],
+      "tags": ["misc", "version"]
+    }
+  ]
+}
