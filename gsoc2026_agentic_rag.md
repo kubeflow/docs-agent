@@ -173,7 +173,7 @@ While the frontend chat interface serves users browsing `kubeflow.org`, advanced
 
 ### How it Works
 Developers will be able to register our hosted `docs-agent` MCP directly into tools like Cursor, Windsurf, or generic Claude Desktop clients. 
-1. **Developer Registration:** A developer signs into the Kubeflow developer portal to retrieve an API key/token.
+1. **Developer Registration:** The developer authenticates via the standard `kubeflow.org` auth flow (the exact same experience as the online web agent). Once logged in, their user profile generates the API key/token necessary for external access.
 2. **MCP Configuration:** They add standard MCP connection details (URL, API Token) to their local IDE’s MCP configuration file.
 3. **Direct Architecture Access:** Once connected, the user's *local* code agent can autonomously route queries to our Kubeflow-hosted MCP to fetch exact codebase snippets, GitHub issues, and vectorized documentation directly into their local development environment—bypassing the web UI entirely.
 
