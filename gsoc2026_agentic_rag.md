@@ -14,6 +14,23 @@ We are designing the system across four decoupled layers so that users can adopt
 3. **Ingestion Pipeline (KFP):** Kubeflow Pipelines responsible for continuous ETL, chunking, and embedding.
 4. **Backend Vector Database:** Scalable ANN storage (e.g., pgvector or Milvus).
 
+### Interaction Modes & The "Thin Context" MCP Flow
+We are designing for two primary interaction modes: **Frontend Chat Mode** and **Developer IDE Mode**, each tailored to a specific audience and purpose.
+
+*   **Frontend Chat Mode (Website):** The website's chat interface integrates with our MCP to provide best-effort responses with references to documents. It is highly specialized for Official Documentation and community details. It is **not** meant to be development-focused and does **not** rely on the code agent.
+*   **Developer IDE Mode:** The developer's IDE integrates with our MCP to primarily use the **code agent**. This flow is heavily repository and code-focused. It understands branches for specific versions, can parse GitHub issues for questions, and directly reads the codebase. This is explicitly designed for deep development support.
+
+We can offload complex "supervisor" orchestration to the developer's IDE agent (e.g., Claude, Cursor) or utilize a simple supervisor for our frontend. We will also provide documented guidance on system prompts so developers can configure their IDEs to collaborate optimally with our MCP.
+
+**The Tool Handshake Flow (IDE Example):**
+1. **The Trigger (The Developer Asks a Question):** A developer is working in their IDE (Cursor, Copilot, or Claude) or chatting on the web frontend. They ask a syntax-heavy API question (e.g., "How do I configure the mutating webhook for notebooks?").
+2. **The Handshake (The MCP Intercept):** Instead of the user's expensive LLM trying to guess the answer or reading dozens of files, it recognizes the need for official documentation. It sends a targeted query through our public OSS `docs_agent` MCP.
+3. **The Precision Retrieval (The Self-Hosted Brain):** Our Kubeflow-hosted Docs Agent receives the query. Powered by a fast, self-hosted model, it searches the vectorized documentation and codebase, isolating the exact file and snippet.
+4. **The 'Thin Context' Package (The Hand-off):** The Docs Agent returns a highly structured data package back through the MCP containing exactly two things:
+   - *The Golden Snippet:* The exact 150-token block of code or YAML.
+   - *The Validation Link:* The direct URL to that specific file in the GitHub repo or official docs site.
+5. **The Synthesis and Verification (The Final Output):** The user's IDE Agent receives this tiny, perfect context. It instantly generates the correct code in the user's editor and appends a note: "Here is your webhook configuration. Source: [link]". The IDE translates and incorporates the code directly, rather than just returning a GitHub link and saying "good luck."
+
 ### Blueprint Options
 While we will provide documentation and scaffolding for all three, **Architecture B (Kagent)** will be the primary deployment we dogfood and support live.
 
@@ -114,4 +131,50 @@ To ensure this serves as an enterprise reference architecture, the stack is fort
 11. **Observability & Telemetry Tracing (OpenTelemetry):** End-to-end distributed tracing is highly recommended. The framework could emit OpenTelemetry (OTel) spans tracking the exact lifecycle of a prompt: Frontend Request -> Agent Routing -> Vector DB Query Latency -> LLM Generation Time. This would enable mentors and operators to graph bottleneck latency and debug complex hallucination chains.
 12. **Data Isolation & Multi-Tenancy (RBAC for Indices):** We could explore physically or logically isolating Vector Collections. The "Documentation" collection and the "Release Code" collection might have separated RBAC and indexing to prevent "noisy neighbor" semantic overlap. If we expand to multi-tenant capabilities (e.g., separate Kubeflow Sub-projects), namespace-level vector isolation could prevent cross-contamination.
 13. **Environment Portability & Configurable Endpoints:** The architecture must be highly configurable via environment variables (e.g., LLM endpoints, DB connection strings, tool hosts). While our primary live deployment will be hosted on OCI and should leverage managed cloud-native backends where possible for resilience, the system must remain fully decoupled. This leaves room for a "bring your own" (BYO) approach if community members want to host the entire solution entirely on their own local Kubernetes cluster using open-source backends.
-14. **Scale, Rate Limiting, & Adaptive Quotas:** The system's exploratory target goal is supporting up to 1,000 concurrent users. Because of this scale, we should investigate strict rate limiting. LLM calls can easily exhaust budgets if subjected to abuse (DoS attacks) or bursts. We could explore configuring Envoy/Istio rate limiting on the KServe ingress to throttle rapid user queries, alongside investigating an internal token-counting middleware (e.g., Litellm) to set a hard API budget limit per day.
+14. **User Logins, Rate Limiting, & Adaptive Quotas:** The system's exploratory target goal is supporting up to 1,000 concurrent users. To manage this safely and prevent budget exhaustion, we will require login for both the **Development MCP** and the **Website Frontend**. This login gateway enforces strict rate limiting and daily token quotas via middleware (e.g., Litellm), gathers valuable telemetry on Kubeflow platform usage patterns, and allows us to invite users to the Kubeflow mailing list—turning casual users into engaged community members. As a future state, we aim to provide additional tiered API credits to active maintainers, GSoC students, and core contributors. *Note: As part of the architectural design phase, the community will need to evaluate and agree upon the specific tech stack for managing user storage, authentication, and credit/quota logic.*
+
+---
+
+## 5. UI/UX Expectations for Frontend Chat
+
+To ensure a high-quality user experience and build trust, the frontend chat interface must adhere to strict design and response expectations, similar to advanced commercial AI agents. 
+
+### 1. User Input & Process Transparency (The "Thinking" Phase)
+Before delivering the final answer, the UI explicitly shows the user the steps the agent is taking.
+*   **User Query Pill:** The user's prompt is displayed at the top in a distinct, dark gray rounded container.
+*   **Action Updates:** Plain text lines that narrate what the agent is currently doing (e.g., "I'll search for information...").
+*   **Search Execution Boxes:** Outlined, full-width containers that show specific tool executions. They include:
+    *   A magnifying glass icon on the left.
+    *   The specific source being queried (e.g., "Searched in the Wiz docs").
+    *   A green checkmark icon on the right to indicate successful completion.
+*   **Source Citations:** A list of the specific documents retrieved, visually indicated by blue document icons and blue hyperlink text.
+
+### 2. Main Response Structure (The "Answer" Phase)
+The actual answer is highly structured for readability and scannability.
+*   **Direct Answer:** The response begins with a clear, one-sentence direct answer to the user's question.
+*   **Section Headings:** Uses bold, slightly larger text (e.g., H2 or H3 tags) to divide major concepts (e.g., "What Wiz Offers for AI Guardrails", "How to Use It").
+*   **Bold Lead-ins:** Paragraphs often start with a bolded keyword or phrase followed by a colon (e.g., **Visibility:**, **Misconfiguration Detection:**) to allow users to quickly scan for relevant features.
+*   **Bulleted Lists:** Uses unordered lists with simple dot bullets for enumerating items (like supported cloud providers or types of attacks).
+*   **Inline Links with Icons:** Important technical terms link out to documentation. Uses a small, upward-right arrow icon (↗) next to links like "Security Graph" to denote an external or internal redirect.
+*   **Call to Action:** Ends with a specific "Learn more" link pointing to the main documentation.
+
+### 3. Utility Footer
+*   **Feedback & Actions:** The bottom of the response includes minimalist line-art icons for user feedback (thumbs up / thumbs down) on the left, and a "copy to clipboard" icon on the right.
+
+### 4. General Styling
+*   **Theme:** The interface uses a dark mode color palette with high-contrast white/light-gray text for readability.
+*   **Accent Colors:** Blue is used consistently for interactive elements (links, document icons), and green is used sparingly for success indicators.
+
+---
+
+## 6. Direct IDE Integration (The "BYO Agent" Experience)
+
+While the frontend chat interface serves users browsing `kubeflow.org`, advanced users and active contributors will interact directly with the Kubeflow MCP via their own Integrated Development Environments (IDEs). 
+
+### How it Works
+Developers will be able to register our hosted `docs-agent` MCP directly into tools like Cursor, Windsurf, or generic Claude Desktop clients. 
+1. **Developer Registration:** A developer signs into the Kubeflow developer portal to retrieve an API key/token.
+2. **MCP Configuration:** They add standard MCP connection details (URL, API Token) to their local IDE’s MCP configuration file.
+3. **Direct Architecture Access:** Once connected, the user's *local* code agent can autonomously route queries to our Kubeflow-hosted MCP to fetch exact codebase snippets, GitHub issues, and vectorized documentation directly into their local development environment—bypassing the web UI entirely.
+
+This "Bring Your Own Agent" setup ensures the system meets developers precisely where they write code, utilizing their own local LLM compute while relying on our infrastructure purely for high-fidelity retrieval.
