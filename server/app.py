@@ -22,6 +22,11 @@ MILVUS_COLLECTION = os.getenv("MILVUS_COLLECTION", "docs_rag")
 MILVUS_VECTOR_FIELD = os.getenv("MILVUS_VECTOR_FIELD", "vector")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
 
+# Initialize embedding model ONCE at startup 
+print(f" Loading embedding model: {EMBEDDING_MODEL}")
+EMBEDDING_ENCODER = SentenceTransformer(EMBEDDING_MODEL)
+print("Embedding model loaded successfully")
+
 # System prompt
 SYSTEM_PROMPT = """
 You are the Kubeflow Docs Assistant.
