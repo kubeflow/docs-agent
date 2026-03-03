@@ -39,6 +39,47 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Lightweight intent classifier (for evaluation only)
+# ---------------------------------------------------------------------------
+
+#: In production the Kagent Agent CRD's system prompt routes queries to
+#: the right MCP tool via the LLM.  For *offline* evaluation we use a
+#: simple keyword classifier so the eval framework has no dependency on
+#: the agent package or any specific orchestration framework.
+
+_PLATFORM_KEYWORDS = [
+    "terraform", "oci", "oke", "oracle", "deploy", "deployment",
+    "infrastructure", "cluster", "helm", "istio", "knative",
+    "cert-manager", "dex", "oidc", "ingress", "gpu", "node pool",
+    "autoscal", "kustomize", "argocd", "gitops",
+]
+
+_KUBEFLOW_KEYWORDS = [
+    "kubeflow", "kfp", "pipeline", "pipelines", "kserve",
+    "inferenceservice", "katib", "notebook", "jupyter", "sdk",
+    "training", "tfjob", "pytorchjob", "mpijob", "experiment",
+    "trial", "profile", "manifest",
+]
+
+
+def classify_intent(query: str) -> str:
+    """Classify user intent via keyword matching.
+
+    Returns one of ``"kubeflow_docs"``, ``"platform_arch"``, or
+    ``"general"``.  Platform keywords are checked first because they
+    are more specific.
+    """
+    query_lower = query.lower()
+    for kw in _PLATFORM_KEYWORDS:
+        if kw in query_lower:
+            return "platform_arch"
+    for kw in _KUBEFLOW_KEYWORDS:
+        if kw in query_lower:
+            return "kubeflow_docs"
+    return "general"
+
+
+# ---------------------------------------------------------------------------
 # Metrics
 # ---------------------------------------------------------------------------
 
@@ -134,18 +175,10 @@ def evaluate_retrieval(
     dict
         Aggregate and per-query metrics.
     """
-    # Lazy imports — only needed when actually running retrieval
+    # Lazy import — only needed when actually running retrieval
+    milvus_search = None
     if not dry_run:
         from shared.rag_core import milvus_search
-
-    try:
-        from agent.router import classify
-    except ImportError:
-        logger.warning(
-            "agent.router is not available (missing langgraph?). "
-            "Intent classification will be skipped."
-        )
-        classify = None  # type: ignore[assignment]
 
     per_query: List[Dict[str, Any]] = []
     total_recall = 0.0
@@ -160,13 +193,8 @@ def evaluate_retrieval(
         expected_intent = entry["intent"]
         expected_sources = entry.get("expected_sources", [])
 
-        # -- Intent classification --
-        if classify is not None:
-            state = {"query": query}
-            classified = classify(state)
-            predicted_intent = classified["intent"]
-        else:
-            predicted_intent = "unknown"
+        # -- Intent classification (self-contained, no agent dependency) --
+        predicted_intent = classify_intent(query)
         intent_match = predicted_intent == expected_intent
         if intent_match:
             intent_correct += 1
@@ -181,6 +209,7 @@ def evaluate_retrieval(
 
         # -- Retrieval evaluation (skip for general/dry-run) --
         if not dry_run and expected_intent != "general":
+            assert milvus_search is not None  # guaranteed by `not dry_run`
             retrieval_queries += 1
             search_result = milvus_search(query, top_k=top_k)
             hits = search_result.get("results", [])
