@@ -29,7 +29,7 @@ We can offload complex "supervisor" orchestration to the developer's IDE agent (
 4. **The 'Thin Context' Package (The Hand-off):** The Docs Agent returns a highly structured data package back through the MCP containing exactly two things:
    - *The Golden Snippet:* The exact 150-token block of code or YAML.
    - *The Validation Link:* The direct URL to that specific file in the GitHub repo or official docs site.
-5. **The Synthesis and Verification (The Final Output):** The user's IDE Agent receives this tiny, perfect context. It instantly generates the correct code in the user's editor and appends a note: "Here is your webhook configuration. Source: [link]". The IDE translates and incorporates the code directly, rather than just returning a GitHub link and saying "good luck."
+5. **The Synthesis and Verification (The Final Output):** The user's IDE Agent receives this tiny, perfect context. It instantly generates the correct code in the user's editor and appends a note: "Here is your webhook configuration. Source: [link]". Crucially, to protect our cloud credits and context windows, we will strictly guide the end user's local agent to pull the repository and parse the provided codebase link for more details and broader context—relying on the user's local compute to extend the retrieved snippet, rather than having our API return a massive, expensive context payload.
 
 ### Blueprint Options
 While we will provide documentation and scaffolding for all three, **Architecture B (Kagent)** will be the primary deployment we dogfood and support live.
