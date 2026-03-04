@@ -181,3 +181,14 @@ Developers will be able to register our hosted `docs-agent` MCP directly into to
 3. **Direct Architecture Access:** Once connected, the user's *local* code agent can autonomously route queries to our Kubeflow-hosted MCP to fetch exact codebase snippets, GitHub issues, and vectorized documentation directly into their local development environment—bypassing the web UI entirely.
 
 This "Bring Your Own Agent" setup ensures the system meets developers precisely where they write code, utilizing their own local LLM compute while relying on our infrastructure purely for high-fidelity retrieval.
+
+---
+
+## 7. Next Steps
+
+To move from this specification to active development, the community will follow this execution path:
+
+1. **Technology Stack Definition:** Transfer the current architectural stack details directly into focused technical design proposals for community discussion.
+2. **Community Feedback:** Socialize the design documents and agentic RAG proposals within the appropriate Kubeflow Slack channels and Working Group meetings to finalize the approach.
+3. **Issue Chunking:** Once consensus is reached, the architecture will be broken down into granular, actionable GitHub Issues.
+4. **Contribution Hygiene:** To maintain traceability, **all code contributions must be tied to a specific tracked issue.** Furthermore, every issue must explicitly reference the parent design document or this Agentic RAG proposal to assure alignment with the overarching architecture.
