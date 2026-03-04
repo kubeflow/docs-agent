@@ -1,10 +1,11 @@
+import os
 from fastmcp import FastMCP
 from pymilvus import MilvusClient
 from sentence_transformers import SentenceTransformer
 
-MILVUS_URI = "http://milvus.<YOUR_NAMESPACE>.svc.cluster.local:19530"
-MILVUS_USER = "root"
-MILVUS_PASSWORD = "Milvus"
+MILVUS_URI = os.getenv("MILVUS_URI", "http://milvus.<YOUR_NAMESPACE>.svc.cluster.local:19530")
+MILVUS_USER = os.getenv("MILVUS_USER", "root")
+MILVUS_PASSWORD = os.getenv("MILVUS_PASSWORD", "Milvus")
 COLLECTION_NAME = "kubeflow_docs_docs_rag"
 EMBEDDING_MODEL = "sentence-transformers/all-mpnet-base-v2"
 PORT = 8000
@@ -62,3 +63,4 @@ def search_kubeflow_docs(query: str, top_k: int = 5) -> str:
 
 if __name__ == "__main__":
     mcp.run(transport="streamable-http", host="0.0.0.0", port=PORT)
+

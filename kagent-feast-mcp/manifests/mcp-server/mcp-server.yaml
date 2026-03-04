@@ -23,6 +23,12 @@ spec:
               value: "8000"
             - name: PYTHONUNBUFFERED
               value: "1"
+            - name: MILVUS_URI
+              value: "http://milvus.docs-agent.svc.cluster.local:19530"
+            - name: MILVUS_USER
+              value: "root"
+            - name: MILVUS_PASSWORD
+              value: "Milvus"
           readinessProbe:
             tcpSocket:
               port: 8000
@@ -53,3 +59,4 @@ spec:
     - port: 8000
       targetPort: 8000
   type: ClusterIP
+  
