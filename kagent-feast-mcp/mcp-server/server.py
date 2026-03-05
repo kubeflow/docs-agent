@@ -1,7 +1,10 @@
 from fastmcp import FastMCP
 from pymilvus import MilvusClient
 from sentence_transformers import SentenceTransformer
-
+import threading
+from fastmcp import FastMCP
+from pymilvus import MilvusClient
+from sentence_transformers import SentenceTransformer
 MILVUS_URI = "http://milvus.<YOUR_NAMESPACE>.svc.cluster.local:19530"
 MILVUS_USER = "root"
 MILVUS_PASSWORD = "Milvus"
