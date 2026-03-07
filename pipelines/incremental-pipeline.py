@@ -20,52 +20,52 @@ def download_specific_files(
     from bs4 import BeautifulSoup
 
     headers = {"Authorization": f"token {github_token}"} if github_token else {}
-    
+
     # Parse the file paths from JSON string
     try:
         file_paths_list = json.loads(file_paths)
     except json.JSONDecodeError:
         print(f"Error: Invalid JSON in file_paths: {file_paths}")
         file_paths_list = []
-    
+
     print(f"Processing {len(file_paths_list)} changed files")
-    
+
     files = []
-    
+
     for file_path in file_paths_list:
         # Skip non-documentation files
         if not (file_path.endswith('.md') or file_path.endswith('.html')):
             print(f"Skipping non-doc file: {file_path}")
             continue
-            
+
         try:
             # Get file content from GitHub API
             api_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{file_path}"
             response = requests.get(api_url, headers=headers)
             response.raise_for_status()
             file_data = response.json()
-            
+
             # Decode content
             content = base64.b64decode(file_data['content']).decode('utf-8')
-            
+
             # Extract text from HTML files
             if file_path.endswith('.html'):
                 soup = BeautifulSoup(content, 'html.parser')
                 content = soup.get_text(separator=' ', strip=True)
-            
+
             files.append({
                 'path': file_path,
                 'content': content,
                 'file_name': file_data['name']
             })
             print(f"Downloaded: {file_path}")
-            
+
         except Exception as e:
             print(f"Error downloading {file_path}: {e}")
             continue
-    
+
     print(f"Successfully downloaded {len(files)} files")
-    
+
     # Save to output dataset
     with open(github_data.path, 'w', encoding='utf-8') as f:
         for file_data in files:
@@ -85,28 +85,28 @@ def delete_old_vectors(
 ):
     from pymilvus import connections, Collection
     import json
-    
+
     # Connect to Milvus
     connections.connect("default", host=milvus_host, port=milvus_port)
-    
+
     # Parse file paths
     try:
         file_paths_list = json.loads(file_paths)
     except json.JSONDecodeError:
         print(f"Error: Invalid JSON in file_paths: {file_paths}")
         return
-    
+
     # Check if collection exists
     try:
         collection = Collection(collection_name)
         collection.load()
         print(f"Connected to collection: {collection_name}")
-        
+
         # Delete old vectors for each changed file
         deleted_count = 0
         for file_path in file_paths_list:
             file_unique_id = f"{repo_name}:{file_path}"
-            
+
             # Delete vectors with matching file_unique_id
             expr = f'file_unique_id == "{file_unique_id}"'
             try:
@@ -117,7 +117,7 @@ def delete_old_vectors(
                     limit=10000
                 )
                 count_before = len(query_result)
-                
+
                 if count_before > 0:
                     # Delete the vectors
                     collection.delete(expr)
@@ -126,13 +126,13 @@ def delete_old_vectors(
                     print(f"Deleted {count_before} vectors for file: {file_path}")
                 else:
                     print(f"No existing vectors found for file: {file_path}")
-                    
+
             except Exception as e:
                 print(f"Error deleting vectors for {file_path}: {e}")
                 continue
-        
+
         print(f"✅ Total deleted vectors: {deleted_count}")
-        
+
     except Exception as e:
         print(f"Error connecting to collection {collection_name}: {e}")
         print("Collection might not exist yet - this is okay for first run")
@@ -169,7 +169,7 @@ def chunk_and_embed_incremental(
             content = file_data['content']
 
             # AGGRESSIVE CLEANING FOR BETTER EMBEDDINGS (same as original)
-            
+
             # Remove Hugo frontmatter (both --- and +++ styles)
             content = re.sub(r'^\s*[+\-]{3,}.*?[+\-]{3,}\s*', '', content, flags=re.DOTALL | re.MULTILINE)
 
@@ -262,7 +262,7 @@ def store_milvus_incremental(
     # Check if collection exists, if not create it
     if not utility.has_collection(collection_name):
         print(f"Collection {collection_name} doesn't exist, creating it...")
-        
+
         # Enhanced schema with 768 dimensions
         fields = [
             FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
@@ -323,7 +323,7 @@ def store_milvus_incremental(
                 print("Creating index...")
                 index_params = {
                     "metric_type": "COSINE",
-                    "index_type": "IVF_FLAT", 
+                    "index_type": "IVF_FLAT",
                     "params": {"nlist": min(1024, max(100, len(records)))}
                 }
                 collection.create_index("vector", index_params)
@@ -345,7 +345,7 @@ def store_milvus_incremental(
 )
 def github_rag_incremental_pipeline(
     repo_owner: str = "kubeflow",
-    repo_name: str = "website", 
+    repo_name: str = "website",
     changed_files: str = '[]',  # JSON string of changed file paths
     github_token: str = "",
     base_url: str = "https://www.kubeflow.org/docs",
@@ -363,7 +363,7 @@ def github_rag_incremental_pipeline(
         milvus_port=milvus_port,
         collection_name=collection_name
     )
-    
+
     # Step 2: Download only the changed files
     download_task = download_specific_files(
         repo_owner=repo_owner,
@@ -371,7 +371,7 @@ def github_rag_incremental_pipeline(
         file_paths=changed_files,
         github_token=github_token
     )
-    
+
     # Step 3: Chunk and embed the changed files
     chunk_task = chunk_and_embed_incremental(
         github_data=download_task.outputs["github_data"],
@@ -380,7 +380,7 @@ def github_rag_incremental_pipeline(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap
     )
-    
+
     # Step 4: Store new vectors in Milvus (after deletion is complete)
     store_task = store_milvus_incremental(
         embedded_data=chunk_task.outputs["embedded_data"],
@@ -388,7 +388,7 @@ def github_rag_incremental_pipeline(
         milvus_port=milvus_port,
         collection_name=collection_name
     )
-    
+
     # Ensure deletion happens before insertion
     store_task.after(delete_task)
 
