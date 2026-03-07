@@ -326,7 +326,8 @@ def store_milvus(
     embedded_data: dsl.Input[dsl.Dataset],
     milvus_host: str,
     milvus_port: str,
-    collection_name: str
+    collection_name: str,
+    embedding_dimension: int = 768  # Parameterized embedding dimension
 ):
     from pymilvus import connections, utility, FieldSchema, CollectionSchema, DataType, Collection
     import json
@@ -339,7 +340,7 @@ def store_milvus(
         utility.drop_collection(collection_name)
         print(f"Dropped existing collection: {collection_name}")
 
-    # Enhanced schema with 768 dimensions
+    # Enhanced schema with dynamic embedding dimension
     fields = [
         FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
         FieldSchema(name="file_unique_id", dtype=DataType.VARCHAR, max_length=512),
@@ -349,14 +350,14 @@ def store_milvus(
         FieldSchema(name="citation_url", dtype=DataType.VARCHAR, max_length=1024),
         FieldSchema(name="chunk_index", dtype=DataType.INT64),
         FieldSchema(name="content_text", dtype=DataType.VARCHAR, max_length=2000),
-        FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=768),  # Updated for all-mpnet-base-v2
+        FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=embedding_dimension),  # Parameterized dimension
         FieldSchema(name="last_updated", dtype=DataType.INT64)
     ]
 
     # Create new collection with correct schema
     schema = CollectionSchema(fields, "RAG collection for documentation")
     collection = Collection(collection_name, schema)
-    print(f"Created new collection: {collection_name}")
+    print(f"Created new collection: {collection_name} with embedding dimension: {embedding_dimension}")
 
     # Rest of your existing code remains the same...
     records = []
@@ -410,7 +411,8 @@ def github_rag_pipeline(
     chunk_overlap: int = 100,
     milvus_host: str = "milvus-standalone-final.docs-agent.svc.cluster.local",
     milvus_port: str = "19530",
-    collection_name: str = "docs_rag"
+    collection_name: str = "docs_rag",
+    embedding_dimension: int = 768  # Parameterized embedding dimension for all-mpnet-base-v2
 ):
     # Download GitHub directory
     download_task = download_github_directory(
@@ -434,7 +436,8 @@ def github_rag_pipeline(
         embedded_data=chunk_task.outputs["embedded_data"],
         milvus_host=milvus_host,
         milvus_port=milvus_port,
-        collection_name=collection_name
+        collection_name=collection_name,
+        embedding_dimension=embedding_dimension
     )
 
 
