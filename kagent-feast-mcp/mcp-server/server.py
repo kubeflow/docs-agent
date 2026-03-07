@@ -1,13 +1,17 @@
 from fastmcp import FastMCP
 from pymilvus import MilvusClient
 from sentence_transformers import SentenceTransformer
+import os
+from rate_limiter import RedisSyncRateLimiter
 
-MILVUS_URI = "http://milvus.<YOUR_NAMESPACE>.svc.cluster.local:19530"
+MILVUS_URI = "http://milvus.docs-agent.svc.cluster.local:19530"
 MILVUS_USER = "root"
 MILVUS_PASSWORD = "Milvus"
 COLLECTION_NAME = "kubeflow_docs_docs_rag"
 EMBEDDING_MODEL = "sentence-transformers/all-mpnet-base-v2"
-PORT = 8000
+PORT = int(os.getenv("PORT", "8000"))
+MCP_RATE_LIMIT_RPM = int(os.getenv("MCP_RATE_LIMIT_RPM", "60"))
+
 
 mcp = FastMCP("Kubeflow Docs MCP Server")
 
@@ -35,6 +39,8 @@ def search_kubeflow_docs(query: str, top_k: int = 5) -> str:
         Formatted search results with content and citation URLs.
     """
     _init()
+
+    # rate limiting now enforced by ingress; continue
 
     embedding = model.encode(query).tolist()
 

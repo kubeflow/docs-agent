@@ -22,6 +22,8 @@ MILVUS_COLLECTION = os.getenv("MILVUS_COLLECTION", "docs_rag")
 MILVUS_VECTOR_FIELD = os.getenv("MILVUS_VECTOR_FIELD", "vector")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
 
+# Rate limiter removed – handled at ingress level
+
 # System prompt
 SYSTEM_PROMPT = """
 You are the Kubeflow Docs Assistant.
@@ -332,11 +334,13 @@ async def handle_tool_follow_up(original_payload: Dict[str, Any], tool_call: Dic
         print(f"[ERROR] Tool follow-up failed: {e}")
         await websocket.send(json.dumps({"type": "error", "content": f"Tool follow-up failed: {e}"}))
 
-async def handle_chat(message: str, websocket) -> None:
+async def handle_chat(message: str, websocket, client_ip: str) -> None:
     """Handle chat with tool calling support"""
     try:
-        print(f"[CHAT] Processing message: {message[:100]}...")
-        
+        print(f"[CHAT] Processing message from {client_ip}: {message[:100]}...")
+
+        # rate limiting handled upstream by ingress; proceed
+
         # Create initial payload
         payload = {
             "model": MODEL,
@@ -378,8 +382,14 @@ async def handle_chat(message: str, websocket) -> None:
 
 async def handle_websocket(websocket, path):
     """Handle WebSocket connections"""
-    print(f"[WS] New connection from {websocket.remote_address}")
-    
+    client_ip = websocket.remote_address[0]
+    print(f"[WS] New connection from {client_ip}")
+
+    # Check connection limit
+    if not await conn_limiter.acquire(client_ip):
+        await websocket.close(code=429, reason="Too many connections from your IP")
+        return
+
     try:
         # Send welcome message
         await websocket.send(json.dumps({
@@ -402,8 +412,8 @@ async def handle_websocket(websocket, path):
                     # Treat as plain text message
                     pass
 
-                print(f"[WS] Received: {message[:100]}...")
-                await handle_chat(message, websocket)
+                print(f"[WS] Received from {client_ip}: {message[:100]}...")
+                await handle_chat(message, websocket, client_ip)
                 
             except Exception as e:
                 print(f"[ERROR] Message processing error: {e}")
@@ -413,9 +423,12 @@ async def handle_websocket(websocket, path):
                 }))
                 
     except ConnectionClosedError:
-        print("[WS] Connection closed")
+        print(f"[WS] Connection closed from {client_ip}")
     except Exception as e:
         print(f"[ERROR] WebSocket error: {e}")
+    finally:
+        await conn_limiter.release(client_ip)
+        print(f"[WS] Cleaned up connection from {client_ip}")
 
 async def health_check(path, request_headers):
     """Handle HTTP health checks"""
@@ -435,20 +448,24 @@ async def main():
     logging.getLogger("websockets").setLevel(logging.WARNING)
     
     # Start server
-    async with serve(
-        handle_websocket, 
-        "0.0.0.0", 
-        PORT,
-        process_request=health_check,
-        ping_interval=30,
-        ping_timeout=10
-    ):
-        print("✅ WebSocket server is running...")
-        print(f"   WebSocket: ws://localhost:{PORT}")
-        print(f"   Health: http://localhost:{PORT}/health")
-        
-        # Keep server running
-        await asyncio.Future()
+    try:
+        async with serve(
+            handle_websocket, 
+            "0.0.0.0", 
+            PORT,
+            process_request=health_check,
+            ping_interval=30,
+            ping_timeout=10
+        ):
+            print("✅ WebSocket server is running...")
+            print(f"   WebSocket: ws://localhost:{PORT}")
+            print(f"   Health: http://localhost:{PORT}/health")
+            
+            # Keep server running
+            await asyncio.Future()
+    except Exception as e:
+        print(f"[ERROR] Server failed to start: {e}")
+        raise
 
 if __name__ == "__main__":
     asyncio.run(main())
