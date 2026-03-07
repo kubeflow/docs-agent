@@ -13,12 +13,12 @@ stringData:
 apiVersion: kagent.dev/v1alpha2
 kind: ModelConfig
 metadata:
-  name: groq-llama  
+  name: groq-llama
   namespace: <YOUR_NAMESPACE>
 spec:
   apiKeySecret: kagent-groq
   apiKeySecretKey: GROQ_API_KEY
-  model: <model of your choice>
+  model: "llama-3.1-8b-instant"
   provider: OpenAI
   openAI:
     baseUrl: "https://api.groq.com/openai/v1"
