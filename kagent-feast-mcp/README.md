@@ -171,12 +171,11 @@ kubectl -n <YOUR_NAMESPACE> port-forward service/kagent-ui 8080:8080
 ```
 
 Open http://localhost:8080 in your browser to interact with the Kubeflow docs agent.
-
 ## Troubleshooting
 
-### RBAC: access denied when connecting to Milvus
+### RBAC: Access denied when connecting to Milvus
 
-Use port-forward to identify the source:
+If you encounter permission or connection errors when the MCP server tries to connect to Milvus, use port-forwarding to isolate the issue:
 
 ```bash
 kubectl port-forward -n <YOUR_NAMESPACE> deployment/milvus-standalone 19530:19530 &
@@ -184,9 +183,53 @@ python -c "from pymilvus import connections; connections.connect('default', host
 kill %1
 ```
 
-- **Port-forward works, direct fails** -- Istio blocking. Run `kubectl apply -f ../manifests/istio/`
+- If **port-forward works but direct cluster access fails**, Istio is likely blocking traffic. Apply the Istio configuration:
+
+```bash
+kubectl apply -f ../manifests/istio/
+```
+
+---
+
+### Default bundled Kagent agents crash with `CreateContainerConfigError`
+
+**Symptom**
+
+After installing Kagent, several bundled agents (e.g. `argo-rollouts-conversion-agent`, `cilium-debug-agent`, `k8s-agent`, etc.) may enter a `CreateContainerConfigError` state. You may also observe elevated memory usage (~2GB+) while the intended `kubeflow-docs-agent` pod fails to schedule.
+
+**Cause**
+
+If Kagent is installed without the `--set agents.*.enabled=false` flags described in Step 6 of this README, the default bundled agents are deployed automatically.
+
+These agents expect a `kagent-openai` secret, which is not created as part of this project’s setup. As a result, they crash loop due to missing configuration.
+
+**Resolution**
+
+Reinstall Kagent using the flags provided in Step 6 to disable the bundled agents.
+
+**Cleanup (if already installed)**
+
+If Kagent was already installed without the flags, delete the default agents manually:
+
+```bash
+kubectl delete agent argo-rollouts-conversion-agent \
+  cilium-debug-agent \
+  cilium-manager-agent \
+  cilium-policy-agent \
+  helm-agent \
+  istio-agent \
+  k8s-agent \
+  kgateway-agent \
+  observability-agent \
+  promql-agent \
+  -n <YOUR_NAMESPACE>
+```
+
+---
 
 ### Debug Commands
+
+Use the following commands to inspect system state and logs:
 
 ```bash
 kubectl get pods -n <YOUR_NAMESPACE> | grep milvus
@@ -195,7 +238,11 @@ kubectl logs -f deployment/kubeflow-docs-agent -n <YOUR_NAMESPACE>
 kubectl get agents,remotemcpservers,modelconfigs -n <YOUR_NAMESPACE>
 ```
 
+---
+
 ### Cleanup
+
+To completely remove all deployed components:
 
 ```bash
 helm uninstall kagent -n <YOUR_NAMESPACE>
