@@ -13,6 +13,7 @@ Deploy the Kubeflow documentation assistant using kagent, MCP, Feast, and Milvus
 - Python 3.9+
 - A Groq API key (or other OpenAI-compatible LLM provider)
 - Container registry (e.g. Docker Hub) to push the MCP server image
+- **For WSL2 / remote dev:** At least 4-5GB of host RAM available. If running Docker/Kind on WSL2, set `.wslconfig` `memory=4GB` (min) and use the `values-local.yaml` overlay shown below, otherwise Milvus may trigger the Linux OOMKiller.
 
 ## Placeholders and how to fill them
 
@@ -51,7 +52,20 @@ Deploy the Kubeflow documentation assistant using kagent, MCP, Feast, and Milvus
 helm repo add zilliztech https://zilliztech.github.io/milvus-helm/
 helm repo update
 
+# For standard cloud deployments:
+# helm upgrade --install milvus zilliztech/milvus -n <YOUR_NAMESPACE> \
+#   --set cluster.enabled=false \
+#   --set standalone.enabled=true \
+#   --set etcd.replicaCount=1 \
+#   --set etcd.persistence.enabled=false \
+#   --set minio.mode=standalone \
+#   --set minio.replicas=1 \
+#   --set pulsar.enabled=false \
+#   --set pulsarv3.enabled=false
+
+# For local dev / WSL2 / Kind (prevents OOM crashes):
 helm upgrade --install milvus zilliztech/milvus -n <YOUR_NAMESPACE> \
+  -f manifests/overlays/dev/values-local.yaml \
   --set cluster.enabled=false \
   --set standalone.enabled=true \
   --set etcd.replicaCount=1 \
@@ -82,11 +96,11 @@ If pods show `2/2`, the cluster's `global-deny-all` policy blocks traffic by def
 kubectl apply -f manifests/istio/
 ```
 
-| Policy | Target | Ports | Purpose |
-|--------|--------|-------|---------|
+| Policy                    | Target            | Ports       | Purpose                 |
+| ------------------------- | ----------------- | ----------- | ----------------------- |
 | `allow-milvus-standalone` | Milvus standalone | 19530, 9091 | App access to vector DB |
-| `allow-milvus-etcd` | etcd | 2379, 2380 | Milvus metadata storage |
-| `allow-milvus-minio` | MinIO | 9000, 9001 | Milvus object storage |
+| `allow-milvus-etcd`       | etcd              | 2379, 2380  | Milvus metadata storage |
+| `allow-milvus-minio`      | MinIO             | 9000, 9001  | Milvus object storage   |
 
 ### Step 3: Test Milvus Connection
 
