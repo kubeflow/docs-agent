@@ -1,0 +1,126 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: milvus-seaweedfs
+  labels:
+    app: milvus-seaweedfs
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: milvus-seaweedfs
+  template:
+    metadata:
+      labels:
+        app: milvus-seaweedfs
+      annotations:
+        sidecar.istio.io/inject: "false"
+    spec:
+      containers:
+        - name: milvus
+          image: milvusdb/milvus:v2.3.4
+          command: ["milvus", "run", "standalone"]
+          env:
+            - name: ETCD_ENDPOINTS
+              value: "localhost:2379"
+            - name: MINIO_ADDRESS
+              value: "localhost:8333"
+            - name: MINIO_ACCESS_KEY_ID
+              value: "admin"
+            - name: MINIO_SECRET_ACCESS_KEY
+              value: "adminadmin"
+            - name: MINIO_USE_SSL
+              value: "false"
+          ports:
+            - containerPort: 19530
+              protocol: TCP
+            - containerPort: 9091
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 9091
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            timeoutSeconds: 10
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "2"
+
+        - name: etcd
+          image: quay.io/coreos/etcd:v3.5.0
+          command:
+            - etcd
+            - --advertise-client-urls=http://127.0.0.1:2379
+            - --listen-client-urls=http://0.0.0.0:2379
+            - --data-dir=/etcd-data
+          ports:
+            - containerPort: 2379
+              protocol: TCP
+          volumeMounts:
+            - name: etcd-data
+              mountPath: /etcd-data
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+
+        - name: seaweedfs
+          image: chrislusf/seaweedfs:latest
+          command:
+            - weed
+            - server
+            - -master.port=9333
+            - -volume.port=8080
+            - -filer
+            - -s3
+            - -s3.port=8333
+          ports:
+            - containerPort: 8333
+              protocol: TCP
+            - containerPort: 9333
+              protocol: TCP
+          volumeMounts:
+            - name: seaweedfs-data
+              mountPath: /data
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "1Gi"
+              cpu: "1"
+
+      volumes:
+        - name: etcd-data
+          emptyDir: {}
+        - name: seaweedfs-data
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: milvus-seaweedfs
+  labels:
+    app: milvus-seaweedfs
+spec:
+  type: ClusterIP
+  ports:
+    - name: milvus-grpc
+      port: 19530
+      targetPort: 19530
+      protocol: TCP
+    - name: milvus-health
+      port: 9091
+      targetPort: 9091
+      protocol: TCP
+  selector:
+    app: milvus-seaweedfs
