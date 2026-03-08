@@ -22,6 +22,10 @@ MILVUS_COLLECTION = os.getenv("MILVUS_COLLECTION", "docs_rag")
 MILVUS_VECTOR_FIELD = os.getenv("MILVUS_VECTOR_FIELD", "vector")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
 
+# Global resources (initialized once at startup)
+milvus_collection = None
+encoder = None
+
 # System prompt (same as WebSocket version)
 SYSTEM_PROMPT = """
 You are the Kubeflow Docs Assistant.
@@ -111,20 +115,55 @@ class ChatRequest(BaseModel):
     message: str
     stream: Optional[bool] = True
 
-def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
-    """Execute a semantic search in Milvus and return structured JSON serializable results."""
-    try:
-        # Connect to Milvus
-        connections.connect(alias="default", host=MILVUS_HOST, port=MILVUS_PORT)
-        collection = Collection(MILVUS_COLLECTION)
-        collection.load()
+def init_milvus():
+    global milvus_collection, encoder
+    _connect_milvus()
+    encoder = SentenceTransformer(EMBEDDING_MODEL)
 
-        # Encoder (same model as pipeline)
-        encoder = SentenceTransformer(EMBEDDING_MODEL)
+
+def _connect_milvus():
+    global milvus_collection
+    connections.connect(alias="default", host=MILVUS_HOST, port=MILVUS_PORT)
+    milvus_collection = Collection(MILVUS_COLLECTION)
+    milvus_collection.load()
+
+
+def _ensure_connection():
+    global milvus_collection
+    try:
+        if milvus_collection is None:
+            print("[MILVUS] No connection, initializing...")
+            _connect_milvus()
+            return True
+
+        milvus_collection.describe()
+        return True
+    except Exception as e:
+        print(f"[MILVUS] Connection check failed: {e}")
+        print("[MILVUS] Attempting to reconnect...")
+        try:
+            try:
+                connections.disconnect(alias="default")
+            except Exception:
+                pass
+            _connect_milvus()
+            print("[MILVUS] Reconnected successfully!")
+            return True
+        except Exception as e:
+            print(f"[MILVUS] Reconnection failed: {e}")
+            return False
+
+
+def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
+    global milvus_collection, encoder
+    try:
+        if not _ensure_connection():
+            return {"results": [], "error": "Failed to connect to Milvus"}
+
         query_vec = encoder.encode(query).tolist()
 
         search_params = {"metric_type": "COSINE", "params": {"nprobe": 32}}
-        results = collection.search(
+        results = milvus_collection.search(
             data=[query_vec],
             anns_field=MILVUS_VECTOR_FIELD,
             param=search_params,
@@ -134,7 +173,6 @@ def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
 
         hits = []
         for hit in results[0]:
-            # similarity = 1 - distance for COSINE in Milvus
             similarity = 1.0 - float(hit.distance)
             entity = hit.entity
             content_text = entity.get("content_text") or ""
@@ -150,11 +188,6 @@ def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
     except Exception as e:
         print(f"[ERROR] Milvus search failed: {e}")
         return {"results": []}
-    finally:
-        try:
-            connections.disconnect(alias="default")
-        except Exception:
-            pass
 
 async def execute_tool(tool_call: Dict[str, Any]) -> tuple[str, List[str]]:
     """Execute a tool call and return the result and citations"""
@@ -449,7 +482,9 @@ if __name__ == "__main__":
     print(f"   LLM Service: {KSERVE_URL}")
     print(f"   Milvus: {MILVUS_HOST}:{MILVUS_PORT}")
     print(f"   Collection: {MILVUS_COLLECTION}")
-    
+
+    init_milvus()
+
     uvicorn.run(
         app, 
         host="0.0.0.0", 
