@@ -1,0 +1,47 @@
+name: "PR: Validate KFP Pipelines"
+
+on:
+  pull_request:
+    paths:
+      - "pipelines/**"
+      - "kagent-feast-mcp/pipelines/**"
+      - ".github/workflows/pr-verify-pipelines.yaml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compile-pipelines:
+    name: Compile ML Pipelines
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Kubeflow Pipelines SDK
+        run: pip install kfp
+
+      - name: Compile Primary Pipeline
+        working-directory: pipelines
+        run: |
+          python kubeflow-pipeline.py
+          if [ ! -f "github_rag_pipeline.yaml" ]; then
+            echo "Failed to generate github_rag_pipeline.yaml"
+            exit 1
+          fi
+
+      - name: Compile Incremental Pipeline
+        working-directory: pipelines
+        run: |
+          python incremental-pipeline.py
+          if [ ! -f "github_rag_incremental_pipeline.yaml" ]; then
+            echo "Failed to generate github_rag_incremental_pipeline.yaml"
+            exit 1
+          fi

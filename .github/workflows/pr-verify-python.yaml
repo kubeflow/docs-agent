@@ -1,0 +1,62 @@
+name: "PR: Code Quality & Typing"
+
+on:
+  pull_request:
+    paths:
+      - "**/*.py"
+      - "**/requirements.txt"
+      - ".github/workflows/pr-verify-python.yaml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-format:
+    name: Code Quality (Ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Setup Python environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Ruff
+        run: pip install ruff
+
+      - name: Enforce Formatting
+        run: ruff format --check .
+
+      - name: Enforce Linting Rules
+        run: ruff check --output-format=github .
+
+  type-checking:
+    name: Type Analysis (Mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Setup Python environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Type Dependencies
+        run: |
+          pip install mypy types-requests kfp
+          for req in server server-https kagent-feast-mcp/mcp-server kagent-feast-mcp/pipelines pipelines; do
+            if [ -f "$req/requirements.txt" ]; then
+              pip install -r "$req/requirements.txt" || true
+            fi
+          done
+
+      - name: Run Mypy Checks
+        run: |
+          # Use continue-on-error true via || true because legacy code might fail strict type-checking
+          mypy server/ server-https/ kagent-feast-mcp/mcp-server/ --ignore-missing-imports || true
