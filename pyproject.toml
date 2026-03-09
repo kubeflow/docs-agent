@@ -1,0 +1,41 @@
+# ruff configuration
+[tool.ruff]
+# Formatting + lint coordination
+line-length = 100
+extend-exclude = [
+  ".venv",
+  "venv",
+  "build",
+  "dist",
+  "__pycache__",
+  "docs/_build",
+]
+
+[tool.ruff.format]
+# Use Ruff as the formatter (Black-compatible)
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+docstring-code-format = true
+docstring-code-line-length = 100
+
+[tool.ruff.lint]
+select = [
+  "F",   # pyflakes
+  "E",   # pycodestyle
+  "W",   # warnings
+  "I",   # isort (imports order)
+]
+
+ignore = [
+  "B006",  # mutable-argument-default
+  "UP007", # Use X | Y instead of Union[X, Y] (requires Python 3.10+)
+  "UP045", # Use X | None instead of Optional[X] (requires Python 3.10+)
+  "E501",  # Embedded HTML/SVG has long lines
+]
+
+
+[tool.ruff.lint.isort]
+# Make import sorting deterministic and "first-party aware"
+combine-as-imports = true
+force-sort-within-sections = true
