@@ -7,7 +7,6 @@ from websockets.server import serve
 from websockets.exceptions import ConnectionClosedError
 import logging
 from typing import Dict, Any, List
-from sentence_transformers import SentenceTransformer
 from pymilvus import connections, Collection
 
 # Config
@@ -20,7 +19,10 @@ MILVUS_HOST = os.getenv("MILVUS_HOST", "my-release-milvus.docs-agent.svc.cluster
 MILVUS_PORT = os.getenv("MILVUS_PORT", "19530")
 MILVUS_COLLECTION = os.getenv("MILVUS_COLLECTION", "docs_rag")
 MILVUS_VECTOR_FIELD = os.getenv("MILVUS_VECTOR_FIELD", "vector")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
+EMBEDDING_SERVICE_URL = os.getenv(
+    "EMBEDDING_SERVICE_URL",
+    "http://embedding-service.docs-agent.svc.cluster.local:8080",
+)
 
 # System prompt
 SYSTEM_PROMPT = """
@@ -65,7 +67,18 @@ Style
 
 
 
-def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
+async def get_query_embedding(query: str) -> list:
+    """Call the centralised embedding service (ADR-004)."""
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            f"{EMBEDDING_SERVICE_URL}/embed",
+            json={"texts": [query]},
+        )
+        resp.raise_for_status()
+        return resp.json()["embeddings"][0]
+
+
+async def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
     """Execute a semantic search in Milvus and return structured JSON serializable results."""
     try:
         # Connect to Milvus
@@ -73,9 +86,8 @@ def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
         collection = Collection(MILVUS_COLLECTION)
         collection.load()
 
-        # Encoder (same model as pipeline)
-        encoder = SentenceTransformer(EMBEDDING_MODEL)
-        query_vec = encoder.encode(query).tolist()
+        # Get embedding via the centralised embedding service (ADR-004)
+        query_vec = await get_query_embedding(query)
 
         search_params = {"metric_type": "COSINE", "params": {"nprobe": 32}}
         results = collection.search(
@@ -154,7 +166,7 @@ async def execute_tool(tool_call: Dict[str, Any]) -> tuple[str, List[str]]:
             top_k = arguments.get("top_k", 5)
             
             print(f"[TOOL] Executing Milvus search for: '{query}' (top_k={top_k})")
-            result = milvus_search(query, top_k)
+            result = await milvus_search(query, top_k)
             
             # Collect citations
             citations = []
