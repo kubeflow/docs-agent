@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 from typing import Dict, Any, List, Optional, AsyncGenerator
+from contextlib import asynccontextmanager
 from sentence_transformers import SentenceTransformer
 from pymilvus import connections, Collection
 
@@ -96,7 +97,24 @@ TOOLS = [
     }
 ]
 
-app = FastAPI(title="Kubeflow Docs API Service", version="1.0.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifecycle manager for Milvus connection"""
+    print(f"[INFO] Establishing persistent connection to Milvus at {MILVUS_HOST}:{MILVUS_PORT}")
+    try:
+        connections.connect(alias="default", host=MILVUS_HOST, port=MILVUS_PORT)
+    except Exception as e:
+        print(f"[ERROR] Failed to establish persistent Milvus connection: {e}")
+    
+    yield
+    
+    print("[INFO] Closing persistent Milvus connection")
+    try:
+        connections.disconnect(alias="default")
+    except Exception:
+        pass
+
+app = FastAPI(title="Kubeflow Docs API Service", version="1.0.0", lifespan=lifespan)
 
 # Add CORS middleware
 app.add_middleware(
@@ -112,10 +130,9 @@ class ChatRequest(BaseModel):
     stream: Optional[bool] = True
 
 def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
-    """Execute a semantic search in Milvus and return structured JSON serializable results."""
+    """Execute a semantic search in Milvus using the persistent 'default' connection."""
     try:
-        # Connect to Milvus
-        connections.connect(alias="default", host=MILVUS_HOST, port=MILVUS_PORT)
+        # Re-use existing 'default' connection
         collection = Collection(MILVUS_COLLECTION)
         collection.load()
 
@@ -150,11 +167,6 @@ def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
     except Exception as e:
         print(f"[ERROR] Milvus search failed: {e}")
         return {"results": []}
-    finally:
-        try:
-            connections.disconnect(alias="default")
-        except Exception:
-            pass
 
 async def execute_tool(tool_call: Dict[str, Any]) -> tuple[str, List[str]]:
     """Execute a tool call and return the result and citations"""

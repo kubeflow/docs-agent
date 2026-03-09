@@ -66,10 +66,9 @@ Style
 
 
 def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
-    """Execute a semantic search in Milvus and return structured JSON serializable results."""
+    """Execute a semantic search in Milvus using the persistent 'default' connection."""
     try:
-        # Connect to Milvus
-        connections.connect(alias="default", host=MILVUS_HOST, port=MILVUS_PORT)
+        # Re-use existing 'default' connection
         collection = Collection(MILVUS_COLLECTION)
         collection.load()
 
@@ -104,11 +103,6 @@ def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
     except Exception as e:
         print(f"[ERROR] Milvus search failed: {e}")
         return {"results": []}
-    finally:
-        try:
-            connections.disconnect(alias="default")
-        except Exception:
-            pass
 TOOLS = [
     {
         "type": "function",
@@ -430,6 +424,13 @@ async def main():
     print(f"   LLM Service: {KSERVE_URL}")
     print(f"   Milvus: {MILVUS_HOST}:{MILVUS_PORT}")
     print(f"   Collection: {MILVUS_COLLECTION}")
+    
+    # Establish persistent Milvus connection
+    print(f"[INFO] Establishing persistent connection to Milvus at {MILVUS_HOST}:{MILVUS_PORT}")
+    try:
+        connections.connect(alias="default", host=MILVUS_HOST, port=MILVUS_PORT)
+    except Exception as e:
+        print(f"[ERROR] Failed to establish persistent Milvus connection: {e}")
     
     # Configure logging
     logging.getLogger("websockets").setLevel(logging.WARNING)
