@@ -243,29 +243,17 @@ def chunk_and_embed(
             file_data = json.loads(line)
             content = file_data['content']
 
-            # AGGRESSIVE CLEANING FOR BETTER EMBEDDINGS
-
-            # Remove Hugo frontmatter (both --- and +++ styles)
-            content = re.sub(r'^\s*[+\-]{3,}.*?[+\-]{3,}\s*', '', content, flags=re.DOTALL | re.MULTILINE)
-
-            # Remove Hugo template syntax
-            content = re.sub(r'\{\{.*?\}\}', '', content, flags=re.DOTALL)
-
-            # Remove HTML comments and tags
-            content = re.sub(r'<!--.*?-->', '', content, flags=re.DOTALL)
-            content = re.sub(r'<[^>]+>', ' ', content)
-
-            # Remove navigation/menu artifacts
-            content = re.sub(r'\b(Get Started|Contribute|GenAI|Home|Menu|Navigation)\b', '', content, flags=re.IGNORECASE)
-
-            # Clean up URLs and links
-            content = re.sub(r'https?://[^\s]+', '', content)
-            content = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', content)  # Convert [text](url) to text
-
-            # Remove excessive whitespace and normalize
-            content = re.sub(r'\s+', ' ', content)  # Multiple spaces to single
-            content = re.sub(r'\n\s*\n\s*\n+', '\n\n', content)  # Multiple newlines to double
-            content = content.strip()
+            import sys
+            import os
+            
+            # Allow importing from the directory above if running locally or mounted
+            sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            try:
+                from shared.text_utils import clean_content
+                content = clean_content(content)
+            except ImportError:
+                print("Could not import shared.text_utils, falling back to minimal length check.")
+                content = content.strip()
 
             # Skip files that are too short after cleaning
             if len(content) < 50:
