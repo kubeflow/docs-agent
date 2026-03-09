@@ -22,6 +22,12 @@ MILVUS_COLLECTION = os.getenv("MILVUS_COLLECTION", "docs_rag")
 MILVUS_VECTOR_FIELD = os.getenv("MILVUS_VECTOR_FIELD", "vector")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
 
+# Initialize embedding model ONCE at startup 
+print(f"Loading embedding model: {EMBEDDING_MODEL}")
+EMBEDDING_ENCODER = SentenceTransformer(EMBEDDING_MODEL)
+print("Embedding model loaded successfully")
+
+
 # System prompt
 SYSTEM_PROMPT = """
 You are the Kubeflow Docs Assistant.
@@ -64,7 +70,6 @@ Style
 """
 
 
-
 def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
     """Execute a semantic search in Milvus and return structured JSON serializable results."""
     try:
@@ -73,9 +78,8 @@ def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
         collection = Collection(MILVUS_COLLECTION)
         collection.load()
 
-        # Encoder (same model as pipeline)
-        encoder = SentenceTransformer(EMBEDDING_MODEL)
-        query_vec = encoder.encode(query).tolist()
+        # Use preloaded embedding model 
+        query_vec = EMBEDDING_ENCODER.encode(query).tolist()
 
         search_params = {"metric_type": "COSINE", "params": {"nprobe": 32}}
         results = collection.search(
@@ -88,22 +92,25 @@ def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
 
         hits = []
         for hit in results[0]:
-            # similarity = 1 - distance for COSINE in Milvus
             similarity = 1.0 - float(hit.distance)
             entity = hit.entity
             content_text = entity.get("content_text") or ""
             if isinstance(content_text, str) and len(content_text) > 400:
                 content_text = content_text[:400] + "..."
+
             hits.append({
                 "similarity": similarity,
                 "file_path": entity.get("file_path"),
                 "citation_url": entity.get("citation_url"),
                 "content_text": content_text,
             })
+
         return {"results": hits}
+
     except Exception as e:
         print(f"[ERROR] Milvus search failed: {e}")
         return {"results": []}
+
     finally:
         try:
             connections.disconnect(alias="default")
