@@ -420,7 +420,38 @@ async def handle_websocket(websocket, path):
 async def health_check(path, request_headers):
     """Handle HTTP health checks"""
     if path == "/health":
-        return 200, [("Content-Type", "text/plain")], b"OK"
+        health_status = {"status": "healthy", "service": "websocket-api", "dependencies": {}}
+        status_code = 200
+        
+        # Check Milvus
+        try:
+            connections.connect(alias="ws_health_check", host=MILVUS_HOST, port=MILVUS_PORT)
+            if connections.has_connection("ws_health_check"):
+                health_status["dependencies"]["milvus"] = "healthy"
+            else:
+                health_status["dependencies"]["milvus"] = "unhealthy"
+                health_status["status"] = "unhealthy"
+                status_code = 503
+        except Exception as e:
+            health_status["dependencies"]["milvus"] = f"unhealthy: {str(e)}"
+            health_status["status"] = "unhealthy"
+            status_code = 503
+        finally:
+            try:
+                connections.disconnect(alias="ws_health_check")
+            except Exception:
+                pass
+
+        # Check Embedding Model
+        try:
+            _ = SentenceTransformer(EMBEDDING_MODEL)
+            health_status["dependencies"]["embedding_model"] = "healthy"
+        except Exception as e:
+            health_status["dependencies"]["embedding_model"] = f"unhealthy: {str(e)}"
+            health_status["status"] = "unhealthy"
+            status_code = 503
+            
+        return status_code, [("Content-Type", "application/json")], json.dumps(health_status).encode('utf-8')
     return None
 
 async def main():
