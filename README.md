@@ -58,6 +58,46 @@ Kubeflow users often struggle to find relevant information across the extensive 
 - GPU nodes (for LLM inference)
 - SSL certificate (for HTTPS API)
 
+### Resource Requirements
+
+Before installing, ensure your cluster meets these minimum resource requirements:
+
+| Component | CPU | Memory | Storage |
+|-----------|-----|--------|---------|
+| Milvus Standalone | 2 cores | 4 GB | 20 GB |
+| etcd | 1 core | 2 GB | 10 GB |
+| MinIO | 1 core | 2 GB | 20 GB |
+| LLM Inference (GPU) | 4 cores | 16 GB | - |
+
+> **Note:** For production deployments, allocate at least **8 GB RAM** for Milvus and its dependencies combined.
+
+### WSL2 Users (Windows)
+
+If you are running a local Kubernetes cluster (e.g., Kind or Minikube) on **Windows Subsystem for Linux 2 (WSL2)**, WSL2 limits memory to 50% of your total RAM by default. Milvus requires sufficient memory to operate correctly.
+
+**Configure WSL2 memory before proceeding:**
+
+1. Open (or create) the file `C:\Users\<YourUsername>\.wslconfig`
+2. Add the following configuration:
+```ini
+[wsl2]
+memory=8GB
+processors=4
+swap=2GB
+```
+
+3. Restart WSL2 to apply changes:
+```bash
+wsl --shutdown
+```
+
+4. Verify the memory allocation inside WSL2:
+```bash
+free -h
+```
+
+> **Minimum recommended:** 8 GB RAM allocated to WSL2. Without this, Milvus pods may crash with **OOMKilled** errors.
+
 ## Installation
 
 ### Milvus Vector Database
