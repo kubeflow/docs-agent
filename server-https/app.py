@@ -28,6 +28,11 @@ ALLOWED_ORIGINS = [
     for origin in os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
     if origin.strip()
 ]
+if "*" in ALLOWED_ORIGINS:
+    raise ValueError(
+        "ALLOWED_ORIGINS must not contain '*'. "
+        "List specific origins (e.g. 'https://app.example.com,https://admin.example.com')."
+    )
 
 # System prompt (same as WebSocket version)
 SYSTEM_PROMPT = """
