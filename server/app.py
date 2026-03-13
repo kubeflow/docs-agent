@@ -63,6 +63,15 @@ Style
 - Reply in clean Markdown.
 """
 
+# --- NEW: Global Model Initialization ---
+print(f"Loading embedding model '{EMBEDDING_MODEL}' into memory...")
+try:
+    GLOBAL_ENCODER = SentenceTransformer(EMBEDDING_MODEL)
+    print("Embedding model loaded successfully.")
+except Exception as e:
+    print(f"[FATAL] Failed to load embedding model: {e}")
+    GLOBAL_ENCODER = None
+# ----------------------------------------------------
 
 
 def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
@@ -73,9 +82,12 @@ def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
         collection = Collection(MILVUS_COLLECTION)
         collection.load()
 
-        # Encoder (same model as pipeline)
-        encoder = SentenceTransformer(EMBEDDING_MODEL)
-        query_vec = encoder.encode(query).tolist()
+        # --- NEW: Use global encoder instead of re-loading ---
+        if GLOBAL_ENCODER is None:
+            raise RuntimeError("Embedding model is not initialized.")
+        
+        query_vec = GLOBAL_ENCODER.encode(query).tolist()
+        # ----------------------------------------------------
 
         search_params = {"metric_type": "COSINE", "params": {"nprobe": 32}}
         results = collection.search(
