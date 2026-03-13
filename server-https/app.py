@@ -1,5 +1,7 @@
 import os
 import json
+import asyncio
+import threading
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
@@ -21,6 +23,45 @@ MILVUS_PORT = os.getenv("MILVUS_PORT", "19530")
 MILVUS_COLLECTION = os.getenv("MILVUS_COLLECTION", "docs_rag")
 MILVUS_VECTOR_FIELD = os.getenv("MILVUS_VECTOR_FIELD", "vector")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
+
+# CORS: configurable allowed origins (comma-separated), defaults to localhost dev origins
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:3000,http://localhost:8080",
+    ).split(",")
+    if origin.strip()
+]
+
+# Global singleton: load the embedding model once at startup
+_encoder = SentenceTransformer(EMBEDDING_MODEL)
+
+# Persistent Milvus connection (initialized lazily, thread-safe)
+_milvus_lock = threading.Lock()
+_milvus_connected = False
+
+
+def _ensure_milvus_connection() -> None:
+    global _milvus_connected
+    if _milvus_connected:
+        return
+    with _milvus_lock:
+        if not _milvus_connected:
+            connections.connect(alias="default", host=MILVUS_HOST, port=MILVUS_PORT)
+            _milvus_connected = True
+
+
+# Shared httpx client (reused across requests)
+_http_client: Optional[httpx.AsyncClient] = None
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    global _http_client
+    if _http_client is None or _http_client.is_closed:
+        _http_client = httpx.AsyncClient(timeout=120)
+    return _http_client
+
 
 # System prompt (same as WebSocket version)
 SYSTEM_PROMPT = """
@@ -96,12 +137,22 @@ TOOLS = [
     }
 ]
 
-app = FastAPI(title="Kubeflow Docs API Service", version="1.0.0")
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    if _http_client is not None and not _http_client.is_closed:
+        await _http_client.aclose()
+
+
+app = FastAPI(title="Kubeflow Docs API Service", version="1.0.0", lifespan=lifespan)
 
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your actual domains
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -114,14 +165,11 @@ class ChatRequest(BaseModel):
 def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
     """Execute a semantic search in Milvus and return structured JSON serializable results."""
     try:
-        # Connect to Milvus
-        connections.connect(alias="default", host=MILVUS_HOST, port=MILVUS_PORT)
+        _ensure_milvus_connection()
         collection = Collection(MILVUS_COLLECTION)
         collection.load()
 
-        # Encoder (same model as pipeline)
-        encoder = SentenceTransformer(EMBEDDING_MODEL)
-        query_vec = encoder.encode(query).tolist()
+        query_vec = _encoder.encode(query).tolist()
 
         search_params = {"metric_type": "COSINE", "params": {"nprobe": 32}}
         results = collection.search(
@@ -148,13 +196,15 @@ def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
             })
         return {"results": hits}
     except Exception as e:
+        with _milvus_lock:
+            global _milvus_connected
+            _milvus_connected = False
+            try:
+                connections.disconnect(alias="default")
+            except Exception:
+                pass
         print(f"[ERROR] Milvus search failed: {e}")
         return {"results": []}
-    finally:
-        try:
-            connections.disconnect(alias="default")
-        except Exception:
-            pass
 
 async def execute_tool(tool_call: Dict[str, Any]) -> tuple[str, List[str]]:
     """Execute a tool call and return the result and citations"""
@@ -167,7 +217,7 @@ async def execute_tool(tool_call: Dict[str, Any]) -> tuple[str, List[str]]:
             top_k = arguments.get("top_k", 5)
             
             print(f"[TOOL] Executing Milvus search for: '{query}' (top_k={top_k})")
-            result = milvus_search(query, top_k)
+            result = await asyncio.to_thread(milvus_search, query, top_k)
             
             # Collect citations
             citations = []
@@ -199,8 +249,8 @@ async def stream_llm_response(payload: Dict[str, Any]) -> AsyncGenerator[str, No
     citations_collector = []
     
     try:
-        async with httpx.AsyncClient(timeout=120) as client:
-            async with client.stream("POST", KSERVE_URL, json=payload) as response:
+        client = _get_http_client()
+        async with client.stream("POST", KSERVE_URL, json=payload) as response:
                 if response.status_code != 200:
                     error_msg = f"LLM service error: HTTP {response.status_code}"
                     print(f"[ERROR] {error_msg}")
@@ -420,8 +470,6 @@ async def chat(request: ChatRequest):
                 headers={
                     "Cache-Control": "no-cache",
                     "Connection": "keep-alive",
-                    "Access-Control-Allow-Origin": "*",
-                    "Access-Control-Allow-Headers": "Cache-Control"
                 }
             )
         else:
