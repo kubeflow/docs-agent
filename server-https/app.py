@@ -106,6 +106,56 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# --- NEW: Global Model Initialization ---
+print(f"Loading embedding model '{EMBEDDING_MODEL}' into memory...")
+try:
+    GLOBAL_ENCODER = SentenceTransformer(EMBEDDING_MODEL)
+    print("✅ Embedding model loaded successfully.")
+except Exception as e:
+    print(f"[FATAL] Failed to load embedding model: {e}")
+    GLOBAL_ENCODER = None
+# ----------------------------------------
+
+# --- NEW: Context Window Manager ---
+class ContextWindowManager:
+    """
+    Manages the LLM context window to prevent HTTP 400/500 token overflow crashes.
+    Safely evicts oldest conversational turns while ensuring tool_call/tool_response
+    pairs are never orphaned.
+    """
+    def __init__(self, max_tokens: int = 7000):
+        self.max_tokens = max_tokens
+        self.chars_per_token = 4 
+        self.max_chars = self.max_tokens * self.chars_per_token
+
+    def sanitize(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if len(messages) <= 1:
+            return messages
+
+        system_message = messages[0]
+        working_messages = messages[1:]
+        base_chars = len(str(system_message))
+
+        while working_messages:
+            # Calculate current total footprint
+            total_chars = base_chars + sum(len(str(m)) for m in working_messages)
+            
+            if total_chars <= self.max_chars:
+                break # Payload is safe!
+                
+            print(f"[MEMORY MANAGER] Payload ({total_chars} chars) exceeds limit. Evicting oldest turn.")
+            
+            # Pop the oldest message (FIFO)
+            popped_msg = working_messages.pop(0)
+            
+            # CRITICAL: If we just popped a tool_call, we MUST also pop the subsequent tool result
+            if popped_msg.get("role") == "assistant" and "tool_calls" in popped_msg:
+                if working_messages and working_messages[0].get("role") == "tool":
+                    print("[MEMORY MANAGER] Also evicting orphaned tool response.")
+                    working_messages.pop(0)
+
+        return [system_message] + working_messages
+# -----------------------------------
 
 class ChatRequest(BaseModel):
     message: str
@@ -119,9 +169,12 @@ def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
         collection = Collection(MILVUS_COLLECTION)
         collection.load()
 
-        # Encoder (same model as pipeline)
-        encoder = SentenceTransformer(EMBEDDING_MODEL)
-        query_vec = encoder.encode(query).tolist()
+        # --- NEW: Use global encoder instead of re-loading ---
+        if GLOBAL_ENCODER is None:
+            raise RuntimeError("Embedding model is not initialized.")
+        
+        query_vec = GLOBAL_ENCODER.encode(query).tolist()
+        # ----------------------------------------------------
 
         search_params = {"metric_type": "COSINE", "params": {"nprobe": 32}}
         results = collection.search(
