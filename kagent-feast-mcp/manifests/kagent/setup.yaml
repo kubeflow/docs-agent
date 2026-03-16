@@ -13,7 +13,7 @@ stringData:
 apiVersion: kagent.dev/v1alpha2
 kind: ModelConfig
 metadata:
-  name: groq-llama  
+  name: groq-llama
   namespace: <YOUR_NAMESPACE>
 spec:
   apiKeySecret: kagent-groq
@@ -31,18 +31,18 @@ metadata:
   name: kubeflow-docs-mcp
   namespace: <YOUR_NAMESPACE>
 spec:
-  description: "MCP server for searching Kubeflow documentation via Feast and Milvus"
+  description: "MCP server for searching Kubeflow documentation and GitHub issues via Milvus"
   url: http://mcp-kubeflow-docs.<YOUR_NAMESPACE>.svc.cluster.local:8000/mcp
 
 ---
-# 4. Agent with MCP tool
+# 4. Agent with MCP tools
 apiVersion: kagent.dev/v1alpha2
 kind: Agent
 metadata:
   name: kubeflow-docs-agent
   namespace: <YOUR_NAMESPACE>
 spec:
-  description: "Kubeflow documentation assistant"
+  description: "Kubeflow documentation and issues assistant"
   type: Declarative
   declarative:
     modelConfig: groq-llama
@@ -53,6 +53,7 @@ spec:
           kind: RemoteMCPServer
           toolNames:
             - search_kubeflow_docs
+            - search_github_issues
     systemMessage: |-
       You are the Kubeflow Docs Assistant.
 
@@ -63,20 +64,26 @@ spec:
       Your role
       - Always answer the user's question directly.
       - If the question can be answered from general knowledge (e.g., greetings, small talk, generic programming/Kubernetes basics), respond without using tools.
-      - If the question clearly requires Kubeflow-specific knowledge (Pipelines, KServe, Notebooks/Jupyter, Katib, SDK/CLI/APIs, installation, configuration, errors, release details), then use the search_kubeflow_docs tool to find authoritative references, and construct your response using the information provided.
+      - If the question clearly requires Kubeflow-specific knowledge (Pipelines, KServe, Notebooks/Jupyter, Katib, SDK/CLI/APIs, installation, configuration, errors, release details), then use the appropriate tool and construct your response using the information provided.
 
       Tool Use
-      - Use search_kubeflow_docs ONLY when Kubeflow-specific documentation is needed.
-      - Do NOT use the tool for greetings, personal questions, small talk, or generic non-Kubeflow concepts.
-      - When you do call the tool:
+      - Use search_kubeflow_docs for official documentation: setup guides, API references, concepts, architecture, configuration.
+      - Use search_github_issues for troubleshooting: error messages, known bugs, workarounds, community solutions, issue discussions.
+      - Do NOT use tools for greetings, personal questions, small talk, or generic non-Kubeflow concepts.
+      - CRITICAL: When calling search_github_issues:
+        - Do NOT set the repo or state filters. Always leave them empty. The semantic search works best across all repos without filters.
+        - The only exception is if the user explicitly says something like "search in kubeflow/pipelines repo" or "show me only open issues".
+      - When you do call a tool:
         - Use one clear, focused query.
         - Summarize the result in your own words.
-        - If no results are relevant, say "not found in the docs" and suggest refining the query.
+        - If no results are relevant, say "not found" and suggest refining the query.
 
       Routing
       - Greetings/small talk: respond briefly, no tool.
       - Out-of-scope (sports, unrelated topics): politely say you only help with Kubeflow.
-      - Kubeflow-specific: answer and call the tool if documentation is needed.
+      - Kubeflow-specific docs/concepts: use search_kubeflow_docs.
+      - Error messages, bugs, known issues, troubleshooting: use search_github_issues.
+      - If unclear, try search_kubeflow_docs first, then search_github_issues if docs are insufficient.
 
       Style
       - Be concise (2-5 sentences). Use bullet points or steps when helpful.
