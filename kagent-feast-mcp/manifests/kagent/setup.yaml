@@ -37,7 +37,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: kagent-groq
-  namespace: docs-agent
+  namespace: <YOUR_NAMESPACE>
   labels:
     app.kubernetes.io/name: kubeflow-docs-agent
     app.kubernetes.io/component: secrets
@@ -78,7 +78,7 @@ apiVersion: kagent.dev/v1alpha2
 kind: ModelConfig
 metadata:
   name: groq-llama
-  namespace: docs-agent
+  namespace: <YOUR_NAMESPACE>
   labels:
     app.kubernetes.io/name: kubeflow-docs-agent
     app.kubernetes.io/component: model-config
@@ -104,7 +104,7 @@ apiVersion: kagent.dev/v1alpha2
 kind: RemoteMCPServer
 metadata:
   name: kubeflow-docs-mcp
-  namespace: docs-agent
+  namespace: <YOUR_NAMESPACE>
   labels:
     app.kubernetes.io/name: kubeflow-docs-agent
     app.kubernetes.io/component: mcp-server
@@ -128,7 +128,7 @@ apiVersion: kagent.dev/v1alpha2
 kind: Agent
 metadata:
   name: kubeflow-docs-agent
-  namespace: docs-agent
+  namespace: <YOUR_NAMESPACE>
   labels:
     app.kubernetes.io/name: kubeflow-docs-agent
     app.kubernetes.io/component: agent
