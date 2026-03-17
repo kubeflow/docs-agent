@@ -1,3 +1,12 @@
+# NOTE:
+#
+# Replace <YOUR_NAMESPACE> with the same namespace used in setup.yaml
+# (default: docs-agent). Inconsistent namespace will break MCP connectivity.
+#
+# Replace <YOUR_DOCKERHUB_USERNAME> with your Docker Hub image name.
+# You must build and push the MCP server image before applying.
+#
+# Verified: March 2026
 apiVersion: apps/v1
 kind: Deployment
 metadata:

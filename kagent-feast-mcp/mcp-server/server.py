@@ -1,13 +1,28 @@
+import os
 from fastmcp import FastMCP
 from pymilvus import MilvusClient
 from sentence_transformers import SentenceTransformer
 
-MILVUS_URI = "http://milvus.<YOUR_NAMESPACE>.svc.cluster.local:19530"
-MILVUS_USER = "root"
-MILVUS_PASSWORD = "Milvus"
-COLLECTION_NAME = "kubeflow_docs_docs_rag"
-EMBEDDING_MODEL = "sentence-transformers/all-mpnet-base-v2"
-PORT = 8000
+# ============================================================================
+# Configuration - Override via environment variables (with production defaults)
+# ============================================================================
+# Verified working as of March 2026
+#
+# Key namespaces:
+# - Default namespace: docs-agent (must match setup.yaml and MCP URL)
+# - Collection name: matches Kubeflow pipeline output (kubeflow_docs_docs_rag)
+#
+# For production, set these via K8s manifests:
+#   MILVUS_URI, MILVUS_USER, MILVUS_PASSWORD, COLLECTION_NAME, EMBEDDING_MODEL
+# ============================================================================
+
+MILVUS_URI = os.getenv("MILVUS_URI", "http://milvus.docs-agent.svc.cluster.local:19530")
+MILVUS_USER = os.getenv("MILVUS_USER", "root")  # Change in production!
+MILVUS_PASSWORD = os.getenv("MILVUS_PASSWORD", "Milvus")  # Change in production!
+COLLECTION_NAME = os.getenv("COLLECTION_NAME", "kubeflow_docs_docs_rag")
+# Default model: all-mpnet-base-v2 (768-dim, high quality)
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
+PORT = int(os.getenv("PORT", "8000"))
 
 mcp = FastMCP("Kubeflow Docs MCP Server")
 

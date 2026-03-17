@@ -6,7 +6,7 @@
 #    chunk_overlap: int [Default: 100.0]
 #    chunk_size: int [Default: 1000.0]
 #    directory_path: str [Default: 'content/en']
-#    feast_online_store_host: str [Default: 'http://milvus.santhosh.svc.cluster.local']
+#    feast_online_store_host: str [Default: 'http://milvus.<YOUR_NAMESPACE>.svc.cluster.local']
 #    feast_project: str [Default: 'kubeflow_docs']
 #    github_token: str [Default: '']
 #    repo_name: str [Default: 'website']
@@ -82,7 +82,7 @@ deploymentSpec:
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
           \ python3 -m pip install --quiet --no-warn-script-location 'sentence-transformers'\
           \ 'langchain-text-splitters'  &&  python3 -m pip install --quiet --no-warn-script-location\
-          \ 'kfp==2.15.2' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
+          \ 'kfp==2.16.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
           3.9\"' && \"$0\" \"$@\"\n"
         - sh
         - -ec
@@ -163,7 +163,7 @@ deploymentSpec:
         - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
           \ python3 -m pip install --quiet --no-warn-script-location 'requests' 'beautifulsoup4'\
-          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.15.2'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
           $0\" \"$@\"\n"
         - sh
@@ -218,7 +218,7 @@ deploymentSpec:
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
           \ python3 -m pip install --quiet --no-warn-script-location 'feast[milvus]'\
           \ 'pandas' 'marshmallow>=3.13.0'  &&  python3 -m pip install --quiet --no-warn-script-location\
-          \ 'kfp==2.15.2' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
+          \ 'kfp==2.16.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
           3.9\"' && \"$0\" \"$@\"\n"
         - sh
         - -ec
@@ -372,7 +372,7 @@ root:
         isOptional: true
         parameterType: STRING
       feast_online_store_host:
-        defaultValue: http://milvus.santhosh.svc.cluster.local
+        defaultValue: http://milvus.<YOUR_NAMESPACE>.svc.cluster.local
         isOptional: true
         parameterType: STRING
       feast_project:
@@ -392,4 +392,4 @@ root:
         isOptional: true
         parameterType: STRING
 schemaVersion: 2.1.0
-sdkVersion: kfp-2.15.2
+sdkVersion: kfp-2.16.0
