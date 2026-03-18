@@ -623,7 +623,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
         
         // Handle end of message or errors
-        if (response.type === 'end') {
+        if (response.type === 'done') {
             // Store the complete bot response in conversation history
             if (currentMessageContent.trim()) {
                 messagesHistory.push({
