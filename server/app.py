@@ -22,6 +22,10 @@ MILVUS_COLLECTION = os.getenv("MILVUS_COLLECTION", "docs_rag")
 MILVUS_VECTOR_FIELD = os.getenv("MILVUS_VECTOR_FIELD", "vector")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
 
+# Global Encoder Singleton (loaded once at startup)
+print(f" Initializing Global Encoder: {EMBEDDING_MODEL}...")
+ENCODER = SentenceTransformer(EMBEDDING_MODEL)
+
 # System prompt
 SYSTEM_PROMPT = """
 You are the Kubeflow Docs Assistant.
@@ -60,8 +64,55 @@ Style
 - Be concise (2–5 sentences). Use bullet points or steps when helpful.
 - Provide examples only when asked.
 - Never invent features. If unsure, say so.
-- Reply in clean Markdown.
+-# Reply in clean Markdown.
 """
+
+class ContextWindowManager:
+    """Manages the conversational context window with FIFO eviction and tool-call protection."""
+    
+    def __init__(self, max_tokens: int = 7000, system_prompt: str = SYSTEM_PROMPT):
+        self.max_tokens = max_tokens
+        self.system_prompt = system_prompt
+
+    def get_token_count(self, messages: List[Dict[str, Any]]) -> int:
+        """Heuristic calculation: characters / 4 (safe approximation for English)."""
+        total_chars = 0
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                total_chars += len(content)
+            elif isinstance(content, list): # Handle multi-modal or complex content if any
+                for item in content:
+                    if isinstance(item, dict) and "text" in item:
+                        total_chars += len(item["text"])
+            
+            # Count tool calls if present
+            if "tool_calls" in msg:
+                total_chars += len(json.dumps(msg["tool_calls"]))
+        
+        return total_chars // 4
+
+    def sanitize_context(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Evicts oldest messages while preserving system prompt and preventing orphaned tool results."""
+        if not messages:
+            return [{"role": "system", "content": self.system_prompt}]
+
+        # Ensure system prompt is always at the front
+        if messages[0].get("role") != "system":
+            messages.insert(0, {"role": "system", "content": self.system_prompt})
+
+        while len(messages) > 1 and self.get_token_count(messages) > self.max_tokens:
+            # Pop the oldest message after the system prompt
+            removed = messages.pop(1)
+            
+            # orphaned tool protection: 
+            # If we evict an 'assistant' message with 'tool_calls', we MUST evict the following 'tool' response.
+            if removed.get("role") == "assistant" and "tool_calls" in removed:
+                while len(messages) > 1 and messages[1].get("role") == "tool":
+                    print(f"[CONTEXT] Evicting orphaned tool response to maintain conversational grammar.")
+                    messages.pop(1)
+            
+        return messages
 
 
 
@@ -73,9 +124,8 @@ def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
         collection = Collection(MILVUS_COLLECTION)
         collection.load()
 
-        # Encoder (same model as pipeline)
-        encoder = SentenceTransformer(EMBEDDING_MODEL)
-        query_vec = encoder.encode(query).tolist()
+        # Use the global encoder
+        query_vec = ENCODER.encode(query).tolist()
 
         search_params = {"metric_type": "COSINE", "params": {"nprobe": 32}}
         results = collection.search(
@@ -332,18 +382,28 @@ async def handle_tool_follow_up(original_payload: Dict[str, Any], tool_call: Dic
         print(f"[ERROR] Tool follow-up failed: {e}")
         await websocket.send(json.dumps({"type": "error", "content": f"Tool follow-up failed: {e}"}))
 
-async def handle_chat(message: str, websocket) -> None:
+async def handle_chat(message: Any, websocket) -> None:
     """Handle chat with tool calling support"""
     try:
-        print(f"[CHAT] Processing message: {message[:100]}...")
+        # Determine if input is a single message or full history
+        if isinstance(message, list):
+            messages = message
+        else:
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": str(message)}
+            ]
+
+        print(f"[CHAT] Processing request with {len(messages)} turns...")
+        
+        # Apply Context Window Management
+        ctx_manager = ContextWindowManager(max_tokens=7000)
+        sanitized_messages = ctx_manager.sanitize_context(messages)
         
         # Create initial payload
         payload = {
             "model": MODEL,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": message}
-            ],
+            "messages": sanitized_messages,
             "tools": TOOLS,
             "tool_choice": "auto",
             "stream": True,
