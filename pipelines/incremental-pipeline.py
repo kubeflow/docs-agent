@@ -187,9 +187,9 @@ def chunk_and_embed_incremental(
             content = re.sub(r'https?://[^\s]+', '', content)
             content = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', content)  # Convert [text](url) to text
 
-            # Remove excessive whitespace and normalize
-            content = re.sub(r'\s+', ' ', content)  # Multiple spaces to single
-            content = re.sub(r'\n\s*\n\s*\n+', '\n\n', content)  # Multiple newlines to double
+            # Remove excessive spaces/tabs and normalize
+            content = re.sub(r'[ \t]+', ' ', content)  # Multiple spaces/tabs to single
+            content = re.sub(r'\n\s*\n+', '\n\n', content)  # Consolidate multiple newlines
             content = content.strip()
 
             # Skip files that are too short after cleaning
