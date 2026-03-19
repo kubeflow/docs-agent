@@ -295,6 +295,15 @@ def chunk_and_embed(
             # Split into chunks
             chunks = text_splitter.split_text(content)
 
+            # Guard: skip files that produce no chunks after splitting to
+            # avoid ZeroDivisionError in the log statement below.
+            # This can happen when content passes the < 50 char check but
+            # is reduced to nothing by the RecursiveCharacterTextSplitter
+            # (e.g. chunk_size larger than remaining content).
+            if not chunks:
+                print(f"Skipping file after chunking (no chunks produced): {file_data['path']}")
+                continue
+
             print(f"File: {file_data['path']} -> {len(chunks)} chunks (avg: {sum(len(c) for c in chunks)/len(chunks):.0f} chars)")
 
             # Create embeddings
