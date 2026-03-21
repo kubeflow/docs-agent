@@ -22,6 +22,9 @@ MILVUS_COLLECTION = os.getenv("MILVUS_COLLECTION", "docs_rag")
 MILVUS_VECTOR_FIELD = os.getenv("MILVUS_VECTOR_FIELD", "vector")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
 
+# Initialize encoder once at startup to avoid reloading ~400MB of weights on every query
+encoder = SentenceTransformer(EMBEDDING_MODEL)
+
 # System prompt (same as WebSocket version)
 SYSTEM_PROMPT = """
 You are the Kubeflow Docs Assistant.
