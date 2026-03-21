@@ -22,6 +22,15 @@ MILVUS_COLLECTION = os.getenv("MILVUS_COLLECTION", "docs_rag")
 MILVUS_VECTOR_FIELD = os.getenv("MILVUS_VECTOR_FIELD", "vector")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
 
+# Singleton encoder — loaded once at startup, reused for every query
+_encoder: SentenceTransformer = None
+
+def _get_encoder() -> SentenceTransformer:
+    global _encoder
+    if _encoder is None:
+        _encoder = SentenceTransformer(EMBEDDING_MODEL)
+    return _encoder
+
 # System prompt
 SYSTEM_PROMPT = """
 You are the Kubeflow Docs Assistant.
@@ -73,9 +82,8 @@ def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
         collection = Collection(MILVUS_COLLECTION)
         collection.load()
 
-        # Encoder (same model as pipeline)
-        encoder = SentenceTransformer(EMBEDDING_MODEL)
-        query_vec = encoder.encode(query).tolist()
+        # Encoder (singleton — loaded once at startup, reused for every query)
+        query_vec = _get_encoder().encode(query).tolist()
 
         search_params = {"metric_type": "COSINE", "params": {"nprobe": 32}}
         results = collection.search(
