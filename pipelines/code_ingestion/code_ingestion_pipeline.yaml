@@ -109,16 +109,16 @@ deploymentSpec:
           \n    if github_token:\n        repo_url = f\"https://{github_token}@github.com/{repo_owner}/{repo_name}.git\"\
           \n\n    subprocess.run(\n        [\"git\", \"clone\", \"--depth\", \"1\"\
           , \"--branch\", branch, repo_url, clone_dir],\n        check=True, capture_output=True,\
-          \ text=True\n    )\n    print(f\"Cloned {repo_owner}/{repo_name} @ {branch}\"\
-          )\n\n    VALID_EXTENSIONS = {\".yaml\", \".yml\", \".sh\", \".bash\"}\n\
-          \    VALID_FILENAMES = {\"Dockerfile\"}\n    SKIP_DIRS = {\"vendor\", \"\
-          .github\", \"tests\", \"test\", \"node_modules\", \".git\", \"__pycache__\"\
-          }\n\n    def should_skip_dir(dirname):\n        return dirname in SKIP_DIRS\
-          \ or dirname.startswith(\".\")\n\n    def is_valid_file(name):\n       \
-          \ if name in VALID_FILENAMES or name.startswith(\"Dockerfile\"):\n     \
-          \       return True\n        for ext in VALID_EXTENSIONS:\n            if\
-          \ name.endswith(ext):\n                return True\n        return False\n\
-          \n    files = []\n    for root, dirs, filenames in os.walk(clone_dir):\n\
+          \ text=True, timeout=600\n    )\n    print(f\"Cloned {repo_owner}/{repo_name}\
+          \ @ {branch}\")\n\n    VALID_EXTENSIONS = {\".yaml\", \".yml\", \".sh\"\
+          , \".bash\"}\n    VALID_FILENAMES = {\"Dockerfile\"}\n    SKIP_DIRS = {\"\
+          vendor\", \".github\", \"tests\", \"test\", \"node_modules\", \".git\",\
+          \ \"__pycache__\"}\n\n    def should_skip_dir(dirname):\n        return\
+          \ dirname in SKIP_DIRS or dirname.startswith(\".\")\n\n    def is_valid_file(name):\n\
+          \        if name in VALID_FILENAMES or name.startswith(\"Dockerfile\"):\n\
+          \            return True\n        for ext in VALID_EXTENSIONS:\n       \
+          \     if name.endswith(ext):\n                return True\n        return\
+          \ False\n\n    files = []\n    for root, dirs, filenames in os.walk(clone_dir):\n\
           \        dirs[:] = [d for d in dirs if not should_skip_dir(d)]\n\n     \
           \   for fname in filenames:\n            if not is_valid_file(fname):\n\
           \                continue\n            abs_path = os.path.join(root, fname)\n\
@@ -202,12 +202,11 @@ deploymentSpec:
         - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
           \ *\n\ndef parse_and_chunk_code(\n    code_data: dsl.Input[dsl.Dataset],\n\
           \    repo_name: str,\n    parsed_data: dsl.Output[dsl.Dataset]\n):\n   \
-          \ import json\n    import os\n    import re\n    from typing import List,\
-          \ Dict, Any, Optional\n\n    KNOWN_TOP_DIRS = {\"applications\", \"common\"\
-          , \"experimental\"}\n\n    def _infer_component_name(file_path):\n     \
-          \   parts = file_path.replace(\"\\\\\", \"/\").split(\"/\")\n        skip\
-          \ = {\"base\", \"overlays\", \"upstream\", \"default\", \".\", \"\", \"\
-          installs\", \"components\"}\n\n        for top_dir in (\"applications\"\
+          \ import json\n    import re\n\n    KNOWN_TOP_DIRS = {\"applications\",\
+          \ \"common\", \"experimental\"}\n\n    def _infer_component_name(file_path):\n\
+          \        parts = file_path.replace(\"\\\\\", \"/\").split(\"/\")\n     \
+          \   skip = {\"base\", \"overlays\", \"upstream\", \"default\", \".\", \"\
+          \", \"installs\", \"components\"}\n\n        for top_dir in (\"applications\"\
           , \"common\", \"experimental\"):\n            if top_dir in parts:\n   \
           \             idx = parts.index(top_dir)\n                if idx + 1 < len(parts)\
           \ and parts[idx + 1] not in skip:\n                    return parts[idx\
@@ -217,33 +216,36 @@ deploymentSpec:
           \ \"\"\n\n    def _safe_dump_yaml_block(key, value):\n        try:\n   \
           \         import yaml\n            dumped = yaml.dump({key: value}, default_flow_style=False,\
           \ allow_unicode=True)\n            return dumped.strip()\n        except\
-          \ Exception:\n            return f\"{key}: {value}\"\n\n    def _extract_labels(doc):\n\
-          \        metadata = doc.get(\"metadata\", {}) or {}\n        labels = metadata.get(\"\
-          labels\", {}) or {}\n        annotations = metadata.get(\"annotations\"\
-          , {}) or {}\n        result = {}\n        for k, v in labels.items():\n\
-          \            result[f\"label:{k}\"] = str(v)\n        for k, v in list(annotations.items())[:5]:\n\
+          \ (yaml.YAMLError, TypeError, ValueError):\n            return f\"{key}:\
+          \ {value}\"\n\n    def _extract_metadata_labels(doc):\n        metadata\
+          \ = doc.get(\"metadata\", {}) or {}\n        labels = metadata.get(\"labels\"\
+          , {}) or {}\n        annotations = metadata.get(\"annotations\", {}) or\
+          \ {}\n        result = {}\n        for k, v in labels.items():\n       \
+          \     result[f\"label:{k}\"] = str(v)\n        for k, v in list(annotations.items())[:5]:\n\
           \            result[f\"annotation:{k}\"] = str(v)\n        return result\n\
           \n    def parse_yaml_manifest(file_path, content):\n        import yaml\n\
           \        chunks = []\n        raw_docs = content.split(\"\\n---\")\n\n \
           \       for raw_doc in raw_docs:\n            raw_doc = raw_doc.strip()\n\
           \            if not raw_doc or raw_doc == \"---\":\n                continue\n\
           \            try:\n                doc = yaml.safe_load(raw_doc)\n     \
-          \       except yaml.YAMLError:\n                continue\n            if\
-          \ not isinstance(doc, dict):\n                continue\n\n            kind\
-          \ = doc.get(\"kind\", \"\")\n            api_version = doc.get(\"apiVersion\"\
-          , \"\")\n            metadata_block = doc.get(\"metadata\", {}) or {}\n\
-          \            name = metadata_block.get(\"name\", \"\")\n            namespace\
-          \ = metadata_block.get(\"namespace\", \"\")\n            component = _infer_component_name(file_path)\n\
-          \            labels_map = _extract_labels(doc)\n\n            header_parts\
-          \ = []\n            if kind and name:\n                loc = f\"# {kind}/{name}\"\
-          \n                if namespace:\n                    loc += f\" in namespace\
+          \       except yaml.YAMLError as exc:\n                print(f\"Skipping\
+          \ malformed YAML document in {file_path}: {exc}\")\n                continue\n\
+          \            if not isinstance(doc, dict):\n                continue\n\n\
+          \            kind = doc.get(\"kind\", \"\")\n            api_version = doc.get(\"\
+          apiVersion\", \"\")\n            metadata_block = doc.get(\"metadata\",\
+          \ {}) or {}\n            name = metadata_block.get(\"name\", \"\")\n   \
+          \         namespace = metadata_block.get(\"namespace\", \"\")\n        \
+          \    component = _infer_component_name(file_path)\n            labels_map\
+          \ = _extract_metadata_labels(doc)\n\n            header_parts = []\n   \
+          \         if kind and name:\n                loc = f\"# {kind}/{name}\"\n\
+          \                if namespace:\n                    loc += f\" in namespace\
           \ {namespace}\"\n                header_parts.append(loc)\n            if\
           \ api_version:\n                header_parts.append(f\"# apiVersion: {api_version}\"\
           )\n            header_parts.append(f\"# File: {file_path}\")\n         \
           \   if component:\n                header_parts.append(f\"# Component: {component}\"\
           )\n            header = \"\\n\".join(header_parts)\n\n            code_meta\
-          \ = {\n                \"code_entity_type\": kind if kind else \"k8s_resource\"\
-          ,\n                \"code_entity_name\": name,\n                \"component_name\"\
+          \ = {\n                \"code_entity_type\": kind if kind else \"\",\n \
+          \               \"code_entity_name\": name,\n                \"component_name\"\
           : component,\n            }\n            if namespace:\n               \
           \ code_meta[\"k8s_namespace\"] = namespace\n            if api_version:\n\
           \                code_meta[\"api_version\"] = api_version\n            if\
@@ -263,7 +265,7 @@ deploymentSpec:
           \                \"content_text\": content[:4000]\n            })\n    \
           \    return chunks\n\n    def parse_kustomization(file_path, content):\n\
           \        import yaml\n        try:\n            doc = yaml.safe_load(content)\n\
-          \        except Exception:\n            doc = {}\n        if not isinstance(doc,\
+          \        except yaml.YAMLError:\n            doc = {}\n        if not isinstance(doc,\
           \ dict):\n            doc = {}\n\n        component = _infer_component_name(file_path)\n\
           \        resources = doc.get(\"resources\", []) or []\n        bases = doc.get(\"\
           bases\", []) or []\n        images = doc.get(\"images\", []) or []\n   \
@@ -297,16 +299,18 @@ deploymentSpec:
           \ for img in images[:10]]\n        if patches_sm or patches_json or patches_inline:\n\
           \            code_meta[\"has_patches\"] = True\n        if config_map_gen:\n\
           \            code_meta[\"config_map_generators\"] = [g.get(\"name\", \"\"\
-          ) for g in config_map_gen if isinstance(g, dict)]\n\n        return [{\"\
-          language\": \"yaml\", \"code_metadata\": code_meta, \"content_text\": chunk_text[:4000]}]\n\
+          ) for g in config_map_gen if isinstance(g, dict)]\n        if secret_gen:\n\
+          \            code_meta[\"secret_generators\"] = [g.get(\"name\", \"\") for\
+          \ g in secret_gen if isinstance(g, dict)]\n\n        return [{\"language\"\
+          : \"yaml\", \"code_metadata\": code_meta, \"content_text\": chunk_text[:4000]}]\n\
           \n    def parse_dockerfile(file_path, content):\n        component = _infer_component_name(file_path)\n\
           \        from_images = re.findall(r\"^FROM\\s+(\\S+)(?:\\s+[Aa][Ss]\\s+(\\\
           S+))?\", content, re.MULTILINE)\n        expose_ports = re.findall(r\"^EXPOSE\\\
           s+(.+)\", content, re.MULTILINE)\n        entrypoints = re.findall(r\"^(?:ENTRYPOINT|CMD)\\\
-          s+(.+)\", content, re.MULTILINE)\n        labels = re.findall(r'^LABEL\\\
+          s+(.+)\", content, re.MULTILINE)\n        docker_labels = re.findall(r'^LABEL\\\
           s+(.+)', content, re.MULTILINE)\n        args = re.findall(r'^ARG\\s+(\\\
           S+)', content, re.MULTILINE)\n        workdirs = re.findall(r'^WORKDIR\\\
-          s+(\\S+)', content, re.MULTILINE)\n        healthchecks = re.findall(r'^HEALTHCHECK\\\
+          s+(\\S+)', content, re.MULTILINE)\n        healthcheck_cmds = re.findall(r'^HEALTHCHECK\\\
           s+(.+)', content, re.MULTILINE)\n        envs = re.findall(r'^ENV\\s+(\\\
           S+)', content, re.MULTILINE)\n\n        base_imgs = [img[0] for img in from_images]\n\
           \        stage_names = [img[1] for img in from_images if img[1]]\n     \
@@ -328,7 +332,10 @@ deploymentSpec:
           \ if expose_ports:\n            code_meta[\"exposed_ports\"] = [p.strip()\
           \ for p in expose_ports]\n        if entrypoints:\n            code_meta[\"\
           entrypoint\"] = entrypoints[-1].strip()\n        if args:\n            code_meta[\"\
-          build_args\"] = args[:10]\n        if envs:\n            code_meta[\"env_vars\"\
+          build_args\"] = args[:10]\n        if docker_labels:\n            code_meta[\"\
+          labels_raw\"] = docker_labels[:5]\n        if workdirs:\n            code_meta[\"\
+          workdir\"] = workdirs[-1]\n        if healthcheck_cmds:\n            code_meta[\"\
+          has_healthcheck\"] = True\n        if envs:\n            code_meta[\"env_vars\"\
           ] = envs[:10]\n\n        return [{\"language\": \"dockerfile\", \"code_metadata\"\
           : code_meta, \"content_text\": chunk_text[:4000]}]\n\n    def parse_shell(file_path,\
           \ content):\n        component = _infer_component_name(file_path)\n    \
@@ -336,10 +343,10 @@ deploymentSpec:
           \ = shebang_match.group(1).strip() if shebang_match else \"\"\n\n      \
           \  sourced_files = re.findall(r'^\\s*(?:source|\\\\.)\\s+[\"\\']?([^\\s\"\
           \\']+)', content, re.MULTILINE)\n        export_vars = re.findall(r'^\\\
-          s*export\\s+(\\w+)=', content, re.MULTILINE)\n        set_flags = re.findall(r'^\\\
-          s*set\\s+(-\\w+)', content, re.MULTILINE)\n\n        function_pattern =\
-          \ re.compile(\n            r\"^(?:function\\s+(\\w[\\w-]*)\\s*(?:\\(\\s*\\\
-          ))?\\s*\\{|(\\w[\\w-]*)\\s*\\(\\s*\\)\\s*\\{)\",\n            re.MULTILINE\n\
+          s*export\\s+(\\w+)=', content, re.MULTILINE)\n        shell_set_flags =\
+          \ re.findall(r'^\\s*set\\s+(-\\w+)', content, re.MULTILINE)\n\n        function_pattern\
+          \ = re.compile(\n            r\"^(?:function\\s+(\\w[\\w-]*)\\s*(?:\\(\\\
+          s*\\))?\\s*\\{|(\\w[\\w-]*)\\s*\\(\\s*\\)\\s*\\{)\",\n            re.MULTILINE\n\
           \        )\n        function_matches = list(function_pattern.finditer(content))\n\
           \n        base_header_parts = [f\"# Shell script\", f\"# File: {file_path}\"\
           ]\n        if component:\n            base_header_parts.append(f\"# Component:\
@@ -349,7 +356,8 @@ deploymentSpec:
           component_name\": component}\n        if shebang:\n            base_meta[\"\
           shebang\"] = shebang\n        if sourced_files:\n            base_meta[\"\
           sourced_files\"] = sourced_files\n        if export_vars:\n            base_meta[\"\
-          exported_variables\"] = export_vars[:15]\n\n        if len(function_matches)\
+          exported_variables\"] = export_vars[:15]\n        if shell_set_flags:\n\
+          \            base_meta[\"set_flags\"] = shell_set_flags\n\n        if len(function_matches)\
           \ < 2:\n            header = \"\\n\".join(base_header_parts)\n         \
           \   chunk_text = f\"{header}\\n\\n{content}\"\n            meta = {**base_meta,\
           \ \"code_entity_type\": \"script\", \"code_entity_name\": file_path.split(\"\
@@ -453,16 +461,16 @@ deploymentSpec:
           \            FieldSchema(name=\"content_text\", dtype=DataType.VARCHAR,\
           \ max_length=4000),\n            FieldSchema(name=\"vector\", dtype=DataType.FLOAT_VECTOR,\
           \ dim=768),\n            FieldSchema(name=\"last_updated\", dtype=DataType.INT64),\n\
-          \            FieldSchema(name=\"language\", dtype=DataType.VARCHAR, max_length=64),\
-          \ # for code \n            FieldSchema(name=\"code_metadata\", dtype=DataType.JSON,\
-          \ nullable=True), # for code \n        ]\n        schema = CollectionSchema(fields,\
-          \ \"Unified RAG collection for documentation and code\")\n        collection\
-          \ = Collection(collection_name, schema)\n        print(f\"Created new collection:\
-          \ {collection_name}\")\n    else:\n        collection = Collection(collection_name)\n\
-          \        print(f\"Using existing collection: {collection_name}\")\n\n  \
-          \  partition_name = \"code\"\n    if not collection.has_partition(partition_name):\n\
-          \        collection.create_partition(partition_name)\n        print(f\"\
-          Created partition: {partition_name}\")\n    else:\n        print(f\"Partition\
+          \            FieldSchema(name=\"language\", dtype=DataType.VARCHAR, max_length=64),\n\
+          \            FieldSchema(name=\"code_metadata\", dtype=DataType.JSON, nullable=True),\n\
+          \        ]\n        schema = CollectionSchema(fields, \"Unified RAG collection\
+          \ for documentation and code\")\n        collection = Collection(collection_name,\
+          \ schema)\n        print(f\"Created new collection: {collection_name}\"\
+          )\n    else:\n        collection = Collection(collection_name)\n       \
+          \ print(f\"Using existing collection: {collection_name}\")\n\n    partition_name\
+          \ = \"code\"\n    if not collection.has_partition(partition_name):\n   \
+          \     collection.create_partition(partition_name)\n        print(f\"Created\
+          \ partition: {partition_name}\")\n    else:\n        print(f\"Partition\
           \ already exists: {partition_name}\")\n\n    records = []\n    timestamp\
           \ = int(datetime.now().timestamp())\n    repo_names_seen = set()\n\n   \
           \ with open(embedded_data.path, \"r\", encoding=\"utf-8\") as f:\n     \
@@ -477,22 +485,20 @@ deploymentSpec:
           \               \"last_updated\": timestamp,\n                \"language\"\
           : record.get(\"language\", \"\"),\n                \"code_metadata\": record.get(\"\
           code_metadata\", None),\n            })\n\n    if records:\n        collection.load()\n\
-          \        for repo in repo_names_seen:\n            try:\n              \
-          \  expr = f'repo_name == \"{repo}\"'\n                collection.delete(expr,\
-          \ partition_name=partition_name)\n                print(f\"Deleted old chunks\
-          \ for repo '{repo}' from partition '{partition_name}'\")\n            except\
-          \ Exception as e:\n                print(f\"No old data to delete for '{repo}':\
-          \ {e}\")\n\n        batch_size = 1000\n        for i in range(0, len(records),\
-          \ batch_size):\n            batch = records[i:i + batch_size]\n        \
-          \    collection.insert(batch, partition_name=partition_name)\n\n       \
-          \ collection.flush()\n\n        try:\n            collection.index()\n \
-          \       except Exception:\n            index_params = {\n              \
-          \  \"metric_type\": \"COSINE\",\n                \"index_type\": \"IVF_FLAT\"\
-          ,\n                \"params\": {\"nlist\": min(1024, max(100, len(records)))}\n\
-          \            }\n            collection.create_index(\"vector\", index_params)\n\
-          \n        collection.load()\n        print(f\"Inserted {len(records)} records\
-          \ into partition '{partition_name}'. Total: {collection.num_entities}\"\
-          )\n\n"
+          \        for repo in repo_names_seen:\n            expr = f'repo_name ==\
+          \ \"{repo}\"'\n            deleted = collection.delete(expr, partition_name=partition_name)\n\
+          \            print(f\"Deleted old chunks for repo '{repo}' from partition\
+          \ '{partition_name}': {deleted}\")\n\n        batch_size = 1000\n      \
+          \  for i in range(0, len(records), batch_size):\n            batch = records[i:i\
+          \ + batch_size]\n            collection.insert(batch, partition_name=partition_name)\n\
+          \n        collection.flush()\n\n        if not collection.has_index():\n\
+          \            index_params = {\n                \"metric_type\": \"COSINE\"\
+          ,\n                \"index_type\": \"IVF_FLAT\",\n                \"params\"\
+          : {\"nlist\": min(1024, max(100, len(records)))}\n            }\n      \
+          \      collection.create_index(\"vector\", index_params)\n            print(f\"\
+          Created vector index\")\n\n        collection.load()\n        print(f\"\
+          Inserted {len(records)} records into partition '{partition_name}'. Total:\
+          \ {collection.num_entities}\")\n\n"
         image: python:3.9
 pipelineInfo:
   description: Code ingestion pipeline for parsing and embedding Kubeflow release

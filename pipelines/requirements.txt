@@ -1,3 +1,4 @@
+pymilvus
 kfp
 requests
 beautifulsoup4
@@ -8,3 +9,4 @@ feast[milvus]
 pandas
 numpy
 pyyaml
+

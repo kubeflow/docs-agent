@@ -1,7 +1,5 @@
 import kfp
 from kfp import dsl
-from kfp.dsl import *
-from typing import *
 
 
 @dsl.component(
@@ -14,18 +12,19 @@ def download_code_repository(
     github_token: str,
     code_data: dsl.Output[dsl.Dataset]
 ):
-    import subprocess
+    import subprocess 
+    import tempfile
     import os
     import json
 
-    clone_dir = "/tmp/repo_clone"
+    clone_dir = tempfile.mkdtemp()
     repo_url = f"https://github.com/{repo_owner}/{repo_name}.git"
     if github_token:
         repo_url = f"https://{github_token}@github.com/{repo_owner}/{repo_name}.git"
 
-    subprocess.run(
+    subprocess.run(  
         ["git", "clone", "--depth", "1", "--branch", branch, repo_url, clone_dir],
-        check=True, capture_output=True, text=True
+        check=True, capture_output=True, text=True, timeout=600
     )
     print(f"Cloned {repo_owner}/{repo_name} @ {branch}")
 
@@ -57,7 +56,8 @@ def download_code_repository(
             try:
                 with open(abs_path, "r", encoding="utf-8") as f:
                     content = f.read()
-            except (UnicodeDecodeError, IOError):
+            except (UnicodeDecodeError, IOError) as exc:
+                print(f"Skipping unreadable file {rel_path}: {exc}")
                 continue
 
             files.append({
@@ -83,9 +83,7 @@ def parse_and_chunk_code(
     parsed_data: dsl.Output[dsl.Dataset]
 ):
     import json
-    import os
     import re
-    from typing import List, Dict, Any, Optional
 
     KNOWN_TOP_DIRS = {"applications", "common", "experimental"}
 
@@ -113,10 +111,10 @@ def parse_and_chunk_code(
             import yaml
             dumped = yaml.dump({key: value}, default_flow_style=False, allow_unicode=True)
             return dumped.strip()
-        except Exception:
+        except (yaml.YAMLError, TypeError, ValueError):
             return f"{key}: {value}"
 
-    def _extract_labels(doc):
+    def _extract_metadata_labels(doc):
         metadata = doc.get("metadata", {}) or {}
         labels = metadata.get("labels", {}) or {}
         annotations = metadata.get("annotations", {}) or {}
@@ -138,7 +136,8 @@ def parse_and_chunk_code(
                 continue
             try:
                 doc = yaml.safe_load(raw_doc)
-            except yaml.YAMLError:
+            except yaml.YAMLError as exc:
+                print(f"Skipping malformed YAML document in {file_path}: {exc}")
                 continue
             if not isinstance(doc, dict):
                 continue
@@ -149,7 +148,7 @@ def parse_and_chunk_code(
             name = metadata_block.get("name", "")
             namespace = metadata_block.get("namespace", "")
             component = _infer_component_name(file_path)
-            labels_map = _extract_labels(doc)
+            labels_map = _extract_metadata_labels(doc)
 
             header_parts = []
             if kind and name:
@@ -200,7 +199,7 @@ def parse_and_chunk_code(
         import yaml
         try:
             doc = yaml.safe_load(content)
-        except Exception:
+        except yaml.YAMLError:
             doc = {}
         if not isinstance(doc, dict):
             doc = {}
@@ -254,6 +253,8 @@ def parse_and_chunk_code(
             code_meta["has_patches"] = True
         if config_map_gen:
             code_meta["config_map_generators"] = [g.get("name", "") for g in config_map_gen if isinstance(g, dict)]
+        if secret_gen:
+            code_meta["secret_generators"] = [g.get("name", "") for g in secret_gen if isinstance(g, dict)]
 
         return [{"language": "yaml", "code_metadata": code_meta, "content_text": chunk_text[:4000]}]
 
@@ -262,10 +263,10 @@ def parse_and_chunk_code(
         from_images = re.findall(r"^FROM\s+(\S+)(?:\s+[Aa][Ss]\s+(\S+))?", content, re.MULTILINE)
         expose_ports = re.findall(r"^EXPOSE\s+(.+)", content, re.MULTILINE)
         entrypoints = re.findall(r"^(?:ENTRYPOINT|CMD)\s+(.+)", content, re.MULTILINE)
-        labels = re.findall(r'^LABEL\s+(.+)', content, re.MULTILINE)
+        docker_labels = re.findall(r'^LABEL\s+(.+)', content, re.MULTILINE)
         args = re.findall(r'^ARG\s+(\S+)', content, re.MULTILINE)
         workdirs = re.findall(r'^WORKDIR\s+(\S+)', content, re.MULTILINE)
-        healthchecks = re.findall(r'^HEALTHCHECK\s+(.+)', content, re.MULTILINE)
+        healthcheck_cmds = re.findall(r'^HEALTHCHECK\s+(.+)', content, re.MULTILINE)
         envs = re.findall(r'^ENV\s+(\S+)', content, re.MULTILINE)
 
         base_imgs = [img[0] for img in from_images]
@@ -302,6 +303,12 @@ def parse_and_chunk_code(
             code_meta["entrypoint"] = entrypoints[-1].strip()
         if args:
             code_meta["build_args"] = args[:10]
+        if docker_labels:
+            code_meta["labels_raw"] = docker_labels[:5]
+        if workdirs:
+            code_meta["workdir"] = workdirs[-1]
+        if healthcheck_cmds:
+            code_meta["has_healthcheck"] = True
         if envs:
             code_meta["env_vars"] = envs[:10]
 
@@ -314,7 +321,7 @@ def parse_and_chunk_code(
 
         sourced_files = re.findall(r'^\s*(?:source|\\.)\s+["\']?([^\s"\']+)', content, re.MULTILINE)
         export_vars = re.findall(r'^\s*export\s+(\w+)=', content, re.MULTILINE)
-        set_flags = re.findall(r'^\s*set\s+(-\w+)', content, re.MULTILINE)
+        shell_set_flags = re.findall(r'^\s*set\s+(-\w+)', content, re.MULTILINE)
 
         function_pattern = re.compile(
             r"^(?:function\s+(\w[\w-]*)\s*(?:\(\s*\))?\s*\{|(\w[\w-]*)\s*\(\s*\)\s*\{)",
@@ -337,6 +344,8 @@ def parse_and_chunk_code(
             base_meta["sourced_files"] = sourced_files
         if export_vars:
             base_meta["exported_variables"] = export_vars[:15]
+        if shell_set_flags:
+            base_meta["set_flags"] = shell_set_flags
 
         if len(function_matches) < 2:
             header = "\n".join(base_header_parts)
@@ -486,8 +495,8 @@ def store_code_milvus(
             FieldSchema(name="content_text", dtype=DataType.VARCHAR, max_length=4000),
             FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=768),
             FieldSchema(name="last_updated", dtype=DataType.INT64),
-            FieldSchema(name="language", dtype=DataType.VARCHAR, max_length=64), # for code 
-            FieldSchema(name="code_metadata", dtype=DataType.JSON, nullable=True), # for code 
+            FieldSchema(name="language", dtype=DataType.VARCHAR, max_length=64),
+            FieldSchema(name="code_metadata", dtype=DataType.JSON, nullable=True),
         ]
         schema = CollectionSchema(fields, "Unified RAG collection for documentation and code")
         collection = Collection(collection_name, schema)
@@ -526,31 +535,32 @@ def store_code_milvus(
             })
 
     if records:
-        collection.load()
-        for repo in repo_names_seen:
-            try:
+        # Only attempt to delete old records if the collection has an index (and can be loaded)
+        if collection.has_index():
+            collection.load()
+            for repo in repo_names_seen:
                 expr = f'repo_name == "{repo}"'
-                collection.delete(expr, partition_name=partition_name)
-                print(f"Deleted old chunks for repo '{repo}' from partition '{partition_name}'")
-            except Exception as e:
-                print(f"No old data to delete for '{repo}': {e}")
+                deleted = collection.delete(expr, partition_name=partition_name)
+                print(f"Deleted old chunks for repo '{repo}' from partition '{partition_name}': {deleted}")
+        else:
+            print("Fresh collection or no index found. Skipping initial deletion step.")
 
         batch_size = 1000
+
         for i in range(0, len(records), batch_size):
             batch = records[i:i + batch_size]
             collection.insert(batch, partition_name=partition_name)
 
         collection.flush()
 
-        try:
-            collection.index()
-        except Exception:
+        if not collection.has_index():
             index_params = {
                 "metric_type": "COSINE",
                 "index_type": "IVF_FLAT",
                 "params": {"nlist": min(1024, max(100, len(records)))}
             }
             collection.create_index("vector", index_params)
+            print(f"Created vector index")
 
         collection.load()
         print(f"Inserted {len(records)} records into partition '{partition_name}'. Total: {collection.num_entities}")
@@ -585,7 +595,7 @@ def code_ingestion_pipeline(
         parsed_data=parse_task.outputs["parsed_data"],
     )
 
-    store_task = store_code_milvus(
+    _store_task = store_code_milvus(
         embedded_data=embed_task.outputs["embedded_data"],
         milvus_host=milvus_host,
         milvus_port=milvus_port,
