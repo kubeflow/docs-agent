@@ -295,7 +295,17 @@ def chunk_and_embed(
             # Split into chunks
             chunks = text_splitter.split_text(content)
 
-            print(f"File: {file_data['path']} -> {len(chunks)} chunks (avg: {sum(len(c) for c in chunks)/len(chunks):.0f} chars)")
+
+            chunks = [c for c in chunks if c and c.strip()]
+
+
+            if not chunks:
+                print(f"Skipping file due to no valid chunks: {file_data['path']}")
+                continue
+
+            avg_len = sum(len(c) for c in chunks) / len(chunks)
+
+            print(f"File: {file_data['path']} -> {len(chunks)} chunks (avg: {avg_len:.0f} chars)")
 
             # Create embeddings
             for chunk_idx, chunk in enumerate(chunks):
