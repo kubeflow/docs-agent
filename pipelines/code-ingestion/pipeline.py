@@ -165,7 +165,7 @@ def parse_and_chunk_code(
             header = "\n".join(header_parts)
 
             code_meta = {
-                "code_entity_type": kind if kind else "k8s_resource",
+                "code_entity_type": kind if kind else "",
                 "code_entity_name": name,
                 "component_name": component,
             }
