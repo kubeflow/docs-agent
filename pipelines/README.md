@@ -1,13 +1,15 @@
-# Kubeflow Documentation RAG Pipelines
+# Kubeflow RAG Pipelines
 
-This directory contains Kubeflow Pipelines for processing Kubeflow documentation and building a Retrieval-Augmented Generation (RAG) system.
+This directory contains Kubeflow Pipelines for processing Kubeflow documentation and code repositories into a unified RAG system.
 
 ## 📁 Files Overview
 
 - **`kubeflow-pipeline.py`** - Full rebuild pipeline (processes entire documentation corpus)
 - **`incremental-pipeline.py`** - Incremental pipeline (processes only changed files)
+- **`code-ingestion/pipeline.py`** - Code ingestion pipeline (parses code repositories)
 - **`github_rag_pipeline.yaml`** - Compiled full pipeline
 - **`github_rag_incremental_pipeline.yaml`** - Compiled incremental pipeline
+- **`code-ingestion/code_ingestion_pipeline.yaml`** - Compiled code ingestion pipeline
 
 ## 🔄 Pipeline Overview
 
@@ -266,6 +268,71 @@ def process_github_webhook(webhook_payload):
 - CI/CD integration
 - Real-time updates from webhooks
 - Efficient processing of small changes
+
+---
+
+## Code Ingestion Pipeline (`code-ingestion/pipeline.py`)
+
+**Purpose**: Parse code repositories (starting with `kubeflow/manifests`) using structure-aware parsers and store embeddings in the `code` partition of the unified `docs_rag` collection.
+
+### Components
+
+1. **Download Code Repository** - Clones the repo with `git clone --depth 1`
+2. **Parse & Chunk** - AST-aware parsing for YAML manifests, Kustomization files, Dockerfiles, and shell scripts
+3. **Embed Code Chunks** - Generates 768-dim embeddings with `all-mpnet-base-v2`
+4. **Store Code in Milvus** - Inserts into the `code` partition with upsert logic (deletes old chunks before inserting)
+
+### Structure-Aware Parsing
+
+| File Type | Parser | What It Extracts |
+|-----------|--------|------------------|
+| YAML manifests | `YAMLManifestParser` | `kind`, `name`, `namespace`, `apiVersion`, labels |
+| Kustomization | `KustomizationParser` | Resources, bases, images, patches, namespace |
+| Dockerfile | `DockerfileParser` | Base images, multi-stage names, ports, args, healthchecks |
+| Shell scripts | `ShellScriptParser` | Functions (individual chunks), `source` paths, `export` vars |
+
+All metadata is stored in a `code_metadata` JSON field (nullable). Documentation records set this to `null`.
+
+### Usage
+
+```bash
+python code-ingestion/pipeline.py
+```
+
+### Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `repo_owner` | `kubeflow` | GitHub repository owner |
+| `repo_name` | `manifests` | GitHub repository name |
+| `branch` | `master` | Branch to clone |
+| `github_token` | `""` | GitHub token (for private repos) |
+| `milvus_host` | `milvus-standalone-final.docs-agent.svc.cluster.local` | Milvus host |
+| `milvus_port` | `19530` | Milvus port |
+| `collection_name` | `docs_rag` | Milvus collection name |
+
+---
+
+## Unified Schema
+
+All pipelines share the same Milvus collection (`docs_rag`) with a unified schema:
+
+| Field | Type | Used By |
+|-------|------|--------|
+| `id` | INT64 (auto) | All |
+| `file_unique_id` | VARCHAR(512) | All |
+| `repo_name` | VARCHAR(256) | All |
+| `file_path` | VARCHAR(512) | All |
+| `file_name` | VARCHAR(256) | All |
+| `citation_url` | VARCHAR(1024) | All |
+| `chunk_index` | INT64 | All |
+| `content_text` | VARCHAR(4000) | All |
+| `vector` | FLOAT_VECTOR(768) | All |
+| `last_updated` | INT64 | All |
+| `language` | VARCHAR(64) | All (e.g. `yaml`, `shell`, `markdown`) |
+| `code_metadata` | JSON (nullable) | Code only (`null` for docs) |
+
+The code ingestion pipeline stores data in a `code` partition. Documentation uses the default partition.
 
 ---
 

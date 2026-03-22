@@ -232,8 +232,10 @@ def chunk_and_embed_incremental(
                     'file_name': file_data['file_name'],
                     'citation_url': citation_url[:1024],
                     'chunk_index': chunk_idx,
-                    'content_text': chunk[:2000],
-                    'embedding': embedding
+                    'content_text': chunk[:4000],
+                    'embedding': embedding,
+                    'language': 'markdown' if file_data['path'].endswith('.md') else 'html',
+                    'code_metadata': None
                 })
 
     print(f"Created {len(records)} total chunks for incremental update")
@@ -272,9 +274,11 @@ def store_milvus_incremental(
             FieldSchema(name="file_name", dtype=DataType.VARCHAR, max_length=256),
             FieldSchema(name="citation_url", dtype=DataType.VARCHAR, max_length=1024),
             FieldSchema(name="chunk_index", dtype=DataType.INT64),
-            FieldSchema(name="content_text", dtype=DataType.VARCHAR, max_length=2000),
+            FieldSchema(name="content_text", dtype=DataType.VARCHAR, max_length=4000),
             FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=768),
-            FieldSchema(name="last_updated", dtype=DataType.INT64)
+            FieldSchema(name="last_updated", dtype=DataType.INT64),
+            FieldSchema(name="language", dtype=DataType.VARCHAR, max_length=64),
+            FieldSchema(name="code_metadata", dtype=DataType.JSON, nullable=True)
         ]
 
         schema = CollectionSchema(fields, "RAG collection for documentation")
@@ -303,7 +307,9 @@ def store_milvus_incremental(
                 "chunk_index": record["chunk_index"],
                 "content_text": record["content_text"],
                 "vector": record["embedding"],
-                "last_updated": timestamp
+                "last_updated": timestamp,
+                "language": record.get("language", ""),
+                "code_metadata": record.get("code_metadata", None)
             })
 
     if records:

@@ -7,3 +7,4 @@ torch
 feast[milvus]
 pandas
 numpy
+pyyaml

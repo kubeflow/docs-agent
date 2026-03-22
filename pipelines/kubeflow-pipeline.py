@@ -348,13 +348,15 @@ def store_milvus(
         FieldSchema(name="file_name", dtype=DataType.VARCHAR, max_length=256),
         FieldSchema(name="citation_url", dtype=DataType.VARCHAR, max_length=1024),
         FieldSchema(name="chunk_index", dtype=DataType.INT64),
-        FieldSchema(name="content_text", dtype=DataType.VARCHAR, max_length=2000),
+        FieldSchema(name="content_text", dtype=DataType.VARCHAR, max_length=4000),
         FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=768),  # Updated for all-mpnet-base-v2
-        FieldSchema(name="last_updated", dtype=DataType.INT64)
+        FieldSchema(name="last_updated", dtype=DataType.INT64),
+        FieldSchema(name="language", dtype=DataType.VARCHAR, max_length=64),
+        FieldSchema(name="code_metadata", dtype=DataType.JSON, nullable=True),
     ]
 
     # Create new collection with correct schema
-    schema = CollectionSchema(fields, "RAG collection for documentation")
+    schema = CollectionSchema(fields, "Unified RAG collection for documentation and code")
     collection = Collection(collection_name, schema)
     print(f"Created new collection: {collection_name}")
 
@@ -374,7 +376,9 @@ def store_milvus(
                 "chunk_index": record["chunk_index"],
                 "content_text": record["content_text"],
                 "vector": record["embedding"],
-                "last_updated": timestamp
+                "last_updated": timestamp,
+                "language": "",
+                "code_metadata": None,
             })
 
     if records:
