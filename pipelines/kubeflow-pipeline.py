@@ -230,7 +230,7 @@ def chunk_and_embed(
     import re
     import torch
     from sentence_transformers import SentenceTransformer
-    from langchain_text_splitter import RecursiveCharacterTextSplitter
+    from langchain.text_splitter import RecursiveCharacterTextSplitter
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model = SentenceTransformer('sentence-transformers/all-mpnet-base-v2', device=device)
@@ -421,12 +421,23 @@ def github_rag_pipeline(
     )
     
     issues_task = download_github_issues(
-    repos="kubeflow/kubeflow,kubeflow/pipelines",
+    repos=f"{repo_owner}/{repo_name}",
     labels="",
     state="open",
     max_issues_per_repo=50,
     github_token=github_token
     )
+    
+    issues_chunk_task = chunk_and_embed(
+    github_data=issues_task.outputs["issues_data"],
+    repo_name="kubeflow-issues",
+    base_url="https://github.com",
+    chunk_size=chunk_size,
+    chunk_overlap=chunk_overlap
+    )
+    
+    issues_chunk_task.after(issues_task)
+    
     # Chunk and embed the content
     chunk_task = chunk_and_embed(
         github_data=download_task.outputs["github_data"],
@@ -435,14 +446,8 @@ def github_rag_pipeline(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap
     )
-    issues_chunk_task = chunk_and_embed(
-    github_data=issues_task.outputs["issues_data"],
-    repo_name="kubeflow-issues",
-    base_url="https://github.com",
-    chunk_size=chunk_size,
-    chunk_overlap=chunk_overlap
-    )
-    issues_chunk_task.after(issues_task)
+    
+    
     # Store in Milvus
     store_task = store_milvus(
         embedded_data=chunk_task.outputs["embedded_data"],
