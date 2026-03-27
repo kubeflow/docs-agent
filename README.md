@@ -9,11 +9,13 @@ The official LLM implementation of the Kubeflow Documentation Assistant powered 
 - [Overview](#overview)
 - [Architecture](#architecture)
 - [Prerequisites](#prerequisites)
-- [Installation](#installation)
+- [Local Development Setup](#local-development-setup)
+- [Installation (Kubernetes)](#installation)
   - [Milvus Vector Database](#milvus-vector-database)
   - [KServe Inference Service](#kserve-inference-service)
   - [Kubeflow Pipelines](#kubeflow-pipelines)
   - [API Server](#api-server)
+- [Local vs Production](#local-vs-production)
 - [Usage](#usage)
 - [Configuration](#configuration)
 - [Troubleshooting](#troubleshooting)
@@ -58,7 +60,96 @@ Kubeflow users often struggle to find relevant information across the extensive 
 - GPU nodes (for LLM inference)
 - SSL certificate (for HTTPS API)
 
+## Local Development Setup
+
+For local development without a Kubernetes cluster, you can use Docker Compose to run the full stack locally.
+
+### Prerequisites
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+- [Ollama](https://ollama.ai/) (for local LLM inference)
+
+### 1. Install Ollama
+
+Ollama runs the Llama 3.1 model locally on your machine.
+
+**macOS:**
+```bash
+brew install ollama
+```
+
+**Linux:**
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+Start the Ollama server and pull the model:
+```bash
+ollama serve
+ollama pull llama3.1:8b
+```
+
+### 2. Clone and Configure
+
+```bash
+git clone https://github.com/kubeflow/docs-agent.git
+cd docs-agent
+cp .env.example .env
+```
+
+### 3. Start All Services
+
+```bash
+docker-compose up --build -d
+```
+
+This starts:
+- **Milvus** — vector database (port `19530`)
+- **etcd** — metadata storage for Milvus
+- **MinIO** — object storage for Milvus
+- **API Server** — FastAPI server (port `8000`) with hot reload
+
+> **Note:** The `--build` flag is only needed on the first run or after changing the Dockerfile/requirements. For subsequent runs, use `docker-compose up -d`.
+
+Verify all services are running:
+```bash
+docker-compose ps
+```
+
+### 4. Ingest Documentation
+
+Populate Milvus with Kubeflow documentation:
+```bash
+docker exec docs-agent-api python local_ingest.py
+```
+
+This is a one-time step. Re-run only when documentation is updated.
+
+### 5. Test
+
+```bash
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "What is Kubeflow?", "stream": false}'
+```
+
+### Docker Compose Commands
+
+| Command | Description |
+|---------|-------------|
+| `docker-compose up -d` | Start all services in background |
+| `docker-compose up --build -d` | Rebuild and start (after Dockerfile/requirements change) |
+| `docker-compose ps` | Check service status |
+| `docker-compose logs -f` | View logs |
+| `docker-compose logs -f api-server` | View API server logs only |
+| `docker-compose down` | Stop all services |
+| `docker-compose down -v` | Stop and remove all data |
+
+---
+
 ## Installation
+
+The following instructions are for deploying to a **Kubernetes cluster** in production.
 
 ### Milvus Vector Database
 
@@ -535,6 +626,19 @@ print(f"Response: {data['response']}")
 if data.get('citations'):
     print(f"Sources: {data['citations']}")
 ```
+
+## Local vs Production
+
+| Component | Local Development | Production (Kubernetes) |
+|-----------|------------------|------------------------|
+| **Vector DB** | Docker Compose (Milvus standalone) | Helm chart on Kubernetes |
+| **LLM** | Ollama (runs on CPU/Apple Silicon) | KServe + vLLM (NVIDIA GPU) |
+| **Data Ingestion** | `scripts/local_ingest.py` | Kubeflow Pipelines |
+| **API Server** | `python server-https/app.py` | Kubernetes Deployment |
+| **Service Mesh** | Not needed | Istio (mTLS + RBAC) |
+| **SSL** | Plain HTTP | HTTPS with certificates |
+
+Both setups use the same API format and produce identical results. The local setup uses lightweight alternatives that don't require Kubernetes or GPUs.
 
 ## Configuration
 
