@@ -311,6 +311,26 @@ A better improvement would be using the embedding model as a service where users
 - Enable better caching and optimization
 - Improve scalability
 
+
+
+### Shared embedding and vector services
+
+The docs-agent now centralizes its embedding model and Milvus client:
+
+- `server/vector_services/embedding.py` exposes a shared `SentenceTransformer`
+  instance with a small in-process cache for repeated texts.
+- `server/vector_services/milvus_client.py` manages a shared Milvus connection
+  and collection handle, and provides a helper for vector search.
+
+This design:
+
+- Reduces cold-start latency and repeated model loads.
+- Encourages reuse of a single “vector layer” across agent tools and KFP
+  components.
+- Makes it easy to evolve toward running the embedding model as a separate
+  service (e.g., via KServe or MCP) by swapping only the implementation of
+  `vector_services/embedding.py`.
+  
 ### API Server
 
 Two API implementations are provided for different use cases:

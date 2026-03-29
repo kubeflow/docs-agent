@@ -7,9 +7,44 @@ from websockets.server import serve
 from websockets.exceptions import ConnectionClosedError
 import logging
 from typing import Dict, Any, List
-from sentence_transformers import SentenceTransformer
-from pymilvus import connections, Collection
 
+from fastapi import FastAPI, HTTPException
+from pymilvus import connections, Collection
+from sentence_transformers import SentenceTransformer
+
+from server.vector_services.embedding import embed_text
+from server.vector_services.milvus_client import search_vectors
+
+app = FastAPI()
+
+
+@app.get("/search_docs")
+async def search_docs(q: str, top_k: int = 5):
+    if not q:
+        raise HTTPException(status_code=400, detail="Query text 'q' is required")
+
+    # 1) embed query via shared SentenceTransformer
+    query_embedding = embed_text(q)
+
+    # 2) search Milvus via shared client
+    milvus_results = search_vectors(
+        query_vectors=[query_embedding],
+        top_k=top_k,
+        output_fields=["doc_id", "title", "path"],
+    )
+
+    hits = []
+    for hit in milvus_results[0]:
+        hits.append(
+            {
+                "doc_id": hit.entity.get("doc_id"),
+                "title": hit.entity.get("title"),
+                "path": hit.entity.get("path"),
+                "score": float(hit.distance),
+            }
+        )
+
+    return {"query": q, "results": hits}
 # Config
 KSERVE_URL = os.getenv("KSERVE_URL", "http://llama.docs-agent.svc.cluster.local/openai/v1/chat/completions")
 MODEL = os.getenv("MODEL", "llama3.1-8B")
