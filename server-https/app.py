@@ -4,7 +4,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 import uvicorn
 from typing import Dict, Any, List, Optional, AsyncGenerator
 from sentence_transformers import SentenceTransformer
@@ -110,6 +110,12 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     message: str
     stream: Optional[bool] = True
+
+    @validator("message")
+    def message_must_not_be_empty(cls, v):
+        if not v or not v.strip():
+            raise ValueError("message must not be empty or whitespace-only")
+        return v.strip()
 
 def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
     """Execute a semantic search in Milvus and return structured JSON serializable results."""
