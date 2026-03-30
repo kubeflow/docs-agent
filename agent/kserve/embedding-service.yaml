@@ -1,0 +1,25 @@
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: embedding-service
+  namespace: docs-agent
+  annotations:
+    autoscaling.knative.dev/scaleToZero: "false"
+spec:
+  predictor:
+    minReplicas: 1
+    maxReplicas: 2
+    model:
+      modelFormat:
+        name: huggingface
+      runtime: llm-runtime
+      args:
+        - --model_id=sentence-transformers/all-mpnet-base-v2
+        - --backend=huggingface
+      resources:
+        requests:
+          cpu: "2"
+          memory: "4Gi"
+        limits:
+          cpu: "4"
+          memory: "8Gi"

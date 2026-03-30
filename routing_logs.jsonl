@@ -1,0 +1,6 @@
+{"timestamp": "2026-03-28T06:27:42.206133", "question": "What is Kubeflow Pipelines and how does it work?", "route": "docs", "doc_score": 2, "code_score": 0}
+{"timestamp": "2026-03-28T06:27:42.915005", "question": "How do I fix a CrashLoopBackOff error in my KServe deployment?", "route": "code", "doc_score": 0, "code_score": 4}
+{"timestamp": "2026-03-28T06:30:14.385607", "question": "What is Kubeflow Pipelines and how does it work?", "route": "docs", "doc_score": 2, "code_score": 0}
+{"timestamp": "2026-03-28T06:30:14.519123", "question": "How do I fix a CrashLoopBackOff error in my KServe deployment?", "route": "code", "doc_score": 0, "code_score": 4}
+{"timestamp": "2026-03-28T06:30:14.606369", "question": "Show me the webhook configuration YAML for notebooks", "route": "code", "doc_score": 0, "code_score": 3}
+{"timestamp": "2026-03-28T16:40:35.342056", "question": "How do I install Kubeflow?", "route": "both", "doc_score": 0, "code_score": 0}
