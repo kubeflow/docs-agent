@@ -7,6 +7,7 @@ from websockets.server import serve
 from websockets.exceptions import ConnectionClosedError
 import logging
 from typing import Dict, Any, List
+from core_agent.graph import agent_graph # Import shared core agent graph
 from sentence_transformers import SentenceTransformer
 from pymilvus import connections, Collection
 
