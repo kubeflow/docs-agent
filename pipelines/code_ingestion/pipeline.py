@@ -30,7 +30,7 @@ def download_code_repository(
 
     VALID_EXTENSIONS = {".yaml", ".yml", ".sh", ".bash"}
     VALID_FILENAMES = {"Dockerfile"}
-    SKIP_DIRS = {"vendor", ".github", "tests", "test", "node_modules", ".git", "__pycache__"}
+    SKIP_DIRS = {"vendor", ".github", "tests", "test", "node_modules", ".git", "__pycache__","releases"}
 
     def should_skip_dir(dirname):
         return dirname in SKIP_DIRS or dirname.startswith(".")
