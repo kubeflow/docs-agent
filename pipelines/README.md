@@ -35,9 +35,12 @@ The pipelines download documentation from GitHub repositories, process the conte
 
 ### Usage
 
+First, ensure your workspace virtual environment is activated (`source .venv/bin/activate`), then run:
+
 ```bash
-uv run python pipelines/kubeflow-pipeline.py
+python pipelines/kubeflow-pipeline.py
 ```
+*(Alternatively, use `uv run python pipelines/kubeflow-pipeline.py`)*
 
 ### Parameters
 

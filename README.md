@@ -432,19 +432,22 @@ The API servers (`server` and `server-https`) and pipelines are managed as membe
 
 1. **Deploy Milvus and KServe** (as described above)
 
-2. **Run the Pipeline**:
+2. **Install dependencies and activate the virtual environment**:
    ```bash
-   uv run python pipelines/kubeflow-pipeline.py
+   uv sync --all-packages
+   source .venv/bin/activate
    ```
 
-3. **Start the API Server**:
+3. **Run the Pipeline and API Servers**:
    ```bash
-   # WebSocket API
-   uv run python server/app.py
+   python pipelines/kubeflow-pipeline.py
 
-   # HTTPS API
-   uv run python server-https/app.py
+   # API Servers
+   python server/app.py          # WebSocket API
+   python server-https/app.py    # HTTPS API
    ```
+   
+   *(Note: You can also use `uv run python <script>` if you prefer not to activate the environment.)*
 
 ### API Usage Examples
 
@@ -704,14 +707,16 @@ We welcome contributions! Please see our [contributing guidelines](CONTRIBUTING.
 
 1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/)
 2. Fork and clone the repository
-3. Install all dependencies:
+3. Install all dependencies and activate the virtual environment:
    ```bash
    uv sync --all-packages
+   source .venv/bin/activate
    ```
-4. Run any script through the workspace virtual environment:
+4. Run any script normally:
    ```bash
-   uv run python server/app.py
+   python server/app.py
    ```
+   *(Alternatively, use `uv run python <script>`)*
 5. To add a dependency to a specific component:
    ```bash
    uv add --package docs-agent-server some-package
