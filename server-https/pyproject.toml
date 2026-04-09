@@ -1,0 +1,15 @@
+[project]
+name = "docs-agent-server-https"
+version = "0.1.0"
+description = "FastAPI HTTPS server for the Kubeflow Documentation Agent"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic",
+    "httpx",
+    "pymilvus",
+    "sentence-transformers",
+    "torch",
+    "numpy",
+]

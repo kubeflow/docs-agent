@@ -36,7 +36,7 @@ The pipelines download documentation from GitHub repositories, process the conte
 ### Usage
 
 ```bash
-python kubeflow-pipeline.py
+uv run python pipelines/kubeflow-pipeline.py
 ```
 
 ### Parameters
@@ -369,6 +369,7 @@ print(f"Debug: Processing {len(file_paths_list)} files")
 
 ## Requirements
 
+- [uv](https://docs.astral.sh/uv/) for dependency management (dependencies defined in `pyproject.toml`)
 - Kubeflow Pipelines
 - Milvus vector database
 - GPU nodes (for embedding generation)

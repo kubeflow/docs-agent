@@ -1,12 +1,16 @@
 FROM python:3.11-slim
 
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
 # Create non-root user
 RUN useradd -m -u 1000 appuser
 WORKDIR /app
 
-# Install deps
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy dependency definition and install with uv
+COPY pyproject.toml ./
+RUN uv pip install --system --no-cache \
+    --extra-index-url https://download.pytorch.org/whl/cpu \
+    -r pyproject.toml
 
 # Writable caches for HF/Transformers/Sentence-Transformers
 ENV HF_HOME=/home/appuser/.cache/huggingface \

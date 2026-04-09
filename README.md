@@ -52,6 +52,8 @@ Kubeflow users often struggle to find relevant information across the extensive 
 
 ## Prerequisites
 
+- [uv](https://docs.astral.sh/uv/) (Python package manager)
+- Python 3.9+
 - Kubernetes cluster (1.20+)
 - Helm 3.x
 - Kubeflow Pipelines
@@ -405,6 +407,25 @@ data: {"type": "done"}
 
 **Critical**: Both APIs require SSL certificates from a trusted Certificate Authority. Without proper SSL certificates, browsers will block WebSocket connections and HTTPS requests.
 
+#### Dependency Management (uv Workspaces)
+
+The API servers (`server` and `server-https`) and pipelines are managed as members of a `uv` workspace defined in the root `pyproject.toml`.
+
+- **To add a dependency to the WebSocket Server**: 
+  ```bash
+  uv add --package docs-agent-server <package-name>
+  ```
+- **To add a dependency to the HTTPS Server**: 
+  ```bash
+  uv add --package docs-agent-server-https <package-name>
+  ```
+- **Local Development**: Because they are workspace members, running `uv sync --all-packages` at the root will install dependencies for all APIs into a shared `.venv`.
+- **Building Docker Images**: The Dockerfiles use `uv` internally for blazing-fast installs. You build them from the root directory by passing the member folder as the build context:
+  ```bash
+  docker build -t docs-agent-server:latest server/
+  docker build -t docs-agent-server-https:latest server-https/
+  ```
+
 ## Usage
 
 ### Starting the Services
@@ -413,16 +434,16 @@ data: {"type": "done"}
 
 2. **Run the Pipeline**:
    ```bash
-   python pipelines/kubeflow-pipeline.py
+   uv run python pipelines/kubeflow-pipeline.py
    ```
 
 3. **Start the API Server**:
    ```bash
    # WebSocket API
-   python server/app.py
+   uv run python server/app.py
 
    # HTTPS API
-   python server-https/app.py
+   uv run python server-https/app.py
    ```
 
 ### API Usage Examples
@@ -681,11 +702,21 @@ We welcome contributions! Please see our [contributing guidelines](CONTRIBUTING.
 
 ### Development Setup
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
+1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/)
+2. Fork and clone the repository
+3. Install all dependencies:
+   ```bash
+   uv sync --all-packages
+   ```
+4. Run any script through the workspace virtual environment:
+   ```bash
+   uv run python server/app.py
+   ```
+5. To add a dependency to a specific component:
+   ```bash
+   uv add --package docs-agent-server some-package
+   ```
+6. Create a feature branch, make your changes, and submit a pull request
 
 ## License
 
