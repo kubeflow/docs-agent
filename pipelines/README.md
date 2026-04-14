@@ -35,9 +35,12 @@ The pipelines download documentation from GitHub repositories, process the conte
 
 ### Usage
 
+First, ensure your workspace virtual environment is activated (`source .venv/bin/activate`), then run:
+
 ```bash
-python kubeflow-pipeline.py
+python pipelines/kubeflow-pipeline.py
 ```
+*(Alternatively, use `uv run python pipelines/kubeflow-pipeline.py`)*
 
 ### Parameters
 
@@ -369,6 +372,7 @@ print(f"Debug: Processing {len(file_paths_list)} files")
 
 ## Requirements
 
+- [uv](https://docs.astral.sh/uv/) for dependency management (dependencies defined in `pyproject.toml`)
 - Kubeflow Pipelines
 - Milvus vector database
 - GPU nodes (for embedding generation)

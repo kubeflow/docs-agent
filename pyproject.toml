@@ -1,0 +1,25 @@
+[project]
+name = "docs-agent"
+version = "0.1.0"
+description = "Kubeflow Documentation AI Agent to power the Kubeflow Website"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.uv.workspace]
+members = [
+    "server",
+    "server-https",
+    "pipelines",
+]
+
+# PyTorch CPU-only index — avoids downloading the ~2 GB CUDA wheel
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }
+torchaudio = { index = "pytorch-cpu" }

@@ -1,0 +1,16 @@
+[project]
+name = "docs-agent-pipelines"
+version = "0.1.0"
+description = "Kubeflow Pipelines for RAG document indexing and embedding"
+requires-python = ">=3.11"
+dependencies = [
+    "kfp",
+    "requests",
+    "beautifulsoup4",
+    "sentence-transformers",
+    "langchain-text-splitters",
+    "torch",
+    "feast[milvus]",
+    "pandas",
+    "numpy",
+]
