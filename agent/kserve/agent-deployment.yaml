@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: docs-agent-server
+  namespace: docs-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: docs-agent-server
+  template:
+    metadata:
+      labels:
+        app: docs-agent-server
+    spec:
+      containers:
+        - name: server
+          image: thadev14/docs-agent:latest
+          ports:
+            - containerPort: 8000
+          env:
+            - name: MILVUS_HOST
+              value: "milvus-standalone.docs-agent.svc.cluster.local"
+            - name: MILVUS_PORT
+              value: "19530"
+            - name: AGENT_BACKEND
+              value: "langgraph"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: docs-agent-mcp-service
+  namespace: docs-agent
+spec:
+  selector:
+    app: docs-agent-server
+  ports:
+    - port: 8000
+      targetPort: 8000

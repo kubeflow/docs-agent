@@ -285,20 +285,43 @@ def chunk_and_embed(
             file_unique_id = f"{repo_name}:{file_data['path']}"
 
             # Create splitter
-            text_splitter = RecursiveCharacterTextSplitter(
+            # Split by markdown headers first — preserves document structure
+            from langchain.text_splitter import MarkdownHeaderTextSplitter
+
+            headers_to_split_on = [
+                ("#",   "h1"),
+                ("##",  "h2"),
+                ("###", "h3"),
+            ]
+            md_splitter = MarkdownHeaderTextSplitter(
+                headers_to_split_on=headers_to_split_on
+            )
+            header_splits = md_splitter.split_text(content)
+
+            # Then split each section into smaller chunks if needed
+            char_splitter = RecursiveCharacterTextSplitter(
                 chunk_size=chunk_size,
                 chunk_overlap=chunk_overlap,
                 length_function=len,
                 separators=["\n\n", "\n", ". ", " ", ""]
             )
 
-            # Split into chunks
-            chunks = text_splitter.split_text(content)
+            chunks_with_meta = []
+            for split in header_splits:
+                sub_chunks = char_splitter.split_text(split.page_content)
+                for sub in sub_chunks:
+                    chunks_with_meta.append({
+                        "text": sub,
+                        "h1": split.metadata.get("h1", ""),
+                        "h2": split.metadata.get("h2", ""),
+                        "h3": split.metadata.get("h3", ""),
+                    })
 
-            print(f"File: {file_data['path']} -> {len(chunks)} chunks (avg: {sum(len(c) for c in chunks)/len(chunks):.0f} chars)")
+            print(f"File: {file_data['path']} -> {len(chunks_with_meta)} chunks")
 
             # Create embeddings
-            for chunk_idx, chunk in enumerate(chunks):
+            for chunk_idx, chunk_meta in enumerate(chunks_with_meta):
+                chunk = chunk_meta["text"]
                 embedding = model.encode(chunk).tolist()
                 records.append({
                     'file_unique_id': file_unique_id,
@@ -308,8 +331,12 @@ def chunk_and_embed(
                     'citation_url': citation_url[:1024],
                     'chunk_index': chunk_idx,
                     'content_text': chunk[:2000],
+                    'h1': chunk_meta["h1"],
+                    'h2': chunk_meta["h2"],
+                    'h3': chunk_meta["h3"],
                     'embedding': embedding
                 })
+                
 
     print(f"Created {len(records)} total chunks")
 
@@ -349,6 +376,9 @@ def store_milvus(
         FieldSchema(name="citation_url", dtype=DataType.VARCHAR, max_length=1024),
         FieldSchema(name="chunk_index", dtype=DataType.INT64),
         FieldSchema(name="content_text", dtype=DataType.VARCHAR, max_length=2000),
+        FieldSchema(name="h1", dtype=DataType.VARCHAR, max_length=300),   
+        FieldSchema(name="h2", dtype=DataType.VARCHAR, max_length=300),   
+        FieldSchema(name="h3", dtype=DataType.VARCHAR, max_length=300),
         FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=768),  # Updated for all-mpnet-base-v2
         FieldSchema(name="last_updated", dtype=DataType.INT64)
     ]
@@ -373,9 +403,13 @@ def store_milvus(
                 "citation_url": record["citation_url"],
                 "chunk_index": record["chunk_index"],
                 "content_text": record["content_text"],
+                "h1": record.get("h1", ""),   # ← ADD
+                "h2": record.get("h2", ""),   # ← ADD
+                "h3": record.get("h3", ""),   # ← ADD
                 "vector": record["embedding"],
                 "last_updated": timestamp
             })
+           
 
     if records:
         batch_size = 1000
@@ -410,7 +444,8 @@ def github_rag_pipeline(
     chunk_overlap: int = 100,
     milvus_host: str = "milvus-standalone-final.docs-agent.svc.cluster.local",
     milvus_port: str = "19530",
-    collection_name: str = "docs_rag"
+    collection_name: str = "docs_index"
+
 ):
     # Download GitHub directory
     download_task = download_github_directory(

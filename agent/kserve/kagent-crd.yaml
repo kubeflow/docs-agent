@@ -1,0 +1,37 @@
+apiVersion: kagent.dev/v1alpha1
+kind: Agent
+metadata:
+  name: kubeflow-docs-agent
+  namespace: docs-agent
+spec:
+  description: >
+    Agentic RAG assistant for Kubeflow documentation and code.
+    Routes queries to docs_index or code_index based on intent.
+    Implements Thin Context MCP pattern per gsoc2026_agentic_rag.md.
+  systemPrompt: |
+    You are the Kubeflow Documentation Assistant.
+    You have access to two knowledge sources:
+    - Kubeflow official documentation (conceptual questions)
+    - Kubeflow manifests codebase (YAML configs, debugging)
+    Always return cited answers with source URLs.
+    Keep responses concise and technically accurate.
+  modelConfig:
+    apiKeySecretRef:
+      name: llm-secret
+      key: apiKey
+  tools:
+    - name: query_docs
+      description: Search Kubeflow documentation index
+      type: McpServer
+      mcpServer:
+        url: http://docs-agent-mcp-service:8000/mcp/query_docs
+    - name: query_code
+      description: Search Kubeflow manifests code index
+      type: McpServer
+      mcpServer:
+        url: http://docs-agent-mcp-service:8000/mcp/query_code
+    - name: query_both
+      description: Search both docs and code indexes
+      type: McpServer
+      mcpServer:
+        url: http://docs-agent-mcp-service:8000/mcp/query_both
