@@ -111,50 +111,94 @@ class ChatRequest(BaseModel):
     message: str
     stream: Optional[bool] = True
 
-def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
-    """Execute a semantic search in Milvus and return structured JSON serializable results."""
-    try:
-        # Connect to Milvus
-        connections.connect(alias="default", host=MILVUS_HOST, port=MILVUS_PORT)
-        collection = Collection(MILVUS_COLLECTION)
-        collection.load()
+class MilvusSearchClient:
+    """Persistent Milvus connection and embedding model to avoid per-request overhead.
 
-        # Encoder (same model as pipeline)
-        encoder = SentenceTransformer(EMBEDDING_MODEL)
-        query_vec = encoder.encode(query).tolist()
+    Previously, every call to milvus_search() opened a new TCP connection to Milvus
+    and loaded the SentenceTransformer model from disk. For agentic workflows where
+    the LLM may invoke the search tool multiple times in a single turn, this added
+    significant latency. This class initializes both resources once and reuses them
+    across requests.
 
-        search_params = {"metric_type": "COSINE", "params": {"nprobe": 32}}
-        results = collection.search(
-            data=[query_vec],
-            anns_field=MILVUS_VECTOR_FIELD,
-            param=search_params,
-            limit=int(top_k),
-            output_fields=["file_path", "content_text", "citation_url"],
-        )
+    See: https://github.com/kubeflow/docs-agent/issues/28
+    """
 
-        hits = []
-        for hit in results[0]:
-            # similarity = 1 - distance for COSINE in Milvus
-            similarity = 1.0 - float(hit.distance)
-            entity = hit.entity
-            content_text = entity.get("content_text") or ""
-            if isinstance(content_text, str) and len(content_text) > 400:
-                content_text = content_text[:400] + "..."
-            hits.append({
-                "similarity": similarity,
-                "file_path": entity.get("file_path"),
-                "citation_url": entity.get("citation_url"),
-                "content_text": content_text,
-            })
-        return {"results": hits}
-    except Exception as e:
-        print(f"[ERROR] Milvus search failed: {e}")
-        return {"results": []}
-    finally:
+    def __init__(self):
+        self._connected = False
+        self._encoder = None
+        self._collection = None
+
+    def _ensure_connected(self):
+        """Establish Milvus connection if not already connected."""
+        if not self._connected:
+            print(f"[MILVUS] Connecting to {MILVUS_HOST}:{MILVUS_PORT}")
+            connections.connect(alias="default", host=MILVUS_HOST, port=MILVUS_PORT)
+            self._connected = True
+
+    def _get_collection(self) -> Collection:
+        """Get and load the Milvus collection, reconnecting if needed."""
+        self._ensure_connected()
+        if self._collection is None:
+            self._collection = Collection(MILVUS_COLLECTION)
+            self._collection.load()
+            print(f"[MILVUS] Collection '{MILVUS_COLLECTION}' loaded")
+        return self._collection
+
+    def _get_encoder(self) -> SentenceTransformer:
+        """Load the embedding model once and reuse across searches."""
+        if self._encoder is None:
+            print(f"[MILVUS] Loading embedding model: {EMBEDDING_MODEL}")
+            self._encoder = SentenceTransformer(EMBEDDING_MODEL)
+            print(f"[MILVUS] Model loaded")
+        return self._encoder
+
+    def search(self, query: str, top_k: int = 5) -> Dict[str, Any]:
+        """Execute a semantic search in Milvus using persistent connections."""
         try:
-            connections.disconnect(alias="default")
-        except Exception:
-            pass
+            collection = self._get_collection()
+            encoder = self._get_encoder()
+
+            query_vec = encoder.encode(query).tolist()
+
+            search_params = {"metric_type": "COSINE", "params": {"nprobe": 32}}
+            results = collection.search(
+                data=[query_vec],
+                anns_field=MILVUS_VECTOR_FIELD,
+                param=search_params,
+                limit=int(top_k),
+                output_fields=["file_path", "content_text", "citation_url"],
+            )
+
+            hits = []
+            for hit in results[0]:
+                similarity = 1.0 - float(hit.distance)
+                entity = hit.entity
+                content_text = entity.get("content_text") or ""
+                if isinstance(content_text, str) and len(content_text) > 400:
+                    content_text = content_text[:400] + "..."
+                hits.append({
+                    "similarity": similarity,
+                    "file_path": entity.get("file_path"),
+                    "citation_url": entity.get("citation_url"),
+                    "content_text": content_text,
+                })
+            return {"results": hits}
+        except Exception as e:
+            print(f"[ERROR] Milvus search failed: {e}")
+            self._connected = False
+            self._collection = None
+            return {"results": []}
+
+
+_milvus_client = MilvusSearchClient()
+
+
+def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
+    """Execute a semantic search in Milvus and return structured JSON serializable results.
+
+    Uses a persistent connection pool to avoid per-request connection overhead.
+    """
+    return _milvus_client.search(query, top_k)
 
 async def execute_tool(tool_call: Dict[str, Any]) -> tuple[str, List[str]]:
     """Execute a tool call and return the result and citations"""
