@@ -194,9 +194,21 @@ async def execute_tool(tool_call: Dict[str, Any]) -> tuple[str, List[str]]:
         print(f"[ERROR] Tool execution failed: {e}")
         return f"Tool execution failed: {e}", []
 
-async def stream_llm_response(payload: Dict[str, Any]) -> AsyncGenerator[str, None]:
-    """Stream response from LLM and handle tool calls, yielding SSE events"""
+async def stream_llm_response(payload: Dict[str, Any], _depth: int = 0) -> AsyncGenerator[str, None]:
+    """Stream response from LLM and handle tool calls, yielding SSE events.
+    
+    _depth tracks recursion depth to prevent unbounded mutual recursion
+    between stream_llm_response and handle_tool_follow_up. Capped at 3
+    hops — sufficient for multi-step agentic queries while preventing
+    stack overflow on pathological tool-calling loops.
+    """
+    MAX_TOOL_DEPTH = 3
     citations_collector = []
+
+    if _depth > MAX_TOOL_DEPTH:
+        yield f"data: {json.dumps({'type': 'error', 'content': 'Max tool call depth reached. Please refine your query.'})}\n\n"
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        return
     
     try:
         async with httpx.AsyncClient(timeout=120) as client:
@@ -280,7 +292,7 @@ async def stream_llm_response(payload: Dict[str, Any]) -> AsyncGenerator[str, No
                                         yield f"data: {json.dumps({'type': 'tool_result', 'tool_name': tool_call['function']['name'], 'content': result})}\n\n"
                                         
                                         # Make follow-up request with tool results
-                                        async for follow_up_chunk in handle_tool_follow_up(payload, tool_call, result, citations_collector):
+                                        async for follow_up_chunk in handle_tool_follow_up(payload, tool_call, result, citations_collector, _depth=_depth + 1):
                                             yield follow_up_chunk
                                         
                                     except Exception as e:
@@ -311,8 +323,7 @@ async def stream_llm_response(payload: Dict[str, Any]) -> AsyncGenerator[str, No
         print(f"[ERROR] Streaming failed: {e}")
         yield f"data: {json.dumps({'type': 'error', 'content': f'Streaming failed: {e}'})}\n\n"
 
-async def handle_tool_follow_up(original_payload: Dict[str, Any], tool_call: Dict[str, Any], tool_result: str, citations_collector: List[str]) -> AsyncGenerator[str, None]:
-    """Handle follow-up request after tool execution"""
+async def handle_tool_follow_up(original_payload: Dict[str, Any], tool_call: Dict[str, Any], tool_result: str, citations_collector: List[str], _depth: int = 0) -> AsyncGenerator[str, None]:    
     try:
         print("[TOOL] Handling follow-up request with tool results")
         
@@ -341,7 +352,7 @@ async def handle_tool_follow_up(original_payload: Dict[str, Any], tool_call: Dic
         }
         
         # Stream the follow-up response
-        async for chunk in stream_llm_response(follow_up_payload):
+        async for chunk in stream_llm_response(follow_up_payload, _depth=_depth):
             yield chunk
         
     except Exception as e:
