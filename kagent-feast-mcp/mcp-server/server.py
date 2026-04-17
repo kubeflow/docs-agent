@@ -1,26 +1,77 @@
+"""Kubeflow Docs MCP Server — semantic search over Kubeflow documentation.
+
+Exposes a single ``search_kubeflow_docs`` tool via the MCP protocol so
+that a Kagent Agent can retrieve relevant documentation chunks from a
+Milvus vector store.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import threading
+
 from fastmcp import FastMCP
 from pymilvus import MilvusClient
 from sentence_transformers import SentenceTransformer
 
-MILVUS_URI = "http://milvus.<YOUR_NAMESPACE>.svc.cluster.local:19530"
-MILVUS_USER = "root"
-MILVUS_PASSWORD = "Milvus"
-COLLECTION_NAME = "kubeflow_docs_docs_rag"
-EMBEDDING_MODEL = "sentence-transformers/all-mpnet-base-v2"
-PORT = 8000
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Configuration — read from environment with sensible defaults
+# ---------------------------------------------------------------------------
+
+MILVUS_URI: str = os.environ.get(
+    "MILVUS_URI",
+    "http://milvus.<namespace>.svc.cluster.local:19530",
+)
+MILVUS_USER: str = os.environ.get("MILVUS_USER", "root")
+MILVUS_PASSWORD: str = os.environ.get("MILVUS_PASSWORD", "")
+COLLECTION_NAME: str = os.environ.get("COLLECTION_NAME", "kubeflow_docs_docs_rag")
+EMBEDDING_MODEL: str = os.environ.get(
+    "EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2"
+)
+
+_raw_port = os.environ.get("PORT", "8000")
+try:
+    PORT: int = int(_raw_port)
+except ValueError:
+    logger.warning("Invalid PORT value %r, falling back to 8000", _raw_port)
+    PORT = 8000
+
+if MILVUS_PASSWORD == "":
+    logger.warning(
+        "MILVUS_PASSWORD is not set — using empty default. "
+        "Set the MILVUS_PASSWORD environment variable for production use."
+    )
 
 mcp = FastMCP("Kubeflow Docs MCP Server")
 
-model: SentenceTransformer = None
-client: MilvusClient = None
+# ---------------------------------------------------------------------------
+# Thread-safe lazy initialisation
+# ---------------------------------------------------------------------------
+
+_init_lock = threading.Lock()
+model: SentenceTransformer | None = None
+client: MilvusClient | None = None
 
 
-def _init():
+def _init() -> None:
+    """Initialise the embedding model and Milvus client once.
+
+    Uses a lock so that concurrent requests do not race to create
+    duplicate instances.
+    """
     global model, client
-    if model is None:
-        model = SentenceTransformer(EMBEDDING_MODEL)
-    if client is None:
-        client = MilvusClient(uri=MILVUS_URI, user=MILVUS_USER, password=MILVUS_PASSWORD)
+    with _init_lock:
+        if model is None:
+            logger.info("Loading embedding model: %s", EMBEDDING_MODEL)
+            model = SentenceTransformer(EMBEDDING_MODEL)
+        if client is None:
+            logger.info("Connecting to Milvus at %s", MILVUS_URI)
+            client = MilvusClient(
+                uri=MILVUS_URI, user=MILVUS_USER, password=MILVUS_PASSWORD
+            )
 
 
 @mcp.tool()
@@ -34,16 +85,24 @@ def search_kubeflow_docs(query: str, top_k: int = 5) -> str:
     Returns:
         Formatted search results with content and citation URLs.
     """
-    _init()
+    try:
+        _init()
+    except Exception:
+        logger.exception("Failed to initialise model or Milvus client")
+        return "Error: unable to connect to the search backend. Please try again later."
 
-    embedding = model.encode(query).tolist()
+    try:
+        embedding = model.encode(query).tolist()  # type: ignore[union-attr]
 
-    hits = client.search(
-        collection_name=COLLECTION_NAME,
-        data=[embedding],
-        limit=top_k,
-        output_fields=["content_text", "citation_url", "file_path"],
-    )[0]
+        hits = client.search(  # type: ignore[union-attr]
+            collection_name=COLLECTION_NAME,
+            data=[embedding],
+            limit=top_k,
+            output_fields=["content_text", "citation_url", "file_path"],
+        )[0]
+    except Exception:
+        logger.exception("Search failed for query (redacted)")
+        return "Error: search request failed. Please try again later."
 
     if not hits:
         return "No results found for your query."
@@ -61,4 +120,8 @@ def search_kubeflow_docs(query: str, top_k: int = 5) -> str:
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     mcp.run(transport="streamable-http", host="0.0.0.0", port=PORT)
