@@ -220,6 +220,13 @@ def chunk_and_embed_incremental(
             # Split into chunks
             chunks = text_splitter.split_text(content)
 
+            # Guard: skip files that produce no chunks after splitting to
+            # avoid ZeroDivisionError in the log statement below.
+            # Same fix as kubeflow-pipeline.py (PR #149, issue #148).
+            if not chunks:
+                print(f"Skipping file after chunking (no chunks produced): {file_data['path']}")
+                continue
+
             print(f"File: {file_data['path']} -> {len(chunks)} chunks (avg: {sum(len(c) for c in chunks)/len(chunks):.0f} chars)")
 
             # Create embeddings
