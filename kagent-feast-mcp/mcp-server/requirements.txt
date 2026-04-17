@@ -1,4 +1,4 @@
-fastmcp
+torch --index-url https://download.pytorch.org/whl/cpu
 pymilvus
 sentence-transformers
-torch
+fastmcp
