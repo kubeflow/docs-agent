@@ -1,0 +1,30 @@
+# values-local.yaml
+# Lightweight configuration for local Kind/Minikube/WSL2 deployments
+# Prevents OOM kills when deploying Milvus on hosts with <= 8GB RAM
+
+etcd:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+minio:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+standalone:
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2
+      memory: 2Gi
