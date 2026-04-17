@@ -420,6 +420,24 @@ def github_rag_pipeline(
         github_token=github_token
     )
     
+    issues_task = download_github_issues(
+    repos=f"{repo_owner}/{repo_name}",
+    labels="",
+    state="open",
+    max_issues_per_repo=50,
+    github_token=github_token
+    )
+    
+    issues_chunk_task = chunk_and_embed(
+    github_data=issues_task.outputs["issues_data"],
+    repo_name="kubeflow-issues",
+    base_url="https://github.com",
+    chunk_size=chunk_size,
+    chunk_overlap=chunk_overlap
+    )
+    
+    issues_chunk_task.after(issues_task)
+    
     # Chunk and embed the content
     chunk_task = chunk_and_embed(
         github_data=download_task.outputs["github_data"],
@@ -428,6 +446,7 @@ def github_rag_pipeline(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap
     )
+    
     
     # Store in Milvus
     store_task = store_milvus(
