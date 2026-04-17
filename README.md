@@ -44,6 +44,33 @@ Kubeflow users often struggle to find relevant information across the extensive 
 
 ### High-Level Architecture
 
+## System Architecture
+
+The Docs Agent system is composed of several components that work together
+to ingest documentation, generate embeddings, and answer user queries using
+Retrieval Augmented Generation (RAG).
+
+### Core Components
+
+1. **Data Ingestion Pipelines**
+   - Fetch Kubeflow documentation from GitHub
+   - Clean and preprocess content
+   - Split documents into chunks
+   - Generate embeddings
+
+2. **Vector Database**
+   - Stores document embeddings in **Milvus**
+   - Enables fast semantic search over documentation
+
+3. **API Server**
+   - Handles user queries
+   - Executes retrieval from the vector database
+   - Streams responses to clients
+
+4. **LLM Inference**
+   - Uses **KServe** to serve the Llama model
+   - Generates responses using retrieved context
+
 ![High-Level Architecture](assets/indexing.svg)
 
 ### Data Flow
