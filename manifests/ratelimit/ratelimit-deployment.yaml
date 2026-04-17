@@ -1,0 +1,86 @@
+# Custom sliding window rate limit service
+# Stateless HTTP service that Envoy ext_authz calls to check rate limits
+# Uses Redis sorted sets for sliding window log algorithm
+# Queries shared Redis instance — no sticky sessions needed
+
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ratelimit
+  namespace: <YOUR_NAMESPACE>  # replace with your namespace
+  labels:
+    app: ratelimit
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ratelimit
+  template:
+    metadata:
+      labels:
+        app: ratelimit
+    spec:
+      containers:
+      - name: ratelimit
+        image: <YOUR_DOCKERHUB_USERNAME>/ratelimit-sliding-window:latest  # replace with your registry/username or use local image
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8080
+        env:
+        - name: REDIS_URL
+          value: "redis://redis-ratelimit.<YOUR_NAMESPACE>.svc.cluster.local:6379"  # replace namespace
+        # - name: REDIS_PASSWORD  
+        #   valueFrom:
+        #     secretKeyRef:
+        #       name: redis-secret
+        #       key: password
+        - name: RATE_LIMIT_RPM
+          value: "20"          # requests per minute per IP
+        - name: WINDOW_SECONDS
+          value: "60"          # sliding window size in seconds
+        - name: LOG_LEVEL
+          value: "INFO"
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+        livenessProbe:
+          httpGet:
+            path: /healthcheck
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /healthcheck
+            port: 8080
+          initialDelaySeconds: 3
+          periodSeconds: 5
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop: ["ALL"]
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ratelimit
+  namespace: <YOUR_NAMESPACE>  # replace with your namespace
+  labels:
+    app: ratelimit
+spec:
+  selector:
+    app: ratelimit
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+  type: ClusterIP

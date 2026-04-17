@@ -1,7 +1,7 @@
 import os
 import json
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -21,6 +21,8 @@ MILVUS_PORT = os.getenv("MILVUS_PORT", "19530")
 MILVUS_COLLECTION = os.getenv("MILVUS_COLLECTION", "docs_rag")
 MILVUS_VECTOR_FIELD = os.getenv("MILVUS_VECTOR_FIELD", "vector")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
+
+# Rate limiter removed – handled at ingress level
 
 # System prompt (same as WebSocket version)
 SYSTEM_PROMPT = """
@@ -394,11 +396,15 @@ async def options_health():
     return {"message": "OK"}
 
 @app.post("/chat")
-async def chat(request: ChatRequest):
+async def chat(request: ChatRequest, http_request: Request):
     """Chat endpoint with RAG capabilities - supports both streaming and non-streaming"""
     try:
-        print(f"[CHAT] Processing message: {request.message[:100]}...")
-        
+        # Extract client IP (handle X-Forwarded-For for load balancers)
+        client_ip = http_request.headers.get("X-Forwarded-For", http_request.client.host).split(",")[0].strip()
+        print(f"[CHAT] Processing message from {client_ip}: {request.message[:100]}...")
+
+        # rate limiting now enforced at ingress layer; continue processing
+
         # Create initial payload
         payload = {
             "model": MODEL,
@@ -439,6 +445,8 @@ async def chat(request: ChatRequest):
                 "citations": unique_citations if unique_citations else None
             }
         
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"[ERROR] Chat handling failed: {e}")
         raise HTTPException(status_code=500, detail=f"Request failed: {e}")

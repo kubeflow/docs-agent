@@ -2,7 +2,7 @@ apiVersion: networking.istio.io/v1beta1
 kind: VirtualService
 metadata:
   name: https-api-vs
-  namespace: docs-agent
+  namespace: {{ .Release.Namespace }}
 spec:
   gateways:
   - kubeflow/kubeflow-gateway
