@@ -1,3 +1,5 @@
+import threading
+
 from fastmcp import FastMCP
 from pymilvus import MilvusClient
 from sentence_transformers import SentenceTransformer
@@ -13,14 +15,18 @@ mcp = FastMCP("Kubeflow Docs MCP Server")
 
 model: SentenceTransformer = None
 client: MilvusClient = None
+_init_lock = threading.Lock()
 
 
 def _init():
+    """Initialize model and client using double-checked locking to prevent race conditions."""
     global model, client
-    if model is None:
-        model = SentenceTransformer(EMBEDDING_MODEL)
-    if client is None:
-        client = MilvusClient(uri=MILVUS_URI, user=MILVUS_USER, password=MILVUS_PASSWORD)
+    if model is None or client is None:
+        with _init_lock:
+            if model is None:
+                model = SentenceTransformer(EMBEDDING_MODEL)
+            if client is None:
+                client = MilvusClient(uri=MILVUS_URI, user=MILVUS_USER, password=MILVUS_PASSWORD)
 
 
 @mcp.tool()
