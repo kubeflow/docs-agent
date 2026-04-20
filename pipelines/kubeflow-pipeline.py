@@ -238,10 +238,16 @@ def chunk_and_embed(
 
     records = []
 
-    with open(github_data.path, 'r', encoding='utf-8') as f:
-        for line in f:
-            file_data = json.loads(line)
-            content = file_data['content']
+   with open(github_data.path, 'r', encoding='utf-8') as f:
+    for line in f:
+        file_data = json.loads(line)
+
+        # Safe content extraction to prevent pipeline crash
+        content = file_data.get("content", "").strip()
+
+        if not content:
+            print(f"Skipping empty document: {file_data.get('path','unknown')}")
+            continue
 
             # AGGRESSIVE CLEANING FOR BETTER EMBEDDINGS
 
