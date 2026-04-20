@@ -22,6 +22,18 @@ MILVUS_COLLECTION = os.getenv("MILVUS_COLLECTION", "docs_rag")
 MILVUS_VECTOR_FIELD = os.getenv("MILVUS_VECTOR_FIELD", "vector")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
 
+# CORS Config
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+    if origin.strip()
+]
+if "*" in ALLOWED_ORIGINS:
+    raise ValueError(
+        "ALLOWED_ORIGINS must not contain '*'. "
+        "List specific origins (e.g. 'https://app.example.com,https://admin.example.com')."
+    )
+
 # System prompt (same as WebSocket version)
 SYSTEM_PROMPT = """
 You are the Kubeflow Docs Assistant.
@@ -101,7 +113,7 @@ app = FastAPI(title="Kubeflow Docs API Service", version="1.0.0")
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your actual domains
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -420,8 +432,6 @@ async def chat(request: ChatRequest):
                 headers={
                     "Cache-Control": "no-cache",
                     "Connection": "keep-alive",
-                    "Access-Control-Allow-Origin": "*",
-                    "Access-Control-Allow-Headers": "Cache-Control"
                 }
             )
         else:

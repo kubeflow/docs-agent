@@ -39,6 +39,8 @@ spec:
               value: "8000"
             - name: PYTHONUNBUFFERED
               value: "1"
+            - name: ALLOWED_ORIGINS
+              value: "http://localhost:3000"
 
           ports:
             - containerPort: 8000
