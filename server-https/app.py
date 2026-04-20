@@ -1,6 +1,7 @@
 import os
 import json
 import httpx
+from fastapi import Request
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -97,6 +98,14 @@ TOOLS = [
 ]
 
 app = FastAPI(title="Kubeflow Docs API Service", version="1.0.0")
+@app.on_event("startup")
+async def startup_event():
+    app.state.http_client = httpx.AsyncClient(timeout=120)
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await app.state.http_client.aclose()
 
 # Add CORS middleware
 app.add_middleware(
@@ -194,13 +203,14 @@ async def execute_tool(tool_call: Dict[str, Any]) -> tuple[str, List[str]]:
         print(f"[ERROR] Tool execution failed: {e}")
         return f"Tool execution failed: {e}", []
 
-async def stream_llm_response(payload: Dict[str, Any]) -> AsyncGenerator[str, None]:
+async def stream_llm_response(request: Request, payload: Dict[str, Any]) -> AsyncGenerator[str, None]:
     """Stream response from LLM and handle tool calls, yielding SSE events"""
     citations_collector = []
     
     try:
-        async with httpx.AsyncClient(timeout=120) as client:
-            async with client.stream("POST", KSERVE_URL, json=payload) as response:
+        client = request.app.state.http_client
+        async with client.stream("POST", KSERVE_URL, json=payload) as response:
+        
                 if response.status_code != 200:
                     error_msg = f"LLM service error: HTTP {response.status_code}"
                     print(f"[ERROR] {error_msg}")
@@ -348,12 +358,12 @@ async def handle_tool_follow_up(original_payload: Dict[str, Any], tool_call: Dic
         print(f"[ERROR] Tool follow-up failed: {e}")
         yield f"data: {json.dumps({'type': 'error', 'content': f'Tool follow-up failed: {e}'})}\n\n"
 
-async def get_non_streaming_response(payload: Dict[str, Any]) -> tuple[str, List[str]]:
+async def get_non_streaming_response(request: Request, payload: Dict[str, Any]) -> tuple[str, List[str]]:
     """Get non-streaming response by collecting all streaming chunks"""
     response_content = ""
     citations = []
     
-    async for chunk in stream_llm_response(payload):
+    async for chunk in stream_llm_response(request, payload):
         if chunk.startswith("data: "):
             try:
                 data = json.loads(chunk[6:].strip())
@@ -393,12 +403,14 @@ async def options_health():
     """Handle preflight OPTIONS request for health"""
     return {"message": "OK"}
 
+from fastapi import Request
+
 @app.post("/chat")
-async def chat(request: ChatRequest):
+async def chat(request: ChatRequest, fastapi_request: Request):
     """Chat endpoint with RAG capabilities - supports both streaming and non-streaming"""
     try:
         print(f"[CHAT] Processing message: {request.message[:100]}...")
-        
+
         # Create initial payload
         payload = {
             "model": MODEL,
@@ -411,11 +423,11 @@ async def chat(request: ChatRequest):
             "stream": True,
             "max_tokens": 1500
         }
-        
+
         if request.stream:
             # Return streaming response using Server-Sent Events
             return StreamingResponse(
-                stream_llm_response(payload),
+                stream_llm_response(fastapi_request, payload),   # ✅ FIXED
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -426,19 +438,19 @@ async def chat(request: ChatRequest):
             )
         else:
             # Return non-streaming JSON response
-            response_content, citations = await get_non_streaming_response(payload)
-            
-            # Remove duplicates from citations while preserving order
+            response_content, citations = await get_non_streaming_response(fastapi_request, payload)
+
+            # Remove duplicate citations
             unique_citations = []
             for citation in citations:
                 if citation not in unique_citations:
                     unique_citations.append(citation)
-            
+
             return {
                 "response": response_content,
                 "citations": unique_citations if unique_citations else None
             }
-        
+
     except Exception as e:
         print(f"[ERROR] Chat handling failed: {e}")
         raise HTTPException(status_code=500, detail=f"Request failed: {e}")
