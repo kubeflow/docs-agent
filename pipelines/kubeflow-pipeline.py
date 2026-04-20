@@ -22,17 +22,41 @@ def download_github_directory(
     headers = {"Authorization": f"token {github_token}"} if github_token else {}
     api_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{directory_path}"
 
+    def validate_github_response(response, url):
+        # Handle GitHub API rate limit errors with a clearer message
+        if response.status_code == 403:
+            remaining = response.headers.get("X-RateLimit-Remaining")
+            if remaining == "0":
+                raise RuntimeError(
+                    "GitHub API rate limit exceeded while downloading documentation files. "
+                    "Provide a GitHub token to increase the rate limit."
+                )
+            raise RuntimeError(
+                f"GitHub API returned 403 Forbidden for {url}. "
+                "Check that your GitHub token is valid and has the required access."
+            )
+
+        # Handle missing repository path with a specific error
+        if response.status_code == 404:
+            raise FileNotFoundError(
+                f"GitHub path not found: {url}. "
+                "Check repo_owner, repo_name, and directory_path."
+            )
+
+        # Keep default behavior for other HTTP errors
+        response.raise_for_status()
+
     def get_files_recursive(url):
         files = []
         try:
             response = requests.get(url, headers=headers)
-            response.raise_for_status()
+            validate_github_response(response, url)
             items = response.json()
 
             for item in items:
                 if item['type'] == 'file' and (item['name'].endswith('.md') or item['name'].endswith('.html')):
                     file_response = requests.get(item['url'], headers=headers)
-                    file_response.raise_for_status()
+                    validate_github_response(file_response, item['url'])
                     file_data = file_response.json()
                     content = base64.b64decode(file_data['content']).decode('utf-8')
 
@@ -58,7 +82,6 @@ def download_github_directory(
     with open(github_data.path, 'w', encoding='utf-8') as f:
         for file_data in files:
             f.write(json.dumps(file_data, ensure_ascii=False) + '\n')
-
 
 @dsl.component(
     base_image="python:3.9",
