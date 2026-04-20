@@ -294,10 +294,8 @@ async def stream_llm_response(payload: Dict[str, Any], websocket, citations_coll
         print(f"[ERROR] Streaming failed: {e}")
         await websocket.send(json.dumps({"type": "error", "content": f"Streaming failed: {e}"}))
 
-async def handle_tool_follow_up(original_payload: Dict[str, Any], tool_call: Dict[str, Any], tool_result: str, websocket, citations_collector: List[str] = None) -> None:
-    """Handle follow-up request after tool execution"""
-    if citations_collector is None:
-        citations_collector = []
+async def handle_tool_follow_up(original_payload: Dict[str, Any], tool_call: Dict[str, Any], tool_result: str, websocket, citations_collector: List[str]) -> None:
+    """Handle follow-up request after tool execution. Streams response via websocket and updates citations."""
     try:
         print("[TOOL] Handling follow-up request with tool results")
         
@@ -325,7 +323,7 @@ async def handle_tool_follow_up(original_payload: Dict[str, Any], tool_call: Dic
             "max_tokens": 1000
         }
         
-        # Stream the follow-up response
+        # Stream the follow-up response. Citations are automatically collected in the list.
         await stream_llm_response(follow_up_payload, websocket, citations_collector)
         
     except Exception as e:
