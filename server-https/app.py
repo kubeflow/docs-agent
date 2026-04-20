@@ -376,7 +376,37 @@ async def hello():
 @app.get("/health")
 async def health_check():
     """Health check endpoint for Kubernetes probes"""
-    return {"status": "healthy", "service": "https-api"}
+    health_status = {"status": "healthy", "service": "https-api", "dependencies": {}}
+    
+    # Check Milvus
+    try:
+        connections.connect(alias="https_health_check", host=MILVUS_HOST, port=MILVUS_PORT)
+        if connections.has_connection("https_health_check"):
+            health_status["dependencies"]["milvus"] = "healthy"
+        else:
+            health_status["dependencies"]["milvus"] = "unhealthy"
+            health_status["status"] = "unhealthy"
+    except Exception as e:
+        health_status["dependencies"]["milvus"] = f"unhealthy: {str(e)}"
+        health_status["status"] = "unhealthy"
+    finally:
+        try:
+            connections.disconnect(alias="https_health_check")
+        except Exception:
+            pass
+
+    # Check Embedding Model
+    try:
+        _ = SentenceTransformer(EMBEDDING_MODEL)
+        health_status["dependencies"]["embedding_model"] = "healthy"
+    except Exception as e:
+        health_status["dependencies"]["embedding_model"] = f"unhealthy: {str(e)}"
+        health_status["status"] = "unhealthy"
+        
+    if health_status["status"] == "unhealthy":
+        raise HTTPException(status_code=503, detail=health_status)
+        
+    return health_status
 
 @app.options("/chat")
 async def options_chat():
