@@ -1,6 +1,7 @@
 import os
 import json
 import asyncio
+import threading
 import httpx
 import websockets
 from websockets.server import serve
@@ -21,6 +22,24 @@ MILVUS_PORT = os.getenv("MILVUS_PORT", "19530")
 MILVUS_COLLECTION = os.getenv("MILVUS_COLLECTION", "docs_rag")
 MILVUS_VECTOR_FIELD = os.getenv("MILVUS_VECTOR_FIELD", "vector")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
+
+# Global singleton: load the embedding model once at startup
+_encoder = SentenceTransformer(EMBEDDING_MODEL)
+
+# Persistent Milvus connection (initialized lazily, thread-safe)
+_milvus_lock = threading.Lock()
+_milvus_connected = False
+
+
+def _ensure_milvus_connection() -> None:
+    global _milvus_connected
+    if _milvus_connected:
+        return
+    with _milvus_lock:
+        if not _milvus_connected:
+            connections.connect(alias="default", host=MILVUS_HOST, port=MILVUS_PORT)
+            _milvus_connected = True
+
 
 # System prompt
 SYSTEM_PROMPT = """
@@ -68,14 +87,11 @@ Style
 def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
     """Execute a semantic search in Milvus and return structured JSON serializable results."""
     try:
-        # Connect to Milvus
-        connections.connect(alias="default", host=MILVUS_HOST, port=MILVUS_PORT)
+        _ensure_milvus_connection()
         collection = Collection(MILVUS_COLLECTION)
         collection.load()
 
-        # Encoder (same model as pipeline)
-        encoder = SentenceTransformer(EMBEDDING_MODEL)
-        query_vec = encoder.encode(query).tolist()
+        query_vec = _encoder.encode(query).tolist()
 
         search_params = {"metric_type": "COSINE", "params": {"nprobe": 32}}
         results = collection.search(
@@ -102,13 +118,17 @@ def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
             })
         return {"results": hits}
     except Exception as e:
+        with _milvus_lock:
+            global _milvus_connected
+            _milvus_connected = False
+            try:
+                connections.disconnect(alias="default")
+            except Exception:
+                pass
         print(f"[ERROR] Milvus search failed: {e}")
         return {"results": []}
-    finally:
-        try:
-            connections.disconnect(alias="default")
-        except Exception:
-            pass
+
+
 TOOLS = [
     {
         "type": "function",
@@ -154,7 +174,7 @@ async def execute_tool(tool_call: Dict[str, Any]) -> tuple[str, List[str]]:
             top_k = arguments.get("top_k", 5)
             
             print(f"[TOOL] Executing Milvus search for: '{query}' (top_k={top_k})")
-            result = milvus_search(query, top_k)
+            result = await asyncio.to_thread(milvus_search, query, top_k)
             
             # Collect citations
             citations = []
