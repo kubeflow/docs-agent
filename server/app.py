@@ -3,6 +3,8 @@ import json
 import asyncio
 import httpx
 import websockets
+import http
+import functools
 from websockets.server import serve
 from websockets.exceptions import ConnectionClosedError
 import logging
@@ -154,7 +156,8 @@ async def execute_tool(tool_call: Dict[str, Any]) -> tuple[str, List[str]]:
             top_k = arguments.get("top_k", 5)
             
             print(f"[TOOL] Executing Milvus search for: '{query}' (top_k={top_k})")
-            result = milvus_search(query, top_k)
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(None, functools.partial(milvus_search, query, top_k))
             
             # Collect citations
             citations = []
@@ -418,9 +421,9 @@ async def handle_websocket(websocket, path):
         print(f"[ERROR] WebSocket error: {e}")
 
 async def health_check(path, request_headers):
-    """Handle HTTP health checks"""
+    """Handle HTTP health checks per the websockets standard"""
     if path == "/health":
-        return 200, [("Content-Type", "text/plain")], b"OK"
+        return http.HTTPStatus.OK, [("Content-Type", "text/plain")], b"OK\n"
     return None
 
 async def main():
