@@ -6,7 +6,7 @@ import websockets
 from websockets.server import serve
 from websockets.exceptions import ConnectionClosedError
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from sentence_transformers import SentenceTransformer
 from pymilvus import connections, Collection
 
@@ -186,9 +186,8 @@ async def stream_llm_response(payload: Dict[str, Any], websocket, citations_coll
     if citations_collector is None:
         citations_collector = []
     try:
-        async with httpx.AsyncClient(timeout=120) as client:
-            async with client.stream("POST", KSERVE_URL, json=payload) as response:
-                if response.status_code != 200:
+        async with http_client.stream("POST", KSERVE_URL, json=payload) as response:
+            if response.status_code != 200:
                     error_msg = f"LLM service error: HTTP {response.status_code}"
                     print(f"[ERROR] {error_msg}")
                     await websocket.send(json.dumps({"type": "error", "content": error_msg}))
@@ -434,21 +433,27 @@ async def main():
     # Configure logging
     logging.getLogger("websockets").setLevel(logging.WARNING)
     
-    # Start server
-    async with serve(
-        handle_websocket, 
-        "0.0.0.0", 
-        PORT,
-        process_request=health_check,
-        ping_interval=30,
-        ping_timeout=10
-    ):
-        print("✅ WebSocket server is running...")
-        print(f"   WebSocket: ws://localhost:{PORT}")
-        print(f"   Health: http://localhost:{PORT}/health")
-        
-        # Keep server running
-        await asyncio.Future()
+    global http_client
+    http_client = httpx.AsyncClient(timeout=120)
+
+    try:
+        # Start server
+        async with serve(
+            handle_websocket, 
+            "0.0.0.0", 
+            PORT,
+            process_request=health_check,
+            ping_interval=30,
+            ping_timeout=10
+        ):
+            print("✅ WebSocket server is running...")
+            print(f"   WebSocket: ws://localhost:{PORT}")
+            print(f"   Health: http://localhost:{PORT}/health")
+            
+            # Keep server running
+            await asyncio.Future()
+    finally:
+        await http_client.aclose()
 
 if __name__ == "__main__":
     asyncio.run(main())
