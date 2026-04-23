@@ -194,9 +194,10 @@ async def execute_tool(tool_call: Dict[str, Any]) -> tuple[str, List[str]]:
         print(f"[ERROR] Tool execution failed: {e}")
         return f"Tool execution failed: {e}", []
 
-async def stream_llm_response(payload: Dict[str, Any]) -> AsyncGenerator[str, None]:
+async def stream_llm_response(payload: Dict[str, Any], citations_collector: List[str] = None) -> AsyncGenerator[str, None]:
     """Stream response from LLM and handle tool calls, yielding SSE events"""
-    citations_collector = []
+    if citations_collector is None:
+        citations_collector = []
     
     try:
         async with httpx.AsyncClient(timeout=120) as client:
@@ -341,7 +342,7 @@ async def handle_tool_follow_up(original_payload: Dict[str, Any], tool_call: Dic
         }
         
         # Stream the follow-up response
-        async for chunk in stream_llm_response(follow_up_payload):
+        async for chunk in stream_llm_response(follow_up_payload, citations_collector=citations_collector):
             yield chunk
         
     except Exception as e:
