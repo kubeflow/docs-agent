@@ -73,7 +73,7 @@ def download_github_issues(
     issues_data: dsl.Output[dsl.Dataset]
 ):
     """Fetch GitHub issues and comments from multiple repos for RAG indexing.
-    
+
     Args:
         repos: Comma-separated list of repos (e.g., "kubeflow/kubeflow,kubeflow/pipelines")
         labels: Comma-separated labels to filter (e.g., "kind/bug,kind/question")
@@ -95,7 +95,7 @@ def download_github_issues(
         for attempt in range(max_retries):
             try:
                 resp = requests.get(url, params=params, headers=headers)
-                
+
                 # Handle rate limiting
                 if resp.status_code == 403:
                     remaining = resp.headers.get("X-RateLimit-Remaining", "0")
@@ -105,17 +105,17 @@ def download_github_issues(
                         print(f"Rate limited. Waiting {wait_time}s...")
                         time.sleep(min(wait_time, 300))  # Max 5 min wait
                         continue
-                
+
                 if resp.status_code == 200:
                     return resp.json()
                 else:
                     print(f"API error: HTTP {resp.status_code}")
                     return None
-                    
+
             except Exception as e:
                 print(f"Request failed (attempt {attempt+1}): {e}")
                 time.sleep(2 ** attempt)  # Exponential backoff
-        
+
         return None
 
     def fetch_comments(owner, name, issue_number):
@@ -123,22 +123,22 @@ def download_github_issues(
         comments_url = f"https://api.github.com/repos/{owner}/{name}/issues/{issue_number}/comments"
         comments_text = ""
         page = 1
-        
+
         while True:
             comments = api_request(comments_url, {"per_page": 100, "page": page})
             if not comments:
                 break
-                
+
             for comment in comments:
                 author = comment.get("user", {}).get("login", "unknown")
                 created = comment.get("created_at", "")[:10]
                 body = comment.get("body", "") or ""
                 comments_text += f"\n\n---\n**Comment by @{author}** ({created}):\n{body}"
-            
+
             if len(comments) < 100:
                 break
             page += 1
-        
+
         return comments_text
 
     for repo in repos.split(","):
@@ -388,7 +388,7 @@ def store_milvus(
         # Create index
         index_params = {
             "metric_type": "COSINE",
-            "index_type": "IVF_FLAT", 
+            "index_type": "IVF_FLAT",
             "params": {"nlist": min(1024, len(records))}
         }
         collection.create_index("vector", index_params)
@@ -402,7 +402,7 @@ def store_milvus(
 )
 def github_rag_pipeline(
     repo_owner: str = "kubeflow",
-    repo_name: str = "website", 
+    repo_name: str = "website",
     directory_path: str = "content/en",
     github_token: str = "",
     base_url: str = "https://www.kubeflow.org/docs",
@@ -419,7 +419,7 @@ def github_rag_pipeline(
         directory_path=directory_path,
         github_token=github_token
     )
-    
+
     # Chunk and embed the content
     chunk_task = chunk_and_embed(
         github_data=download_task.outputs["github_data"],
@@ -428,7 +428,7 @@ def github_rag_pipeline(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap
     )
-    
+
     # Store in Milvus
     store_task = store_milvus(
         embedded_data=chunk_task.outputs["embedded_data"],
@@ -442,7 +442,7 @@ if __name__ == "__main__":
     import os
     # Set environment variable to disable caching by default
     os.environ['KFP_DISABLE_EXECUTION_CACHING_BY_DEFAULT'] = 'true'
-    
+
     # Compile the pipeline with caching disabled by default
     kfp.compiler.Compiler().compile(
         pipeline_func=github_rag_pipeline,

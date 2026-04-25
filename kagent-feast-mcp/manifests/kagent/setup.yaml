@@ -13,7 +13,7 @@ stringData:
 apiVersion: kagent.dev/v1alpha2
 kind: ModelConfig
 metadata:
-  name: groq-llama  
+  name: groq-llama
   namespace: <YOUR_NAMESPACE>
 spec:
   apiKeySecret: kagent-groq
