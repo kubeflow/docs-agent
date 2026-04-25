@@ -139,8 +139,8 @@ def delete_old_vectors(
 
 
 @dsl.component(
-    base_image="pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime",
-    packages_to_install=["sentence-transformers", "langchain"]
+    base_image="python:3.9",
+    packages_to_install=["requests", "langchain"]
 )
 def chunk_and_embed_incremental(
     github_data: dsl.Input[dsl.Dataset],
@@ -148,20 +148,29 @@ def chunk_and_embed_incremental(
     base_url: str,
     chunk_size: int,
     chunk_overlap: int,
+    embedding_service_url: str,
     embedded_data: dsl.Output[dsl.Dataset]
 ):
     import json
     import os
     import re
-    import torch
-    from sentence_transformers import SentenceTransformer
+    import requests
     from langchain.text_splitter import RecursiveCharacterTextSplitter
 
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    model = SentenceTransformer('sentence-transformers/all-mpnet-base-v2', device=device)
-    print(f"Model loaded on {device}")
+    BATCH_SIZE = 64  # chunks per embedding-service call
 
-    records = []
+    def get_embeddings(texts: list) -> list:
+        """Call the centralised embedding service (ADR-004)."""
+        resp = requests.post(
+            f"{embedding_service_url}/embed",
+            json={"texts": texts},
+            timeout=120,
+        )
+        resp.raise_for_status()
+        return resp.json()["embeddings"]
+
+    # ── Phase 1: clean + chunk ───────────────────────────────────────
+    records_pending = []   # records WITHOUT embeddings yet
 
     with open(github_data.path, 'r', encoding='utf-8') as f:
         for line in f:
@@ -222,10 +231,9 @@ def chunk_and_embed_incremental(
 
             print(f"File: {file_data['path']} -> {len(chunks)} chunks (avg: {sum(len(c) for c in chunks)/len(chunks):.0f} chars)")
 
-            # Create embeddings
+            # Collect records (embedding added in Phase 2)
             for chunk_idx, chunk in enumerate(chunks):
-                embedding = model.encode(chunk).tolist()
-                records.append({
+                records_pending.append({
                     'file_unique_id': file_unique_id,
                     'repo_name': repo_name,
                     'file_path': file_data['path'],
@@ -233,13 +241,22 @@ def chunk_and_embed_incremental(
                     'citation_url': citation_url[:1024],
                     'chunk_index': chunk_idx,
                     'content_text': chunk[:2000],
-                    'embedding': embedding
                 })
 
-    print(f"Created {len(records)} total chunks for incremental update")
+    # ── Phase 2: batch-embed via the embedding service ──────────────
+    all_chunks = [r['content_text'] for r in records_pending]
+    print(f"Embedding {len(all_chunks)} chunks in batches of {BATCH_SIZE}...")
+
+    for i in range(0, len(all_chunks), BATCH_SIZE):
+        batch = all_chunks[i : i + BATCH_SIZE]
+        embeddings = get_embeddings(batch)
+        for j, emb in enumerate(embeddings):
+            records_pending[i + j]['embedding'] = emb
+
+    print(f"Created {len(records_pending)} total chunks for incremental update")
 
     with open(embedded_data.path, 'w', encoding='utf-8') as f:
-        for record in records:
+        for record in records_pending:
             f.write(json.dumps(record, ensure_ascii=False) + '\n')
 
 
@@ -351,6 +368,7 @@ def github_rag_incremental_pipeline(
     base_url: str = "https://www.kubeflow.org/docs",
     chunk_size: int = 1200,
     chunk_overlap: int = 100,
+    embedding_service_url: str = "http://embedding-service.docs-agent.svc.cluster.local:8080",
     milvus_host: str = "milvus-standalone-final.docs-agent.svc.cluster.local",
     milvus_port: str = "19530",
     collection_name: str = "docs_rag"
@@ -372,13 +390,14 @@ def github_rag_incremental_pipeline(
         github_token=github_token
     )
     
-    # Step 3: Chunk and embed the changed files
+    # Step 3: Chunk and embed the changed files (via embedding service - ADR-004)
     chunk_task = chunk_and_embed_incremental(
         github_data=download_task.outputs["github_data"],
         repo_name=repo_name,
         base_url=base_url,
         chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap
+        chunk_overlap=chunk_overlap,
+        embedding_service_url=embedding_service_url,
     )
     
     # Step 4: Store new vectors in Milvus (after deletion is complete)
