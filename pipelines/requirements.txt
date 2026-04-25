@@ -1,3 +1,4 @@
+pymilvus
 kfp
 requests
 beautifulsoup4
@@ -7,3 +8,5 @@ torch
 feast[milvus]
 pandas
 numpy
+pyyaml
+

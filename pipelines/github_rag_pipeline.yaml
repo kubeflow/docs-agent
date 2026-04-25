@@ -1,5 +1,5 @@
 # PIPELINE DEFINITION
-# Name: github-rag-full-build
+# Name: github-rag
 # Description: RAG pipeline for processing GitHub documentation
 # Inputs:
 #    base_url: str [Default: 'https://www.kubeflow.org/docs']
@@ -252,35 +252,39 @@ deploymentSpec:
           file_name\", dtype=DataType.VARCHAR, max_length=256),\n        FieldSchema(name=\"\
           citation_url\", dtype=DataType.VARCHAR, max_length=1024),\n        FieldSchema(name=\"\
           chunk_index\", dtype=DataType.INT64),\n        FieldSchema(name=\"content_text\"\
-          , dtype=DataType.VARCHAR, max_length=2000),\n        FieldSchema(name=\"\
+          , dtype=DataType.VARCHAR, max_length=4000),\n        FieldSchema(name=\"\
           vector\", dtype=DataType.FLOAT_VECTOR, dim=768),  # Updated for all-mpnet-base-v2\n\
-          \        FieldSchema(name=\"last_updated\", dtype=DataType.INT64)\n    ]\n\
-          \n    # Create new collection with correct schema\n    schema = CollectionSchema(fields,\
-          \ \"RAG collection for documentation\")\n    collection = Collection(collection_name,\
-          \ schema)\n    print(f\"Created new collection: {collection_name}\")\n\n\
-          \    # Rest of your existing code remains the same...\n    records = []\n\
-          \    timestamp = int(datetime.now().timestamp())\n\n    with open(embedded_data.path,\
-          \ 'r', encoding='utf-8') as f:\n        for line in f:\n            record\
-          \ = json.loads(line)\n            records.append({\n                \"file_unique_id\"\
-          : record[\"file_unique_id\"],\n                \"repo_name\": record[\"\
-          repo_name\"],\n                \"file_path\": record[\"file_path\"],\n \
-          \               \"file_name\": record[\"file_name\"],\n                \"\
-          citation_url\": record[\"citation_url\"],\n                \"chunk_index\"\
-          : record[\"chunk_index\"],\n                \"content_text\": record[\"\
-          content_text\"],\n                \"vector\": record[\"embedding\"],\n \
-          \               \"last_updated\": timestamp\n            })\n\n    if records:\n\
-          \        batch_size = 1000\n        for i in range(0, len(records), batch_size):\n\
-          \            batch = records[i:i + batch_size]\n            collection.insert(batch)\n\
-          \n        collection.flush()\n\n        # Create index\n        index_params\
-          \ = {\n            \"metric_type\": \"COSINE\",\n            \"index_type\"\
-          : \"IVF_FLAT\", \n            \"params\": {\"nlist\": min(1024, len(records))}\n\
-          \        }\n        collection.create_index(\"vector\", index_params)\n\
-          \        collection.load()\n        print(f\"\u2705 Inserted {len(records)}\
-          \ records. Total: {collection.num_entities}\")\n\n"
+          \        FieldSchema(name=\"last_updated\", dtype=DataType.INT64),\n   \
+          \     FieldSchema(name=\"language\", dtype=DataType.VARCHAR, max_length=64),\n\
+          \        FieldSchema(name=\"code_metadata\", dtype=DataType.JSON, nullable=True),\n\
+          \    ]\n\n    # Create new collection with correct schema\n    schema =\
+          \ CollectionSchema(fields, \"Unified RAG collection for documentation and\
+          \ code\")\n    collection = Collection(collection_name, schema)\n    print(f\"\
+          Created new collection: {collection_name}\")\n\n    # Rest of your existing\
+          \ code remains the same...\n    records = []\n    timestamp = int(datetime.now().timestamp())\n\
+          \n    with open(embedded_data.path, 'r', encoding='utf-8') as f:\n     \
+          \   for line in f:\n            record = json.loads(line)\n            records.append({\n\
+          \                \"file_unique_id\": record[\"file_unique_id\"],\n     \
+          \           \"repo_name\": record[\"repo_name\"],\n                \"file_path\"\
+          : record[\"file_path\"],\n                \"file_name\": record[\"file_name\"\
+          ],\n                \"citation_url\": record[\"citation_url\"],\n      \
+          \          \"chunk_index\": record[\"chunk_index\"],\n                \"\
+          content_text\": record[\"content_text\"],\n                \"vector\": record[\"\
+          embedding\"],\n                \"last_updated\": timestamp,\n          \
+          \      \"language\": \"\",\n                \"code_metadata\": None,\n \
+          \           })\n\n    if records:\n        batch_size = 1000\n        for\
+          \ i in range(0, len(records), batch_size):\n            batch = records[i:i\
+          \ + batch_size]\n            collection.insert(batch)\n\n        collection.flush()\n\
+          \n        # Create index\n        index_params = {\n            \"metric_type\"\
+          : \"COSINE\",\n            \"index_type\": \"IVF_FLAT\", \n            \"\
+          params\": {\"nlist\": min(1024, len(records))}\n        }\n        collection.create_index(\"\
+          vector\", index_params)\n        collection.load()\n        print(f\"\u2705\
+          \ Inserted {len(records)} records. Total: {collection.num_entities}\")\n\
+          \n"
         image: python:3.9
 pipelineInfo:
   description: RAG pipeline for processing GitHub documentation
-  name: github-rag-full-build
+  name: github-rag
 root:
   dag:
     tasks:

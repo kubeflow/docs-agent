@@ -99,7 +99,7 @@ deploymentSpec:
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
           \ python3 -m pip install --quiet --no-warn-script-location 'sentence-transformers'\
           \ 'langchain'  &&  python3 -m pip install --quiet --no-warn-script-location\
-          \ 'kfp==2.14.3' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
+          \ 'kfp==2.14.2' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
           3.9\"' && \"$0\" \"$@\"\n"
         - sh
         - -ec
@@ -163,8 +163,10 @@ deploymentSpec:
           \ file_data['path'],\n                    'file_name': file_data['file_name'],\n\
           \                    'citation_url': citation_url[:1024],\n            \
           \        'chunk_index': chunk_idx,\n                    'content_text':\
-          \ chunk[:2000],\n                    'embedding': embedding\n          \
-          \      })\n\n    print(f\"Created {len(records)} total chunks for incremental\
+          \ chunk[:4000],\n                    'embedding': embedding,\n         \
+          \           'language': 'markdown' if file_data['path'].endswith('.md')\
+          \ else 'html',\n                    'code_metadata': None\n            \
+          \    })\n\n    print(f\"Created {len(records)} total chunks for incremental\
           \ update\")\n\n    with open(embedded_data.path, 'w', encoding='utf-8')\
           \ as f:\n        for record in records:\n            f.write(json.dumps(record,\
           \ ensure_ascii=False) + '\\n')\n\n"
@@ -182,7 +184,7 @@ deploymentSpec:
         - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
           \ python3 -m pip install --quiet --no-warn-script-location 'pymilvus'  &&\
-          \  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.14.3'\
+          \  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.14.2'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
           $0\" \"$@\"\n"
         - sh
@@ -239,7 +241,7 @@ deploymentSpec:
         - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
           \ python3 -m pip install --quiet --no-warn-script-location 'requests' 'beautifulsoup4'\
-          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.14.3'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.14.2'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
           $0\" \"$@\"\n"
         - sh
@@ -295,7 +297,7 @@ deploymentSpec:
         - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
           \ python3 -m pip install --quiet --no-warn-script-location 'pymilvus' 'numpy'\
-          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.14.3'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.14.2'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
           $0\" \"$@\"\n"
         - sh
@@ -325,8 +327,10 @@ deploymentSpec:
           \ max_length=256),\n            FieldSchema(name=\"citation_url\", dtype=DataType.VARCHAR,\
           \ max_length=1024),\n            FieldSchema(name=\"chunk_index\", dtype=DataType.INT64),\n\
           \            FieldSchema(name=\"content_text\", dtype=DataType.VARCHAR,\
-          \ max_length=2000),\n            FieldSchema(name=\"vector\", dtype=DataType.FLOAT_VECTOR,\
-          \ dim=768),\n            FieldSchema(name=\"last_updated\", dtype=DataType.INT64)\n\
+          \ max_length=4000),\n            FieldSchema(name=\"vector\", dtype=DataType.FLOAT_VECTOR,\
+          \ dim=768),\n            FieldSchema(name=\"last_updated\", dtype=DataType.INT64),\n\
+          \            FieldSchema(name=\"language\", dtype=DataType.VARCHAR, max_length=64),\n\
+          \            FieldSchema(name=\"code_metadata\", dtype=DataType.JSON, nullable=True)\n\
           \        ]\n\n        schema = CollectionSchema(fields, \"RAG collection\
           \ for documentation\")\n        collection = Collection(collection_name,\
           \ schema)\n        print(f\"Created new collection: {collection_name}\"\
@@ -342,11 +346,13 @@ deploymentSpec:
           ],\n                \"citation_url\": record[\"citation_url\"],\n      \
           \          \"chunk_index\": record[\"chunk_index\"],\n                \"\
           content_text\": record[\"content_text\"],\n                \"vector\": record[\"\
-          embedding\"],\n                \"last_updated\": timestamp\n           \
-          \ })\n\n    if records:\n        # Insert new records\n        batch_size\
-          \ = 1000\n        for i in range(0, len(records), batch_size):\n       \
-          \     batch = records[i:i + batch_size]\n            collection.insert(batch)\n\
-          \n        collection.flush()\n\n        # Create/update index if needed\n\
+          embedding\"],\n                \"last_updated\": timestamp,\n          \
+          \      \"language\": record.get(\"language\", \"\"),\n                \"\
+          code_metadata\": record.get(\"code_metadata\", None)\n            })\n\n\
+          \    if records:\n        # Insert new records\n        batch_size = 1000\n\
+          \        for i in range(0, len(records), batch_size):\n            batch\
+          \ = records[i:i + batch_size]\n            collection.insert(batch)\n\n\
+          \        collection.flush()\n\n        # Create/update index if needed\n\
           \        try:\n            # Check if index exists\n            index_info\
           \ = collection.index()\n            if not index_info:\n               \
           \ print(\"Creating index...\")\n                index_params = {\n     \
@@ -492,4 +498,4 @@ root:
         isOptional: true
         parameterType: STRING
 schemaVersion: 2.1.0
-sdkVersion: kfp-2.14.3
+sdkVersion: kfp-2.14.2
