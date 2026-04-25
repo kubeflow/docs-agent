@@ -8,7 +8,7 @@ from websockets.exceptions import ConnectionClosedError
 import logging
 from typing import Dict, Any, List
 from sentence_transformers import SentenceTransformer
-from pymilvus import connections, Collection
+from pymilvus import connections, Collection, utility
 
 # Config
 KSERVE_URL = os.getenv("KSERVE_URL", "http://llama.docs-agent.svc.cluster.local/openai/v1/chat/completions")
@@ -417,10 +417,63 @@ async def handle_websocket(websocket, path):
     except Exception as e:
         print(f"[ERROR] WebSocket error: {e}")
 
+async def check_milvus_health():
+    try:
+        connections.connect(alias="default", host=MILVUS_HOST, port=MILVUS_PORT)
+        if connections.has_connection(alias="default"):
+            if utility.has_collection(MILVUS_COLLECTION):  # Check specific collection
+                collection = Collection(MILVUS_COLLECTION)
+                # Check if already loaded
+                load_state = utility.load_state(collection_name=MILVUS_COLLECTION)
+                
+                if load_state.state != "Loaded":
+                    collection.load()
+                    # Wait for loading to complete
+                    utility.wait_for_loading_complete(
+                        collection_name=MILVUS_COLLECTION,
+                        timeout=10
+                    )
+                
+                return True
+            else:
+                print(f"Collection '{MILVUS_COLLECTION}' does not exist")
+                return False
+        else:
+            print(f"Milvus connection does not exist")
+            return False
+    except Exception as e:
+        print(f"Milvus health check failed, milvus not configured properly: {e}")
+        return False
+    finally:
+        try:
+            connections.disconnect(alias="default")
+        except Exception:
+            pass
+        
+async def check_embedding_model(model_name="all-mpnet-base-v2"):
+    model = SentenceTransformer(model_name)
+    try:
+        model.encode(["ping"])
+        return True
+    except:
+        return False
+    
 async def health_check(path, request_headers):
     """Handle HTTP health checks"""
     if path == "/health":
-        return 200, [("Content-Type", "text/plain")], b"OK"
+
+        milvus_ok = await check_milvus_health()
+        model_ok = await check_embedding_model()
+
+        status_code = 200 if (milvus_ok and model_ok) else 503
+        body = json.dumps({
+            "status": "healthy" if (milvus_ok and model_ok) else "unhealthy",
+            "milvus": milvus_ok,
+            "embedding_model": model_ok,
+        }).encode("utf-8")
+
+        return status_code, [("Content-Type", "application/json")], body
+    
     return None
 
 async def main():
