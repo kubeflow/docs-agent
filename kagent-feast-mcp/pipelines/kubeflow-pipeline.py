@@ -62,10 +62,6 @@ def download_github_directory(
 
 @dsl.component(
     base_image="python:3.13-slim",
-    packages_to_install=["requests"]
-)
-@dsl.component(
-    base_image="python:3.13-slim",
     packages_to_install=["sentence-transformers", "langchain-text-splitters"]
 )
 def chunk_and_embed(
