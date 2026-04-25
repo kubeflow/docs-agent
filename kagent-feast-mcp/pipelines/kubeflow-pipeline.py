@@ -62,10 +62,6 @@ def download_github_directory(
 
 @dsl.component(
     base_image="python:3.13-slim",
-    packages_to_install=["requests"]
-)
-@dsl.component(
-    base_image="python:3.13-slim",
     packages_to_install=["sentence-transformers", "langchain-text-splitters"]
 )
 def chunk_and_embed(
@@ -280,6 +276,18 @@ auth:
     name="github-rag-feast",
     description="RAG pipeline: GitHub docs -> chunk -> embed -> Feast"
 )
+# ============================================================================
+# IMPORTANT: Collection Naming Convention
+# ============================================================================
+# This pipeline creates a Milvus collection via Feast with name:
+#   {feast_project}_docs_rag
+#
+# For the kagent integration, use feast_project="kubeflow_docs" which yields:
+#   "kubeflow_docs_docs_rag"
+#
+# This must match COLLECTION_NAME in mcp-server/server.py.
+# Verified: March 2026
+# ============================================================================
 def github_rag_feast_pipeline(
     repo_owner: str = "kubeflow",
     repo_name: str = "website",

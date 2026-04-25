@@ -1,48 +1,142 @@
+# -----------------------------------------------------------------------------
+# Verified:
+# - Groq API: March 2026
+# - Kubernetes: v1.28+
+# -----------------------------------------------------------------------------
+
+# =============================================================================
+# Kubeflow Docs Agent — kagent Setup Configuration
+# =============================================================================
+#
+# This file provisions the full kagent stack for the Kubeflow documentation
+# assistant. Apply it in one shot:
+#
+#   kubectl apply -f setup.yaml
+#
+# PREREQUISITES:
+#   1. kagent CRDs + controller installed (see ../../../README.md Step 6)
+#   2. Milvus running and populated (see ../../../README.md Steps 1-4)
+#   3. MCP server deployed (see ../mcp-server/mcp-server.yaml)
+#   4. A valid Groq API key — get one free at https://console.groq.com/keys
+#
+# QUICK START — Replace these before applying:
+#   • GROQ_API_KEY  → your actual Groq API key (line 35)
+#   • Namespace     → defaults to "docs-agent"; change if yours differs
+#
+# =============================================================================
+
+# ---------------------
 # 1. Groq API Key Secret
+# ---------------------
+# Stores the Groq API key securely. Never commit real keys to version control.
+# For production, consider using:
+#   - Sealed Secrets (bitnami-labs/sealed-secrets)
+#   - External Secrets Operator (external-secrets.io)
+#   - HashiCorp Vault
 apiVersion: v1
 kind: Secret
 metadata:
   name: kagent-groq
   namespace: <YOUR_NAMESPACE>
+  labels:
+    app.kubernetes.io/name: kubeflow-docs-agent
+    app.kubernetes.io/component: secrets
+    app.kubernetes.io/part-of: docs-agent
+  annotations:
+    description: "Groq API key for LLM inference — replace with your key"
 type: Opaque
 stringData:
+  # ⚠️  REQUIRED: Replace with your actual Groq API key
+  # Get a free key at: https://console.groq.com/keys
   GROQ_API_KEY: "<YOUR_GROQ_API_KEY>"
 
 ---
-# 2. LLM Provider Config (Groq is OpenAI-compatible)
+# ---------------------
+# 2. LLM Model Configuration
+# ---------------------
+# Configures the LLM provider. Groq exposes an OpenAI-compatible API,
+# so we use provider: OpenAI with Groq's base URL.
+#
+# SUPPORTED GROQ MODELS (as of March 2026):
+# ┌─────────────────────────────────┬──────────┬────────────────────────────┐
+# │ Model ID                        │ Context  │ Best For                   │
+# ├─────────────────────────────────┼──────────┼────────────────────────────┤
+# │ llama-3.1-8b-instant (DEFAULT)  │ 131,072  │ Fast responses, low cost   │
+# │ llama-3.3-70b-versatile         │ 131,072  │ Higher quality, tool use   │
+# │ llama-3.3-70b-specdec           │ 8,192    │ Speculative decoding speed │
+# │ openai/gpt-oss-120b             │ 131,072  │ Highest quality available  │
+# │ openai/gpt-oss-20b              │ 131,072  │ Balanced quality/speed     │
+# └─────────────────────────────────┴──────────┴────────────────────────────┘
+#
+# DEPRECATED MODELS (DO NOT USE — will return HTTP 400):
+#   ✗ llama3-8b-8192        → use llama-3.1-8b-instant
+#   ✗ llama3-70b-8192       → use llama-3.3-70b-versatile
+#   ✗ llama-3.1-70b-versatile → use llama-3.3-70b-versatile
+#
+# To switch models, change the "model" field below. No other changes needed.
 apiVersion: kagent.dev/v1alpha2
 kind: ModelConfig
 metadata:
-  name: groq-llama  
+  name: groq-llama
   namespace: <YOUR_NAMESPACE>
+  labels:
+    app.kubernetes.io/name: kubeflow-docs-agent
+    app.kubernetes.io/component: model-config
+    app.kubernetes.io/part-of: docs-agent
+  annotations:
+    description: "Groq LLM configuration — OpenAI-compatible endpoint"
 spec:
   apiKeySecret: kagent-groq
   apiKeySecretKey: GROQ_API_KEY
-  model: <model of your choice>
+  # Default model: fast, free-tier eligible, good tool-calling support
+  model: llama-3.1-8b-instant
   provider: OpenAI
   openAI:
     baseUrl: "https://api.groq.com/openai/v1"
 
 ---
+# ---------------------
 # 3. MCP Server Reference
+# ---------------------
+# Points to the MCP server that provides the search_kubeflow_docs tool.
+# The MCP server must be deployed first (see ../mcp-server/mcp-server.yaml).
 apiVersion: kagent.dev/v1alpha2
 kind: RemoteMCPServer
 metadata:
   name: kubeflow-docs-mcp
   namespace: <YOUR_NAMESPACE>
+  labels:
+    app.kubernetes.io/name: kubeflow-docs-agent
+    app.kubernetes.io/component: mcp-server
+    app.kubernetes.io/part-of: docs-agent
+  annotations:
+    description: "MCP server for semantic search over Kubeflow documentation"
 spec:
   description: "MCP server for searching Kubeflow documentation via Feast and Milvus"
-  url: http://mcp-kubeflow-docs.<YOUR_NAMESPACE>.svc.cluster.local:8000/mcp
+  # URL format: http://<service-name>.<namespace>.svc.cluster.local:<port>/mcp
+  # Must match the Service name in ../mcp-server/mcp-server.yaml
+  url: http://mcp-kubeflow-docs.docs-agent.svc.cluster.local:8000/mcp
 
 ---
-# 4. Agent with MCP tool
+# ---------------------
+# 4. Kubeflow Docs Agent
+# ---------------------
+# The main agent that orchestrates queries. It uses the Groq model (via
+# ModelConfig) and the MCP search tool (via RemoteMCPServer) to answer
+# Kubeflow documentation questions.
 apiVersion: kagent.dev/v1alpha2
 kind: Agent
 metadata:
   name: kubeflow-docs-agent
   namespace: <YOUR_NAMESPACE>
+  labels:
+    app.kubernetes.io/name: kubeflow-docs-agent
+    app.kubernetes.io/component: agent
+    app.kubernetes.io/part-of: docs-agent
+  annotations:
+    description: "AI assistant for Kubeflow documentation queries"
 spec:
-  description: "Kubeflow documentation assistant"
+  description: "Kubeflow documentation assistant powered by Groq and Milvus"
   type: Declarative
   declarative:
     modelConfig: groq-llama

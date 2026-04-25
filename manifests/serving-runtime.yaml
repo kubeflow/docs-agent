@@ -2,7 +2,7 @@ apiVersion: serving.kserve.io/v1alpha1
 kind: ServingRuntime
 metadata:
   name: llm-runtime
-  namespace: docs-agent
+  namespace: <YOUR_NAMESPACE>
 spec:
   supportedModelFormats:
     - name: huggingface

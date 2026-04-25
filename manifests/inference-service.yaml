@@ -2,7 +2,7 @@ apiVersion: serving.kserve.io/v1beta1
 kind: InferenceService
 metadata:
   name: llama
-  namespace: docs-agent
+  namespace: <YOUR_NAMESPACE>
 spec:
   predictor:
     model:
