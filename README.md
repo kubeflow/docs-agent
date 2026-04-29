@@ -584,6 +584,51 @@ if data.get('citations'):
 <td><code>sentence-transformers/all-mpnet-base-v2</code></td>
 <td>Embedding model</td>
 </tr>
+<tr>
+<td><code>RERANK_ENABLED</code></td>
+<td><code>true</code></td>
+<td>Enable lightweight post-retrieval reranking</td>
+</tr>
+<tr>
+<td><code>RERANK_CANDIDATE_MULTIPLIER</code></td>
+<td><code>3</code></td>
+<td>Multiplier for initial candidate pool before reranking</td>
+</tr>
+<tr>
+<td><code>RERANK_SIMILARITY_WEIGHT</code></td>
+<td><code>0.7</code></td>
+<td>Weight for vector similarity score in final rerank score</td>
+</tr>
+<tr>
+<td><code>RERANK_KEYWORD_WEIGHT</code></td>
+<td><code>0.2</code></td>
+<td>Weight for query term overlap with chunk content</td>
+</tr>
+<tr>
+<td><code>RERANK_METADATA_WEIGHT</code></td>
+<td><code>0.1</code></td>
+<td>Weight for query term overlap with file path and citation URL</td>
+</tr>
+<tr>
+<td><code>RERANK_MAX_CANDIDATES</code></td>
+<td><code>50</code></td>
+<td>Upper bound for candidate pool size fetched before reranking</td>
+</tr>
+<tr>
+<td><code>RERANK_MIN_TOKEN_LEN</code></td>
+<td><code>3</code></td>
+<td>Minimum token length used for query/content term overlap scoring</td>
+</tr>
+<tr>
+<td><code>RERANK_DEBUG_LOG</code></td>
+<td><code>false</code></td>
+<td>Enable before/after reranking logs with component scores</td>
+</tr>
+<tr>
+<td><code>RERANK_LOG_TOP_N</code></td>
+<td><code>5</code></td>
+<td>Number of documents to show in reranking debug logs</td>
+</tr>
 </tbody>
 </table>
 

@@ -1,0 +1,12 @@
+bd1725fdd3d161db68f327df783abe7f8d464cf7
+Ayush-kathil
+Add thread-safe model init and Milvus search
+Introduce thread-safe lazy initialization for SentenceTransformer in server-https/app.py and server/app.py using a lock and double-checked locking, with timing/info logs to avoid repeated model loading. Add threading and time imports. In server/app.py add milvus_search(query, top_k) to perform Milvus connection, load collection, encode query with the cached model, execute search, format results (similarity, file_path, citation_url, truncated content_text), handle errors, and ensure disconnect. These changes reduce initialization overhead and centralize Milvus search logic.
+
+---
+f05614a123776a4009d7104125931289d23bcdcc
+Ayush Gupta
+fix(server-https): preserve multi-hop citations in stream_llm_response
+Signed-off-by: Ayush-kathil <kathilshiva@gmail.com>
+
+---

@@ -6,9 +6,19 @@ import websockets
 from websockets.server import serve
 from websockets.exceptions import ConnectionClosedError
 import logging
+import sys
+from pathlib import Path
 from typing import Dict, Any, List
 from sentence_transformers import SentenceTransformer
 from pymilvus import connections, Collection
+import threading
+import time
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+from shared.reranking import candidate_pool_limit, load_rerank_config_from_env, rerank_documents
 
 # Config
 KSERVE_URL = os.getenv("KSERVE_URL", "http://llama.docs-agent.svc.cluster.local/openai/v1/chat/completions")
@@ -21,6 +31,9 @@ MILVUS_PORT = os.getenv("MILVUS_PORT", "19530")
 MILVUS_COLLECTION = os.getenv("MILVUS_COLLECTION", "docs_rag")
 MILVUS_VECTOR_FIELD = os.getenv("MILVUS_VECTOR_FIELD", "vector")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
+
+logger = logging.getLogger(__name__)
+RERANK_CONFIG = load_rerank_config_from_env()
 
 # System prompt
 SYSTEM_PROMPT = """
@@ -65,6 +78,27 @@ Style
 
 
 
+
+_model_lock = threading.Lock()
+_embedding_model = None
+
+def get_embedding_model():
+    """Thread-safe lazy initialization of SentenceTransformer.
+
+    The model is cached once per process because loading it on every request
+    adds avoidable latency and memory churn.
+    """
+    global _embedding_model
+    if _embedding_model is None:
+        with _model_lock:
+            # Double-checked locking
+            if _embedding_model is None:
+                start_t = time.perf_counter()
+                logger.info("Lazy loading SentenceTransformer model '%s'", EMBEDDING_MODEL)
+                _embedding_model = SentenceTransformer(EMBEDDING_MODEL)
+                logger.info("Model loaded in %.3f seconds", time.perf_counter() - start_t)
+    return _embedding_model
+
 def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
     """Execute a semantic search in Milvus and return structured JSON serializable results."""
     try:
@@ -73,22 +107,24 @@ def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
         collection = Collection(MILVUS_COLLECTION)
         collection.load()
 
-        # Encoder (same model as pipeline)
-        encoder = SentenceTransformer(EMBEDDING_MODEL)
-        query_vec = encoder.encode(query).tolist()
+        # Thread-safe cached encoder
+        model = get_embedding_model()
+        query_vec = model.encode(query).tolist()
+
+        requested_top_k = max(1, int(top_k))
+        candidate_limit = candidate_pool_limit(requested_top_k, RERANK_CONFIG)
 
         search_params = {"metric_type": "COSINE", "params": {"nprobe": 32}}
         results = collection.search(
             data=[query_vec],
             anns_field=MILVUS_VECTOR_FIELD,
             param=search_params,
-            limit=int(top_k),
+            limit=candidate_limit,
             output_fields=["file_path", "content_text", "citation_url"],
         )
 
         hits = []
         for hit in results[0]:
-            # similarity = 1 - distance for COSINE in Milvus
             similarity = 1.0 - float(hit.distance)
             entity = hit.entity
             content_text = entity.get("content_text") or ""
@@ -100,15 +136,26 @@ def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
                 "citation_url": entity.get("citation_url"),
                 "content_text": content_text,
             })
+
+        hits = rerank_documents(
+            query=query,
+            docs=hits,
+            config=RERANK_CONFIG,
+            top_k=requested_top_k,
+            logger=logger,
+            log_prefix="websocket_search",
+        )
+
         return {"results": hits}
-    except Exception as e:
-        print(f"[ERROR] Milvus search failed: {e}")
-        return {"results": []}
+    except Exception:
+        logger.exception("Milvus search failed for query='%s' top_k=%s", query, top_k)
+        raise
     finally:
         try:
             connections.disconnect(alias="default")
-        except Exception:
-            pass
+        except Exception as disconnect_error:
+            logger.warning("Milvus disconnect failed: %s", disconnect_error)
+
 TOOLS = [
     {
         "type": "function",
@@ -153,7 +200,7 @@ async def execute_tool(tool_call: Dict[str, Any]) -> tuple[str, List[str]]:
             query = arguments.get("query", "")
             top_k = arguments.get("top_k", 5)
             
-            print(f"[TOOL] Executing Milvus search for: '{query}' (top_k={top_k})")
+            logger.info("Executing Milvus search for query='%s' top_k=%s", query, top_k)
             result = milvus_search(query, top_k)
             
             # Collect citations
@@ -178,7 +225,7 @@ async def execute_tool(tool_call: Dict[str, Any]) -> tuple[str, List[str]]:
         return f"Unknown tool: {function_name}", []
         
     except Exception as e:
-        print(f"[ERROR] Tool execution failed: {e}")
+        logger.exception("Tool execution failed")
         return f"Tool execution failed: {e}", []
 
 async def stream_llm_response(payload: Dict[str, Any], websocket, citations_collector: List[str] = None) -> None:
@@ -190,7 +237,7 @@ async def stream_llm_response(payload: Dict[str, Any], websocket, citations_coll
             async with client.stream("POST", KSERVE_URL, json=payload) as response:
                 if response.status_code != 200:
                     error_msg = f"LLM service error: HTTP {response.status_code}"
-                    print(f"[ERROR] {error_msg}")
+                    logger.error(error_msg)
                     await websocket.send(json.dumps({"type": "error", "content": error_msg}))
                     return
                 
@@ -252,14 +299,14 @@ async def stream_llm_response(payload: Dict[str, Any], websocket, citations_coll
                         
                         # Handle finish reason - execute tools if needed
                         if finish_reason == "tool_calls":
-                            print(f"[TOOL] Finish reason: tool_calls, executing {len(tool_calls_buffer)} tools")
+                            logger.info("Finish reason=tool_calls; executing %s tools", len(tool_calls_buffer))
                             
                             # Execute all accumulated tool calls
                             for tool_call in tool_calls_buffer.values():
                                 if tool_call["function"]["name"] and tool_call["function"]["arguments"]:
                                     try:
-                                        print(f"[TOOL] Executing: {tool_call['function']['name']}")
-                                        print(f"[TOOL] Arguments: {tool_call['function']['arguments']}")
+                                        logger.info("Executing tool=%s", tool_call["function"]["name"])
+                                        logger.debug("Tool arguments=%s", tool_call["function"]["arguments"])
                                         
                                         result, tool_citations = await execute_tool(tool_call)
                                         
@@ -277,7 +324,7 @@ async def stream_llm_response(payload: Dict[str, Any], websocket, citations_coll
                                         await handle_tool_follow_up(payload, tool_call, result, websocket, citations_collector)
                                         
                                     except Exception as e:
-                                        print(f"[ERROR] Tool execution error: {e}")
+                                        logger.exception("Tool execution error")
                                         await websocket.send(json.dumps({
                                             "type": "error",
                                             "content": f"Tool execution failed: {e}"
@@ -287,11 +334,11 @@ async def stream_llm_response(payload: Dict[str, Any], websocket, citations_coll
                             break  # Tool execution complete, exit streaming loop
                             
                     except json.JSONDecodeError as e:
-                        print(f"[ERROR] JSON decode error: {e}, line: {line}")
+                        logger.warning("JSON decode error: %s line=%s", e, line)
                         continue
                         
     except Exception as e:
-        print(f"[ERROR] Streaming failed: {e}")
+        logger.exception("Streaming failed")
         await websocket.send(json.dumps({"type": "error", "content": f"Streaming failed: {e}"}))
 
 async def handle_tool_follow_up(original_payload: Dict[str, Any], tool_call: Dict[str, Any], tool_result: str, websocket, citations_collector: List[str] = None) -> None:
@@ -299,7 +346,7 @@ async def handle_tool_follow_up(original_payload: Dict[str, Any], tool_call: Dic
     if citations_collector is None:
         citations_collector = []
     try:
-        print("[TOOL] Handling follow-up request with tool results")
+        logger.info("Handling follow-up request with tool results")
         
         # Create messages with tool call and result
         messages = original_payload["messages"].copy()
@@ -329,13 +376,13 @@ async def handle_tool_follow_up(original_payload: Dict[str, Any], tool_call: Dic
         await stream_llm_response(follow_up_payload, websocket, citations_collector)
         
     except Exception as e:
-        print(f"[ERROR] Tool follow-up failed: {e}")
+        logger.exception("Tool follow-up failed")
         await websocket.send(json.dumps({"type": "error", "content": f"Tool follow-up failed: {e}"}))
 
 async def handle_chat(message: str, websocket) -> None:
     """Handle chat with tool calling support"""
     try:
-        print(f"[CHAT] Processing message: {message[:100]}...")
+        logger.info("Processing chat message preview=%s", message[:100])
         
         # Create initial payload
         payload = {
@@ -373,12 +420,12 @@ async def handle_chat(message: str, websocket) -> None:
         await websocket.send(json.dumps({"type": "done"}))
         
     except Exception as e:
-        print(f"[ERROR] Chat handling failed: {e}")
+        logger.exception("Chat handling failed")
         await websocket.send(json.dumps({"type": "error", "content": f"Request failed: {e}"}))
 
 async def handle_websocket(websocket, path):
     """Handle WebSocket connections"""
-    print(f"[WS] New connection from {websocket.remote_address}")
+    logger.info("New websocket connection from %s", websocket.remote_address)
     
     try:
         # Send welcome message
@@ -402,20 +449,20 @@ async def handle_websocket(websocket, path):
                     # Treat as plain text message
                     pass
 
-                print(f"[WS] Received: {message[:100]}...")
+                logger.info("Received websocket message preview=%s", message[:100])
                 await handle_chat(message, websocket)
                 
             except Exception as e:
-                print(f"[ERROR] Message processing error: {e}")
+                logger.exception("Message processing error")
                 await websocket.send(json.dumps({
                     "type": "error", 
                     "content": f"Message processing failed: {e}"
                 }))
                 
     except ConnectionClosedError:
-        print("[WS] Connection closed")
+        logger.info("Websocket connection closed")
     except Exception as e:
-        print(f"[ERROR] WebSocket error: {e}")
+        logger.exception("Websocket error")
 
 async def health_check(path, request_headers):
     """Handle HTTP health checks"""
@@ -425,11 +472,11 @@ async def health_check(path, request_headers):
 
 async def main():
     """Start the WebSocket server"""
-    print("🚀 Starting Kubeflow Docs WebSocket Server")
-    print(f"   Port: {PORT}")
-    print(f"   LLM Service: {KSERVE_URL}")
-    print(f"   Milvus: {MILVUS_HOST}:{MILVUS_PORT}")
-    print(f"   Collection: {MILVUS_COLLECTION}")
+    logger.info("Starting Kubeflow Docs WebSocket Server")
+    logger.info("Port: %s", PORT)
+    logger.info("LLM Service: %s", KSERVE_URL)
+    logger.info("Milvus: %s:%s", MILVUS_HOST, MILVUS_PORT)
+    logger.info("Collection: %s", MILVUS_COLLECTION)
     
     # Configure logging
     logging.getLogger("websockets").setLevel(logging.WARNING)
@@ -443,12 +490,16 @@ async def main():
         ping_interval=30,
         ping_timeout=10
     ):
-        print("✅ WebSocket server is running...")
-        print(f"   WebSocket: ws://localhost:{PORT}")
-        print(f"   Health: http://localhost:{PORT}/health")
+        logger.info("WebSocket server is running")
+        logger.info("WebSocket: ws://localhost:%s", PORT)
+        logger.info("Health: http://localhost:%s/health", PORT)
         
         # Keep server running
         await asyncio.Future()
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=os.getenv("LOG_LEVEL", "INFO").upper(),
+        format="%(asctime)s %(levelname)s %(name)s - %(message)s",
+    )
     asyncio.run(main())
