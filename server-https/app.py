@@ -23,17 +23,23 @@ from shared.reranking import candidate_pool_limit, load_rerank_config_from_env, 
 
 _model_lock = threading.Lock()
 _embedding_model = None
+
+
 def get_embedding_model():
-    """Thread-safe lazy initialization of SentenceTransformer"""
+    """Thread-safe lazy initialization of SentenceTransformer.
+
+    The model is cached once per process because loading it on every request
+    adds avoidable latency and memory churn.
+    """
     global _embedding_model
     if _embedding_model is None:
         with _model_lock:
             # Double-checked locking
             if _embedding_model is None:
                 start_t = time.perf_counter()
-                print(f"[INFO] Lazy loading SentenceTransformer model '{EMBEDDING_MODEL}'...")
+                logger.info("Lazy loading SentenceTransformer model '%s'", EMBEDDING_MODEL)
                 _embedding_model = SentenceTransformer(EMBEDDING_MODEL)
-                print(f"[INFO] Model loaded in {time.perf_counter() - start_t:.3f} seconds.")
+                logger.info("Model loaded in %.3f seconds", time.perf_counter() - start_t)
     return _embedding_model
 
 # Config
@@ -190,14 +196,14 @@ def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
         )
 
         return {"results": hits}
-    except Exception as e:
-        print(f"[ERROR] Milvus search failed: {e}")
-        return {"results": []}
+    except Exception:
+        logger.exception("Milvus search failed for query='%s' top_k=%s", query, top_k)
+        raise
     finally:
         try:
             connections.disconnect(alias="default")
-        except Exception:
-            pass
+        except Exception as disconnect_error:
+            logger.warning("Milvus disconnect failed: %s", disconnect_error)
 
 async def execute_tool(tool_call: Dict[str, Any]) -> tuple[str, List[str]]:
     """Execute a tool call and return the result and citations"""
@@ -209,7 +215,7 @@ async def execute_tool(tool_call: Dict[str, Any]) -> tuple[str, List[str]]:
             query = arguments.get("query", "")
             top_k = arguments.get("top_k", 5)
             
-            print(f"[TOOL] Executing Milvus search for: '{query}' (top_k={top_k})")
+            logger.info("Executing Milvus search for query='%s' top_k=%s", query, top_k)
             result = milvus_search(query, top_k)
             
             # Collect citations
@@ -234,7 +240,7 @@ async def execute_tool(tool_call: Dict[str, Any]) -> tuple[str, List[str]]:
         return f"Unknown tool: {function_name}", []
         
     except Exception as e:
-        print(f"[ERROR] Tool execution failed: {e}")
+        logger.exception("Tool execution failed")
         return f"Tool execution failed: {e}", []
 
 async def stream_llm_response(payload: Dict[str, Any], citations_collector: Optional[List[str]] = None) -> AsyncGenerator[str, None]:
@@ -248,7 +254,7 @@ async def stream_llm_response(payload: Dict[str, Any], citations_collector: Opti
             async with client.stream("POST", KSERVE_URL, json=payload) as response:
                 if response.status_code != 200:
                     error_msg = f"LLM service error: HTTP {response.status_code}"
-                    print(f"[ERROR] {error_msg}")
+                    logger.error(error_msg)
                     yield f"data: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
                     return
                 
@@ -307,14 +313,14 @@ async def stream_llm_response(payload: Dict[str, Any], citations_collector: Opti
                         
                         # Handle finish reason - execute tools if needed
                         if finish_reason == "tool_calls":
-                            print(f"[TOOL] Finish reason: tool_calls, executing {len(tool_calls_buffer)} tools")
+                            logger.info("Finish reason=tool_calls; executing %s tools", len(tool_calls_buffer))
                             
                             # Execute all accumulated tool calls
                             for tool_call in tool_calls_buffer.values():
                                 if tool_call["function"]["name"] and tool_call["function"]["arguments"]:
                                     try:
-                                        print(f"[TOOL] Executing: {tool_call['function']['name']}")
-                                        print(f"[TOOL] Arguments: {tool_call['function']['arguments']}")
+                                        logger.info("Executing tool=%s", tool_call["function"]["name"])
+                                        logger.debug("Tool arguments=%s", tool_call["function"]["arguments"])
                                         
                                         result, tool_citations = await execute_tool(tool_call)
                                         
@@ -329,14 +335,14 @@ async def stream_llm_response(payload: Dict[str, Any], citations_collector: Opti
                                             yield follow_up_chunk
                                         
                                     except Exception as e:
-                                        print(f"[ERROR] Tool execution error: {e}")
+                                        logger.exception("Tool execution error")
                                         yield f"data: {json.dumps({'type': 'error', 'content': f'Tool execution failed: {e}'})}\n\n"
                             
                             tool_calls_buffer.clear()
                             break  # Tool execution complete, exit streaming loop
                             
                     except json.JSONDecodeError as e:
-                        print(f"[ERROR] JSON decode error: {e}, line: {line}")
+                        logger.warning("JSON decode error: %s line=%s", e, line)
                         continue
         
         # Send citations if any were collected
@@ -354,13 +360,13 @@ async def stream_llm_response(payload: Dict[str, Any], citations_collector: Opti
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
                         
     except Exception as e:
-        print(f"[ERROR] Streaming failed: {e}")
+        logger.exception("Streaming failed")
         yield f"data: {json.dumps({'type': 'error', 'content': f'Streaming failed: {e}'})}\n\n"
 
 async def handle_tool_follow_up(original_payload: Dict[str, Any], tool_call: Dict[str, Any], tool_result: str, citations_collector: List[str]) -> AsyncGenerator[str, None]:
     """Handle follow-up request after tool execution"""
     try:
-        print("[TOOL] Handling follow-up request with tool results")
+        logger.info("Handling follow-up request with tool results")
         
         # Create messages with tool call and result
         messages = original_payload["messages"].copy()
@@ -391,7 +397,7 @@ async def handle_tool_follow_up(original_payload: Dict[str, Any], tool_call: Dic
             yield chunk
         
     except Exception as e:
-        print(f"[ERROR] Tool follow-up failed: {e}")
+        logger.exception("Tool follow-up failed")
         yield f"data: {json.dumps({'type': 'error', 'content': f'Tool follow-up failed: {e}'})}\n\n"
 
 async def get_non_streaming_response(payload: Dict[str, Any]) -> tuple[str, List[str]]:
@@ -443,7 +449,7 @@ async def options_health():
 async def chat(request: ChatRequest):
     """Chat endpoint with RAG capabilities - supports both streaming and non-streaming"""
     try:
-        print(f"[CHAT] Processing message: {request.message[:100]}...")
+        logger.info("Processing chat message preview=%s", request.message[:100])
         
         # Create initial payload
         payload = {
@@ -486,15 +492,19 @@ async def chat(request: ChatRequest):
             }
         
     except Exception as e:
-        print(f"[ERROR] Chat handling failed: {e}")
+        logger.exception("Chat handling failed")
         raise HTTPException(status_code=500, detail=f"Request failed: {e}")
 
 if __name__ == "__main__":
-    print("🚀 Starting Kubeflow Docs HTTP API Server")
-    print(f"   Port: {PORT}")
-    print(f"   LLM Service: {KSERVE_URL}")
-    print(f"   Milvus: {MILVUS_HOST}:{MILVUS_PORT}")
-    print(f"   Collection: {MILVUS_COLLECTION}")
+    logging.basicConfig(
+        level=os.getenv("LOG_LEVEL", "INFO").upper(),
+        format="%(asctime)s %(levelname)s %(name)s - %(message)s",
+    )
+    logger.info("Starting Kubeflow Docs HTTP API Server")
+    logger.info("Port: %s", PORT)
+    logger.info("LLM Service: %s", KSERVE_URL)
+    logger.info("Milvus: %s:%s", MILVUS_HOST, MILVUS_PORT)
+    logger.info("Collection: %s", MILVUS_COLLECTION)
     
     uvicorn.run(
         app, 

@@ -5,8 +5,18 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 
+LOGGER = logging.getLogger(__name__)
+
+
 @dataclass(frozen=True)
 class RerankConfig:
+    """Reranking defaults favor a lightweight, recall-first blend.
+
+    The similarity weight remains the primary signal, while keyword and metadata
+    weights stay small so reranking improves relevance without overpowering the
+    original vector score.
+    """
+
     enabled: bool = True
     candidate_multiplier: int = 3
     similarity_weight: float = 0.7
@@ -21,25 +31,61 @@ class RerankConfig:
 def _parse_bool(value: str, default: bool) -> bool:
     if value is None:
         return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+
+    LOGGER.warning("Invalid boolean value '%s'; using default=%s", value, default)
+    return default
+
+
+def _parse_int_env(name: str, default: int, minimum: int = 1) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+
+    try:
+        return max(minimum, int(raw))
+    except (TypeError, ValueError):
+        LOGGER.warning("Invalid integer for %s=%s; using default=%s", name, raw, default)
+        return default
+
+
+def _parse_float_env(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        LOGGER.warning("Invalid float for %s=%s; using default=%s", name, raw, default)
+        return default
 
 
 def load_rerank_config_from_env() -> RerankConfig:
     return RerankConfig(
         enabled=_parse_bool(os.getenv("RERANK_ENABLED", "true"), True),
-        candidate_multiplier=max(1, int(os.getenv("RERANK_CANDIDATE_MULTIPLIER", "3"))),
-        similarity_weight=float(os.getenv("RERANK_SIMILARITY_WEIGHT", "0.7")),
-        keyword_weight=float(os.getenv("RERANK_KEYWORD_WEIGHT", "0.2")),
-        metadata_weight=float(os.getenv("RERANK_METADATA_WEIGHT", "0.1")),
-        max_candidates=max(1, int(os.getenv("RERANK_MAX_CANDIDATES", "50"))),
-        min_token_len=max(1, int(os.getenv("RERANK_MIN_TOKEN_LEN", "3"))),
+        candidate_multiplier=_parse_int_env("RERANK_CANDIDATE_MULTIPLIER", 3),
+        similarity_weight=_parse_float_env("RERANK_SIMILARITY_WEIGHT", 0.7),
+        keyword_weight=_parse_float_env("RERANK_KEYWORD_WEIGHT", 0.2),
+        metadata_weight=_parse_float_env("RERANK_METADATA_WEIGHT", 0.1),
+        max_candidates=_parse_int_env("RERANK_MAX_CANDIDATES", 50),
+        min_token_len=_parse_int_env("RERANK_MIN_TOKEN_LEN", 3),
         debug_logging=_parse_bool(os.getenv("RERANK_DEBUG_LOG", "false"), False),
-        log_top_n=max(1, int(os.getenv("RERANK_LOG_TOP_N", "5"))),
+        log_top_n=_parse_int_env("RERANK_LOG_TOP_N", 5),
     )
 
 
 def candidate_pool_limit(top_k: int, config: RerankConfig) -> int:
-    requested_top_k = max(1, int(top_k))
+    try:
+        requested_top_k = max(1, int(top_k))
+    except (TypeError, ValueError):
+        LOGGER.warning("Invalid top_k=%s; using fallback top_k=1", top_k)
+        requested_top_k = 1
     if not config.enabled:
         return requested_top_k
     expanded = requested_top_k * max(1, config.candidate_multiplier)
@@ -112,7 +158,11 @@ def rerank_documents(
     logger: Optional[logging.Logger] = None,
     log_prefix: str = "retrieval",
 ) -> List[Dict[str, Any]]:
-    requested_top_k = max(1, int(top_k))
+    try:
+        requested_top_k = max(1, int(top_k))
+    except (TypeError, ValueError):
+        LOGGER.warning("Invalid top_k=%s; using fallback top_k=1", top_k)
+        requested_top_k = 1
     if not docs:
         return []
 
@@ -164,7 +214,16 @@ def rerank_documents(
         doc["rerank_score"] = round(final_score, 4)
         reranked.append(doc)
 
-    reranked.sort(key=lambda item: float(item.get("rerank_score", 0.0)), reverse=True)
+    # Sort by score and stable tie-breakers for deterministic ordering in tests and production.
+    reranked.sort(
+        key=lambda item: (
+            -float(item.get("rerank_score", 0.0)),
+            -float(item.get("similarity", 0.0)),
+            str(item.get("file_path", "")),
+            str(item.get("citation_url", "")),
+            str(item.get("content_text", "")),
+        )
+    )
     selected = reranked[:requested_top_k]
 
     _log_docs(
