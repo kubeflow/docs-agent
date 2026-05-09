@@ -290,6 +290,32 @@ kubectl logs -n <kfp-namespace> <workflow-step-pod> -c main --tail=400
 
 ---
 
+## Troubleshooting: pipeline pods blocked (`PodDefaults` admission webhook EOF)
+
+If workflows fail immediately with **`admission-webhook-deployment.kubeflow.org`** / **`Post … admission-webhook-service … EOF`**, the webhook usually has **no healthy pods**. Namespace **`kubeflow`** may enforce **`pod-security.kubernetes.io/enforce=restricted`**, while the stock webhook Deployment ships **without** a restrictive `securityContext`, so **pods never schedule**.
+
+Check:
+
+```bash
+kubectl get deploy admission-webhook-deployment -n kubeflow
+kubectl get pods -n kubeflow -l app=poddefaults
+kubectl describe rs -n kubeflow -l app=poddefaults | tail -20
+```
+
+Fix (patch webhook Deployment so PSA restricted accepts it — **`runAsUser`** may need tuning if the image fails startup):
+
+```bash
+kubectl patch deployment admission-webhook-deployment -n kubeflow --type=json -p='[
+  {"op": "replace", "path": "/spec/template/spec/securityContext", "value": {"runAsNonRoot": true, "runAsUser": 1000, "seccompProfile": {"type": "RuntimeDefault"}}},
+  {"op": "add", "path": "/spec/template/spec/containers/0/securityContext", "value": {"allowPrivilegeEscalation": false, "capabilities": {"drop": ["ALL"]}, "readOnlyRootFilesystem": false}}
+]'
+kubectl rollout status deployment/admission-webhook-deployment -n kubeflow
+```
+
+Persist the same fields in your **Terraform / manifests** so upgrades do not revert this.
+
+---
+
 ## Future: resetting **only** docs-agent workloads (reference — do not run blindly)
 
 Discuss with mentors before teardown. Order of operations usually matters:
