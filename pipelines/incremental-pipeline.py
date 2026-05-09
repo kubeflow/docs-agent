@@ -4,7 +4,7 @@ from kfp.dsl import *
 from typing import *
 
 @dsl.component(
-    base_image="python:3.9",
+    base_image="docker.io/library/python:3.9",
     packages_to_install=["requests", "beautifulsoup4"]
 )
 def download_specific_files(
@@ -73,7 +73,7 @@ def download_specific_files(
 
 
 @dsl.component(
-    base_image="python:3.9",
+    base_image="docker.io/library/python:3.9",
     packages_to_install=["pymilvus"]
 )
 def delete_old_vectors(
@@ -139,7 +139,7 @@ def delete_old_vectors(
 
 
 @dsl.component(
-    base_image="pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime",
+    base_image="docker.io/pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime",
     packages_to_install=["sentence-transformers", "langchain"]
 )
 def chunk_and_embed_incremental(
@@ -244,7 +244,7 @@ def chunk_and_embed_incremental(
 
 
 @dsl.component(
-    base_image="python:3.9",
+    base_image="docker.io/library/python:3.9",
     packages_to_install=["pymilvus", "numpy"]
 )
 def store_milvus_incremental(

@@ -15,7 +15,7 @@ from typing import *
 
 
 @dsl.component(
-    base_image="python:3.9",
+    base_image="docker.io/library/python:3.9",
     packages_to_install=["requests"]
 )
 def download_github_issues(
@@ -168,7 +168,7 @@ def download_github_issues(
 
 
 @dsl.component(
-    base_image="pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime",
+    base_image="docker.io/pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime",
     packages_to_install=["sentence-transformers", "langchain"]
 )
 def chunk_and_embed_issues(
@@ -288,7 +288,7 @@ def chunk_and_embed_issues(
 
 
 @dsl.component(
-    base_image="python:3.9",
+    base_image="docker.io/library/python:3.9",
     packages_to_install=["pymilvus", "numpy"]
 )
 def store_issues_milvus(
