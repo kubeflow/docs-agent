@@ -221,6 +221,14 @@ python code-pipeline.py           # code_rag_pipeline.yaml
 
 Upload the generated YAML in the **Kubeflow Pipelines** UI → **Upload pipeline**, then **Create run**.
 
+**Find your cluster’s public URL (example discovery):**
+
+```bash
+kubectl get svc -n istio-system istio-ingressgateway -o jsonpath='{.status.loadBalancer.ingress[0].ip}{"\n"}'
+```
+
+Use **`http://<EXTERNAL-IP>/`** for the Central Dashboard (may redirect to auth). Pipelines UI is usually **`http://<EXTERNAL-IP>/pipeline/`** (exact path can vary slightly by Kubeflow version). If TLS or OAuth is configured, use **`https`** and the hostname your admins documented instead of raw IP.
+
 **Defaults for “index more”:**
 
 | Pipeline | Parameters to scale up |
