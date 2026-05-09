@@ -316,6 +316,12 @@ Persist the same fields in your **Terraform / manifests** so upgrades do not rev
 
 ---
 
+## Troubleshooting: `ImageInspectError` / “short name mode is enforcing … ambiguous list”
+
+Some nodes run **containerd** with **short name mode enforcing**. Unqualified images like `python:3.9` or `pytorch/pytorch:…` can fail inspection (`Failed to inspect image ""` or **ambiguous list**). Use fully qualified refs in **`@dsl.component(base_image=...)`**, e.g. **`docker.io/library/python:3.9`** and **`docker.io/pytorch/pytorch:…`** (same pattern as `code-pipeline.py`).
+
+---
+
 ## Future: resetting **only** docs-agent workloads (reference — do not run blindly)
 
 Discuss with mentors before teardown. Order of operations usually matters:
