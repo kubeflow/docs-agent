@@ -187,7 +187,50 @@ Port-forward (from your laptop):
 kubectl port-forward svc/my-release-milvus -n docs-agent 19530:19530
 ```
 
-Drop the RAG collections used by the MCP (names must match your pipelines and env vars). Example using `docker run` (no local Milvus install):
+Drop the RAG collections used by the MCP (names must match your pipelines and env vars).
+
+**If Docker Desktop is not running** (Mac often shows `docker.sock: connect: no such file or directory`), skip `docker run` and use **A** or **B** below.
+
+**A — Port-forward + local Python**
+
+```bash
+# Terminal 1
+kubectl port-forward svc/my-release-milvus -n docs-agent 19530:19530
+```
+
+```bash
+# Terminal 2
+pip install pymilvus
+python -c "
+from pymilvus import connections, utility
+connections.connect('default', host='127.0.0.1', port='19530', user='root', password='Milvus')
+for c in ['docs_rag', 'issues_rag', 'code_rag']:
+    if utility.has_collection(c):
+        utility.drop_collection(c)
+        print('Dropped', c)
+    else:
+        print('No collection', c)
+"
+```
+
+**B — Ephemeral pod in `docs-agent` (no local Docker)**
+
+```bash
+kubectl run milvus-drop-rag --rm -it --restart=Never -n docs-agent \
+  --image=python:3.11-slim \
+  -- bash -c 'pip install -q pymilvus && python -c "
+from pymilvus import connections, utility
+connections.connect(\"default\", host=\"my-release-milvus.docs-agent.svc.cluster.local\", port=\"19530\", user=\"root\", password=\"Milvus\")
+for c in [\"docs_rag\", \"issues_rag\", \"code_rag\"]:
+    if utility.has_collection(c):
+        utility.drop_collection(c)
+        print(\"Dropped\", c)
+    else:
+        print(\"No collection\", c)
+"'
+```
+
+**Optional — Docker on laptop** (daemon must be running; Linux `--network host` only):
 
 ```bash
 docker run --rm --network host python:3.11-slim bash -c \
