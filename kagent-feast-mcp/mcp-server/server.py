@@ -7,7 +7,7 @@ from sentence_transformers import SentenceTransformer
 MILVUS_URI = os.getenv("MILVUS_URI", "http://localhost:19530")
 MILVUS_USER = os.getenv("MILVUS_USER", "root")
 MILVUS_PASSWORD = os.getenv("MILVUS_PASSWORD", "Milvus")
-COLLECTION_NAME = os.getenv("COLLECTION_NAME", "kubeflow_docs_docs_rag")
+COLLECTION_NAME = os.getenv("COLLECTION_NAME", "docs_rag")
 ISSUES_COLLECTION_NAME = os.getenv("ISSUES_COLLECTION_NAME", "issues_rag")
 CODE_COLLECTION_NAME = os.getenv("CODE_COLLECTION_NAME", "code_rag")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")

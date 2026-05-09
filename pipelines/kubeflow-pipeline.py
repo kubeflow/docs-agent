@@ -332,14 +332,12 @@ def store_milvus(
     import json
     from datetime import datetime
 
+    SCHEMA_VERSION = 1
+    SCHEMA_DESCRIPTION = f"RAG collection for documentation (v={SCHEMA_VERSION})"
+    DELETE_BATCH_SIZE = 100
+
     connections.connect("default", host=milvus_host, port=milvus_port)
 
-    # DROP existing collection to fix schema mismatch
-    if utility.has_collection(collection_name):
-        utility.drop_collection(collection_name)
-        print(f"Dropped existing collection: {collection_name}")
-
-    # Enhanced schema with 768 dimensions
     fields = [
         FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
         FieldSchema(name="file_unique_id", dtype=DataType.VARCHAR, max_length=512),
@@ -349,14 +347,25 @@ def store_milvus(
         FieldSchema(name="citation_url", dtype=DataType.VARCHAR, max_length=1024),
         FieldSchema(name="chunk_index", dtype=DataType.INT64),
         FieldSchema(name="content_text", dtype=DataType.VARCHAR, max_length=2000),
-        FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=768),  # Updated for all-mpnet-base-v2
+        FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=768),
         FieldSchema(name="last_updated", dtype=DataType.INT64)
     ]
 
-    # Create new collection with correct schema
-    schema = CollectionSchema(fields, "RAG collection for documentation")
-    collection = Collection(collection_name, schema)
-    print(f"Created new collection: {collection_name}")
+    schema = CollectionSchema(fields, SCHEMA_DESCRIPTION)
+
+    if utility.has_collection(collection_name):
+        collection = Collection(collection_name)
+        existing_desc = collection.description or ""
+        if f"v={SCHEMA_VERSION}" not in existing_desc:
+            raise RuntimeError(
+                f"Schema version mismatch for {collection_name}. "
+                f"Expected v={SCHEMA_VERSION}, found description: '{existing_desc}'. "
+                f"Run a migration job to drop+recreate before re-indexing."
+            )
+        print(f"Using existing collection: {collection_name} (schema v={SCHEMA_VERSION})")
+    else:
+        collection = Collection(collection_name, schema)
+        print(f"Created new collection: {collection_name} (schema v={SCHEMA_VERSION})")
 
     # Rest of your existing code remains the same...
     records = []
@@ -378,22 +387,53 @@ def store_milvus(
             })
 
     if records:
-        batch_size = 1000
-        for i in range(0, len(records), batch_size):
-            batch = records[i:i + batch_size]
-            collection.insert(batch)
-
-        collection.flush()
-
-        # Create index
-        index_params = {
-            "metric_type": "COSINE",
-            "index_type": "IVF_FLAT", 
-            "params": {"nlist": min(1024, len(records))}
-        }
-        collection.create_index("vector", index_params)
         collection.load()
-        print(f"✅ Inserted {len(records)} records. Total: {collection.num_entities}")
+
+        # Delete existing chunks for the files being re-indexed (batched by 100)
+        unique_ids = sorted(set(r["file_unique_id"] for r in records))
+        deleted = 0
+        try:
+            for i in range(0, len(unique_ids), DELETE_BATCH_SIZE):
+                batch_ids = unique_ids[i:i + DELETE_BATCH_SIZE]
+                quoted = ", ".join(f'"{uid}"' for uid in batch_ids)
+                expr = f"file_unique_id in [{quoted}]"
+                old = collection.query(expr=expr, output_fields=["id"], limit=16384)
+                if old:
+                    collection.delete(expr)
+                    deleted += len(old)
+            if deleted:
+                collection.flush()
+                print(f"Deleted {deleted} old chunks for {len(unique_ids)} files")
+        except Exception as e:
+            print(f"ERROR during delete phase: {e}")
+            print(f"Failed batch unique_ids: {unique_ids[i:i + DELETE_BATCH_SIZE]}")
+            raise
+
+        # Insert new chunks (failure-aware)
+        batch_size = 1000
+        inserted = 0
+        try:
+            for i in range(0, len(records), batch_size):
+                batch = records[i:i + batch_size]
+                collection.insert(batch)
+                inserted += len(batch)
+            collection.flush()
+        except Exception as e:
+            print(f"ERROR during insert. Inserted={inserted}/{len(records)}. Error: {e}")
+            failed_ids = sorted(set(r["file_unique_id"] for r in records[i:i + batch_size]))
+            print(f"Failed batch starts at record {i}, file_unique_ids in failing batch: {failed_ids}")
+            raise
+
+        # Create index if not already present
+        if not collection.has_index():
+            index_params = {
+                "metric_type": "COSINE",
+                "index_type": "IVF_FLAT",
+                "params": {"nlist": min(1024, len(records))}
+            }
+            collection.create_index("vector", index_params)
+        collection.load()
+        print(f"Inserted {len(records)} records. Total: {collection.num_entities}")
 
 
 @dsl.pipeline(
@@ -408,7 +448,7 @@ def github_rag_pipeline(
     base_url: str = "https://www.kubeflow.org/docs",
     chunk_size: int = 1000,
     chunk_overlap: int = 100,
-    milvus_host: str = "milvus-standalone-final.docs-agent.svc.cluster.local",
+    milvus_host: str = "my-release-milvus.docs-agent.svc.cluster.local",
     milvus_port: str = "19530",
     collection_name: str = "docs_rag"
 ):

@@ -225,13 +225,6 @@ def chunk_and_embed_issues(
         return " | ".join(parts) + "\n\n"
 
     records = []
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-        length_function=len,
-        separators=["\n\n", "\n", ". ", " ", ""],
-    )
-
     with open(issues_data.path, 'r', encoding='utf-8') as f:
         for line in f:
             issue = json.loads(line)
@@ -241,6 +234,15 @@ def chunk_and_embed_issues(
             effective_size = chunk_size - len(prefix)
             if effective_size < 100:
                 effective_size = 100
+
+            # Split oversized segments with room left for metadata prefix (matches issues_utils)
+            overlap = min(chunk_overlap, max(0, effective_size - 1))
+            splitter = RecursiveCharacterTextSplitter(
+                chunk_size=effective_size,
+                chunk_overlap=overlap,
+                length_function=len,
+                separators=["\n\n", "\n", ". ", " ", ""],
+            )
 
             # Split at comment boundaries or keep as single chunk
             if len(content) <= effective_size:
@@ -302,13 +304,14 @@ def store_issues_milvus(
     """
     from pymilvus import connections, utility, FieldSchema, CollectionSchema, DataType, Collection
     import json
+    import re
     from datetime import datetime
 
-    connections.connect("default", host=milvus_host, port=milvus_port)
+    SCHEMA_VERSION = 1
+    SCHEMA_DESCRIPTION = f"RAG collection for GitHub issues (v={SCHEMA_VERSION})"
+    DELETE_BATCH_SIZE = 100
 
-    if utility.has_collection(collection_name):
-        utility.drop_collection(collection_name)
-        print(f"Dropped existing collection: {collection_name}")
+    connections.connect("default", host=milvus_host, port=milvus_port)
 
     fields = [
         FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
@@ -325,9 +328,24 @@ def store_issues_milvus(
         FieldSchema(name="source_type", dtype=DataType.VARCHAR, max_length=64),
     ]
 
-    schema = CollectionSchema(fields, "RAG collection for GitHub issues")
-    collection = Collection(collection_name, schema)
-    print(f"Created collection: {collection_name}")
+    schema = CollectionSchema(fields, SCHEMA_DESCRIPTION)
+    collection_existed = utility.has_collection(collection_name)
+
+    if collection_existed:
+        collection = Collection(collection_name)
+        existing_desc = collection.description or ""
+        version_match = re.search(r'\bv=(\d+)\b', existing_desc)
+        existing_version = int(version_match.group(1)) if version_match else None
+        if existing_version != SCHEMA_VERSION:
+            raise RuntimeError(
+                f"Schema version mismatch for {collection_name}. "
+                f"Expected v={SCHEMA_VERSION}, found v={existing_version} (description: '{existing_desc}'). "
+                f"Run a migration job to drop+recreate before re-indexing."
+            )
+        print(f"Using existing collection: {collection_name} (schema v={SCHEMA_VERSION})")
+    else:
+        collection = Collection(collection_name, schema)
+        print(f"Created collection: {collection_name} (schema v={SCHEMA_VERSION})")
 
     records = []
     timestamp = int(datetime.now().timestamp())
@@ -350,19 +368,58 @@ def store_issues_milvus(
             })
 
     if records:
+        # Delete existing chunks only when collection pre-existed and has an index loadable
+        if collection_existed and len(collection.indexes) > 0:
+            collection.load()
+            unique_ids = sorted(set(r["file_unique_id"] for r in records))
+            current_batch_ids = None
+            batches_deleted = 0
+            try:
+                for i in range(0, len(unique_ids), DELETE_BATCH_SIZE):
+                    current_batch_ids = unique_ids[i:i + DELETE_BATCH_SIZE]
+                    quoted = ", ".join(f'"{uid}"' for uid in current_batch_ids)
+                    expr = f"file_unique_id in [{quoted}]"
+                    collection.delete(expr)
+                    batches_deleted += 1
+                collection.flush()
+                print(f"Deleted old chunks for {len(unique_ids)} issues across {batches_deleted} batches")
+            except Exception as e:
+                print(f"ERROR during delete phase: {e}")
+                print(f"Failed batch unique_ids ({len(current_batch_ids) if current_batch_ids else 0} ids): {current_batch_ids}")
+                print(f"Batches successfully deleted before failure (unflushed): {batches_deleted - 1}")
+                raise
+
+        # Insert new chunks (failure-aware: capture failing batch inside the loop)
         batch_size = 1000
-        for i in range(0, len(records), batch_size):
-            batch = records[i:i + batch_size]
-            collection.insert(batch)
+        inserted = 0
+        current_batch = None
+        current_batch_start = 0
+        try:
+            for i in range(0, len(records), batch_size):
+                current_batch_start = i
+                current_batch = records[i:i + batch_size]
+                collection.insert(current_batch)
+                inserted += len(current_batch)
+            current_batch = None  # successful insert phase
+            collection.flush()
+        except Exception as e:
+            print(f"ERROR during insert/flush. Inserted={inserted}/{len(records)}. Error: {e}")
+            if current_batch is not None:
+                failed_ids = sorted(set(r["file_unique_id"] for r in current_batch))
+                print(f"Failed insert batch starts at record {current_batch_start}, file_unique_ids: {failed_ids}")
+            else:
+                print("Failure occurred during flush() after all batches were submitted")
+            raise
 
-        collection.flush()
-
-        index_params = {
-            "metric_type": "COSINE",
-            "index_type": "IVF_FLAT",
-            "params": {"nlist": min(1024, len(records))}
-        }
-        collection.create_index("vector", index_params)
+        # Create index if not already present (post-flush so num_entities reflects total)
+        if len(collection.indexes) == 0:
+            nlist = max(16, min(1024, collection.num_entities))
+            index_params = {
+                "metric_type": "COSINE",
+                "index_type": "IVF_FLAT",
+                "params": {"nlist": nlist}
+            }
+            collection.create_index("vector", index_params)
         collection.load()
         print(f"Inserted {len(records)} records. Total: {collection.num_entities}")
 
