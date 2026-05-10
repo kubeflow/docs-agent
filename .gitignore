@@ -221,3 +221,6 @@ feast_repo/registry.db
 # Compiled pipeline YAML
 pipelines/*.yaml
 !pipelines/README.md
+
+# Local cluster / kubectl notes (optional; keep untracked)
+kube.md
