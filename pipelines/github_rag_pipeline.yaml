@@ -1,5 +1,5 @@
 # PIPELINE DEFINITION
-# Name: github-rag-full-build
+# Name: github-rag
 # Description: RAG pipeline for processing GitHub documentation
 # Inputs:
 #    base_url: str [Default: 'https://www.kubeflow.org/docs']
@@ -8,7 +8,7 @@
 #    collection_name: str [Default: 'docs_rag']
 #    directory_path: str [Default: 'content/en']
 #    github_token: str [Default: '']
-#    milvus_host: str [Default: 'milvus-standalone-final.docs-agent.svc.cluster.local']
+#    milvus_host: str [Default: 'my-release-milvus.docs-agent.svc.cluster.local']
 #    milvus_port: str [Default: '19530']
 #    repo_name: str [Default: 'website']
 #    repo_owner: str [Default: 'kubeflow']
@@ -83,10 +83,10 @@ deploymentSpec:
         - -c
         - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
-          \ python3 -m pip install --quiet --no-warn-script-location 'sentence-transformers'\
-          \ 'langchain'  &&  python3 -m pip install --quiet --no-warn-script-location\
-          \ 'kfp==2.14.2' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
-          3.9\"' && \"$0\" \"$@\"\n"
+          \ python3 -m pip install --quiet --no-warn-script-location 'sentence-transformers==3.3.1'\
+          \ 'transformers==4.44.2' 'langchain-text-splitters'  &&  python3 -m pip\
+          \ install --quiet --no-warn-script-location 'kfp==2.16.0' '--no-deps' 'typing-extensions>=3.7.4,<5;\
+          \ python_version<\"3.9\"' && \"$0\" \"$@\"\n"
         - sh
         - -ec
         - 'program_path=$(mktemp -d)
@@ -102,7 +102,7 @@ deploymentSpec:
           \    repo_name: str,\n    base_url: str,\n    chunk_size: int,\n    chunk_overlap:\
           \ int,\n    embedded_data: dsl.Output[dsl.Dataset]\n):\n    import json\n\
           \    import os\n    import re\n    import torch\n    from sentence_transformers\
-          \ import SentenceTransformer\n    from langchain.text_splitter import RecursiveCharacterTextSplitter\n\
+          \ import SentenceTransformer\n    from langchain_text_splitters import RecursiveCharacterTextSplitter\n\
           \n    device = 'cuda' if torch.cuda.is_available() else 'cpu'\n    model\
           \ = SentenceTransformer('sentence-transformers/all-mpnet-base-v2', device=device)\n\
           \    print(f\"Model loaded on {device}\")\n\n    records = []\n\n    with\
@@ -154,7 +154,7 @@ deploymentSpec:
           \ with open(embedded_data.path, 'w', encoding='utf-8') as f:\n        for\
           \ record in records:\n            f.write(json.dumps(record, ensure_ascii=False)\
           \ + '\\n')\n\n"
-        image: pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime
+        image: docker.io/pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime
     exec-download-github-directory:
       container:
         args:
@@ -168,7 +168,7 @@ deploymentSpec:
         - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
           \ python3 -m pip install --quiet --no-warn-script-location 'requests' 'beautifulsoup4'\
-          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.14.2'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
           $0\" \"$@\"\n"
         - sh
@@ -208,7 +208,7 @@ deploymentSpec:
           \    print(f\"Downloaded {len(files)} files\")\n\n    with open(github_data.path,\
           \ 'w', encoding='utf-8') as f:\n        for file_data in files:\n      \
           \      f.write(json.dumps(file_data, ensure_ascii=False) + '\\n')\n\n"
-        image: python:3.9
+        image: docker.io/library/python:3.9
     exec-store-milvus:
       container:
         args:
@@ -222,7 +222,7 @@ deploymentSpec:
         - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
           \ python3 -m pip install --quiet --no-warn-script-location 'pymilvus' 'numpy'\
-          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.14.2'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
           $0\" \"$@\"\n"
         - sh
@@ -240,11 +240,10 @@ deploymentSpec:
           \   milvus_host: str,\n    milvus_port: str,\n    collection_name: str\n\
           ):\n    from pymilvus import connections, utility, FieldSchema, CollectionSchema,\
           \ DataType, Collection\n    import json\n    from datetime import datetime\n\
-          \n    connections.connect(\"default\", host=milvus_host, port=milvus_port)\n\
-          \n    # DROP existing collection to fix schema mismatch\n    if utility.has_collection(collection_name):\n\
-          \        utility.drop_collection(collection_name)\n        print(f\"Dropped\
-          \ existing collection: {collection_name}\")\n\n    # Enhanced schema with\
-          \ 768 dimensions\n    fields = [\n        FieldSchema(name=\"id\", dtype=DataType.INT64,\
+          \n    SCHEMA_VERSION = 1\n    SCHEMA_DESCRIPTION = f\"RAG collection for\
+          \ documentation (v={SCHEMA_VERSION})\"\n    DELETE_BATCH_SIZE = 100\n\n\
+          \    connections.connect(\"default\", host=milvus_host, port=milvus_port)\n\
+          \n    fields = [\n        FieldSchema(name=\"id\", dtype=DataType.INT64,\
           \ is_primary=True, auto_id=True),\n        FieldSchema(name=\"file_unique_id\"\
           , dtype=DataType.VARCHAR, max_length=512),\n        FieldSchema(name=\"\
           repo_name\", dtype=DataType.VARCHAR, max_length=256),\n        FieldSchema(name=\"\
@@ -253,34 +252,65 @@ deploymentSpec:
           citation_url\", dtype=DataType.VARCHAR, max_length=1024),\n        FieldSchema(name=\"\
           chunk_index\", dtype=DataType.INT64),\n        FieldSchema(name=\"content_text\"\
           , dtype=DataType.VARCHAR, max_length=2000),\n        FieldSchema(name=\"\
-          vector\", dtype=DataType.FLOAT_VECTOR, dim=768),  # Updated for all-mpnet-base-v2\n\
-          \        FieldSchema(name=\"last_updated\", dtype=DataType.INT64)\n    ]\n\
-          \n    # Create new collection with correct schema\n    schema = CollectionSchema(fields,\
-          \ \"RAG collection for documentation\")\n    collection = Collection(collection_name,\
-          \ schema)\n    print(f\"Created new collection: {collection_name}\")\n\n\
-          \    # Rest of your existing code remains the same...\n    records = []\n\
-          \    timestamp = int(datetime.now().timestamp())\n\n    with open(embedded_data.path,\
-          \ 'r', encoding='utf-8') as f:\n        for line in f:\n            record\
-          \ = json.loads(line)\n            records.append({\n                \"file_unique_id\"\
-          : record[\"file_unique_id\"],\n                \"repo_name\": record[\"\
-          repo_name\"],\n                \"file_path\": record[\"file_path\"],\n \
-          \               \"file_name\": record[\"file_name\"],\n                \"\
-          citation_url\": record[\"citation_url\"],\n                \"chunk_index\"\
-          : record[\"chunk_index\"],\n                \"content_text\": record[\"\
-          content_text\"],\n                \"vector\": record[\"embedding\"],\n \
-          \               \"last_updated\": timestamp\n            })\n\n    if records:\n\
-          \        batch_size = 1000\n        for i in range(0, len(records), batch_size):\n\
-          \            batch = records[i:i + batch_size]\n            collection.insert(batch)\n\
-          \n        collection.flush()\n\n        # Create index\n        index_params\
-          \ = {\n            \"metric_type\": \"COSINE\",\n            \"index_type\"\
-          : \"IVF_FLAT\", \n            \"params\": {\"nlist\": min(1024, len(records))}\n\
-          \        }\n        collection.create_index(\"vector\", index_params)\n\
-          \        collection.load()\n        print(f\"\u2705 Inserted {len(records)}\
-          \ records. Total: {collection.num_entities}\")\n\n"
-        image: python:3.9
+          vector\", dtype=DataType.FLOAT_VECTOR, dim=768),\n        FieldSchema(name=\"\
+          last_updated\", dtype=DataType.INT64)\n    ]\n\n    schema = CollectionSchema(fields,\
+          \ SCHEMA_DESCRIPTION)\n\n    collection_existed = utility.has_collection(collection_name)\n\
+          \    if collection_existed:\n        collection = Collection(collection_name)\n\
+          \        existing_desc = collection.description or \"\"\n        if f\"\
+          v={SCHEMA_VERSION}\" not in existing_desc:\n            raise RuntimeError(\n\
+          \                f\"Schema version mismatch for {collection_name}. \"\n\
+          \                f\"Expected v={SCHEMA_VERSION}, found description: '{existing_desc}'.\
+          \ \"\n                f\"Run a migration job to drop+recreate before re-indexing.\"\
+          \n            )\n        print(f\"Using existing collection: {collection_name}\
+          \ (schema v={SCHEMA_VERSION})\")\n    else:\n        collection = Collection(collection_name,\
+          \ schema)\n        print(f\"Created new collection: {collection_name} (schema\
+          \ v={SCHEMA_VERSION})\")\n\n    # Rest of your existing code remains the\
+          \ same...\n    records = []\n    timestamp = int(datetime.now().timestamp())\n\
+          \n    with open(embedded_data.path, 'r', encoding='utf-8') as f:\n     \
+          \   for line in f:\n            record = json.loads(line)\n            records.append({\n\
+          \                \"file_unique_id\": record[\"file_unique_id\"],\n     \
+          \           \"repo_name\": record[\"repo_name\"],\n                \"file_path\"\
+          : record[\"file_path\"],\n                \"file_name\": record[\"file_name\"\
+          ],\n                \"citation_url\": record[\"citation_url\"],\n      \
+          \          \"chunk_index\": record[\"chunk_index\"],\n                \"\
+          content_text\": record[\"content_text\"],\n                \"vector\": record[\"\
+          embedding\"],\n                \"last_updated\": timestamp\n           \
+          \ })\n\n    if records:\n        # load() before delete requires an existing\
+          \ index; new collections have none yet\n        if collection_existed and\
+          \ len(collection.indexes) > 0:\n            collection.load()\n        \
+          \    unique_ids = sorted(set(r[\"file_unique_id\"] for r in records))\n\
+          \            deleted = 0\n            try:\n                for i in range(0,\
+          \ len(unique_ids), DELETE_BATCH_SIZE):\n                    batch_ids =\
+          \ unique_ids[i:i + DELETE_BATCH_SIZE]\n                    quoted = \",\
+          \ \".join(f'\"{uid}\"' for uid in batch_ids)\n                    expr =\
+          \ f\"file_unique_id in [{quoted}]\"\n                    old = collection.query(expr=expr,\
+          \ output_fields=[\"id\"], limit=16384)\n                    if old:\n  \
+          \                      collection.delete(expr)\n                       \
+          \ deleted += len(old)\n                if deleted:\n                   \
+          \ collection.flush()\n                    print(f\"Deleted {deleted} old\
+          \ chunks for {len(unique_ids)} files\")\n            except Exception as\
+          \ e:\n                print(f\"ERROR during delete phase: {e}\")\n     \
+          \           print(f\"Failed batch unique_ids: {unique_ids[i:i + DELETE_BATCH_SIZE]}\"\
+          )\n                raise\n\n        # Insert new chunks (failure-aware)\n\
+          \        batch_size = 1000\n        inserted = 0\n        try:\n       \
+          \     for i in range(0, len(records), batch_size):\n                batch\
+          \ = records[i:i + batch_size]\n                collection.insert(batch)\n\
+          \                inserted += len(batch)\n            collection.flush()\n\
+          \        except Exception as e:\n            print(f\"ERROR during insert.\
+          \ Inserted={inserted}/{len(records)}. Error: {e}\")\n            failed_ids\
+          \ = sorted(set(r[\"file_unique_id\"] for r in records[i:i + batch_size]))\n\
+          \            print(f\"Failed batch starts at record {i}, file_unique_ids\
+          \ in failing batch: {failed_ids}\")\n            raise\n\n        # Create\
+          \ index if not already present\n        if not collection.has_index():\n\
+          \            index_params = {\n                \"metric_type\": \"COSINE\"\
+          ,\n                \"index_type\": \"IVF_FLAT\",\n                \"params\"\
+          : {\"nlist\": min(1024, len(records))}\n            }\n            collection.create_index(\"\
+          vector\", index_params)\n        collection.load()\n        print(f\"Inserted\
+          \ {len(records)} records. Total: {collection.num_entities}\")\n\n"
+        image: docker.io/library/python:3.9
 pipelineInfo:
   description: RAG pipeline for processing GitHub documentation
-  name: github-rag-full-build
+  name: github-rag
 root:
   dag:
     tasks:
@@ -374,7 +404,7 @@ root:
         isOptional: true
         parameterType: STRING
       milvus_host:
-        defaultValue: milvus-standalone-final.docs-agent.svc.cluster.local
+        defaultValue: my-release-milvus.docs-agent.svc.cluster.local
         isOptional: true
         parameterType: STRING
       milvus_port:
@@ -390,4 +420,4 @@ root:
         isOptional: true
         parameterType: STRING
 schemaVersion: 2.1.0
-sdkVersion: kfp-2.14.2
+sdkVersion: kfp-2.16.0
