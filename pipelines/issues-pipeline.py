@@ -169,7 +169,11 @@ def download_github_issues(
 
 @dsl.component(
     base_image="docker.io/pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime",
-    packages_to_install=["sentence-transformers", "langchain"]
+    packages_to_install=[
+        "sentence-transformers==3.3.1",
+        "transformers==4.44.2",
+        "langchain-text-splitters",
+    ],
 )
 def chunk_and_embed_issues(
     issues_data: dsl.Input[dsl.Dataset],
@@ -190,7 +194,7 @@ def chunk_and_embed_issues(
     import re
     import torch
     from sentence_transformers import SentenceTransformer
-    from langchain.text_splitter import RecursiveCharacterTextSplitter
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model = SentenceTransformer('sentence-transformers/all-mpnet-base-v2', device=device)
