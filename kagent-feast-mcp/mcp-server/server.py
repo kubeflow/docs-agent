@@ -30,6 +30,12 @@ def _init():
 def _search_collection(collection_name: str, query: str, top_k: int, output_fields: list[str], filter_expr: str = "") -> list[dict]:
     """Shared helper: encode query and search a Milvus collection."""
     _init()
+    # Search requires the collection to be loaded; pipelines may release load after ingest.
+    try:
+        client.load_collection(collection_name)
+    except Exception as e:
+        # Missing collection or load failure — surface on search
+        raise RuntimeError(f"Milvus load_collection failed for {collection_name}: {e}") from e
     embedding = model.encode(query).tolist()
     search_params = {
         "collection_name": collection_name,
