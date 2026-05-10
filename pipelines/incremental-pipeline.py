@@ -288,9 +288,6 @@ def store_milvus_incremental(
         collection = Collection(collection_name)
         print(f"Using existing collection: {collection_name}")
 
-    # Load collection
-    collection.load()
-
     # Prepare records for insertion
     records = []
     timestamp = int(datetime.now().timestamp())
@@ -311,6 +308,9 @@ def store_milvus_incremental(
             })
 
     if records:
+        if len(collection.indexes) > 0:
+            collection.load()
+
         # Insert new records
         batch_size = 1000
         for i in range(0, len(records), batch_size):

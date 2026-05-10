@@ -357,7 +357,8 @@ def store_milvus(
 
     schema = CollectionSchema(fields, SCHEMA_DESCRIPTION)
 
-    if utility.has_collection(collection_name):
+    collection_existed = utility.has_collection(collection_name)
+    if collection_existed:
         collection = Collection(collection_name)
         existing_desc = collection.description or ""
         if f"v={SCHEMA_VERSION}" not in existing_desc:
@@ -391,27 +392,27 @@ def store_milvus(
             })
 
     if records:
-        collection.load()
-
-        # Delete existing chunks for the files being re-indexed (batched by 100)
-        unique_ids = sorted(set(r["file_unique_id"] for r in records))
-        deleted = 0
-        try:
-            for i in range(0, len(unique_ids), DELETE_BATCH_SIZE):
-                batch_ids = unique_ids[i:i + DELETE_BATCH_SIZE]
-                quoted = ", ".join(f'"{uid}"' for uid in batch_ids)
-                expr = f"file_unique_id in [{quoted}]"
-                old = collection.query(expr=expr, output_fields=["id"], limit=16384)
-                if old:
-                    collection.delete(expr)
-                    deleted += len(old)
-            if deleted:
-                collection.flush()
-                print(f"Deleted {deleted} old chunks for {len(unique_ids)} files")
-        except Exception as e:
-            print(f"ERROR during delete phase: {e}")
-            print(f"Failed batch unique_ids: {unique_ids[i:i + DELETE_BATCH_SIZE]}")
-            raise
+        # load() before delete requires an existing index; new collections have none yet
+        if collection_existed and len(collection.indexes) > 0:
+            collection.load()
+            unique_ids = sorted(set(r["file_unique_id"] for r in records))
+            deleted = 0
+            try:
+                for i in range(0, len(unique_ids), DELETE_BATCH_SIZE):
+                    batch_ids = unique_ids[i:i + DELETE_BATCH_SIZE]
+                    quoted = ", ".join(f'"{uid}"' for uid in batch_ids)
+                    expr = f"file_unique_id in [{quoted}]"
+                    old = collection.query(expr=expr, output_fields=["id"], limit=16384)
+                    if old:
+                        collection.delete(expr)
+                        deleted += len(old)
+                if deleted:
+                    collection.flush()
+                    print(f"Deleted {deleted} old chunks for {len(unique_ids)} files")
+            except Exception as e:
+                print(f"ERROR during delete phase: {e}")
+                print(f"Failed batch unique_ids: {unique_ids[i:i + DELETE_BATCH_SIZE]}")
+                raise
 
         # Insert new chunks (failure-aware)
         batch_size = 1000
