@@ -316,6 +316,12 @@ Persist the same fields in your **Terraform / manifests** so upgrades do not rev
 
 ---
 
+## Troubleshooting: `kfp-launcher` init `OOMKilled` (exit 137)
+
+KFP v2 executor pods often set the **`kfp-launcher`** init container to **`memory: 128Mi`**. On some nodes or under pressure it can **OOM** before **`main`** starts (`Init:OOMKilled`). **Retry the run** or ask platform admins to raise the launcher init limits (profile / KFP config). The **download** step (`python:3.9`) is light; the failure is the init sidecar, not your Python code.
+
+---
+
 ## Troubleshooting: `ImageInspectError` / “short name mode is enforcing … ambiguous list”
 
 Some nodes run **containerd** with **short name mode enforcing**. Unqualified images like `python:3.9` or `pytorch/pytorch:…` can fail inspection (`Failed to inspect image ""` or **ambiguous list**). Use fully qualified refs in **`@dsl.component(base_image=...)`**, e.g. **`docker.io/library/python:3.9`** and **`docker.io/pytorch/pytorch:…`** (same pattern as `code-pipeline.py`).
