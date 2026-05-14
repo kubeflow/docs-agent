@@ -1,4 +1,5 @@
 import os
+import threading
 
 from fastmcp import FastMCP
 from pymilvus import MilvusClient
@@ -17,14 +18,18 @@ mcp = FastMCP("Kubeflow Docs MCP Server")
 
 model: SentenceTransformer = None
 client: MilvusClient = None
+_init_lock = threading.Lock()
 
 
 def _init():
     global model, client
-    if model is None:
-        model = SentenceTransformer(EMBEDDING_MODEL)
-    if client is None:
-        client = MilvusClient(uri=MILVUS_URI, user=MILVUS_USER, password=MILVUS_PASSWORD)
+    if model is not None and client is not None:
+        return
+    with _init_lock:
+        if model is None:
+            model = SentenceTransformer(EMBEDDING_MODEL)
+        if client is None:
+            client = MilvusClient(uri=MILVUS_URI, user=MILVUS_USER, password=MILVUS_PASSWORD)
 
 
 def _search_collection(collection_name: str, query: str, top_k: int, output_fields: list[str], filter_expr: str = "") -> list[dict]:

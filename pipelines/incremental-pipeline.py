@@ -164,6 +164,7 @@ def chunk_and_embed_incremental(
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model = SentenceTransformer('sentence-transformers/all-mpnet-base-v2', device=device)
     print(f"Model loaded on {device}")
+    EMBED_BATCH_SIZE = 32
 
     records = []
 
@@ -226,9 +227,13 @@ def chunk_and_embed_incremental(
 
             print(f"File: {file_data['path']} -> {len(chunks)} chunks (avg: {sum(len(c) for c in chunks)/len(chunks):.0f} chars)")
 
-            # Create embeddings
-            for chunk_idx, chunk in enumerate(chunks):
-                embedding = model.encode(chunk).tolist()
+            # Create embeddings in batches to avoid per-chunk model overhead.
+            embeddings = model.encode(
+                chunks,
+                batch_size=EMBED_BATCH_SIZE,
+                show_progress_bar=False,
+            )
+            for chunk_idx, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
                 records.append({
                     'file_unique_id': file_unique_id,
                     'repo_name': repo_name,
@@ -237,7 +242,7 @@ def chunk_and_embed_incremental(
                     'citation_url': citation_url[:1024],
                     'chunk_index': chunk_idx,
                     'content_text': chunk[:2000],
-                    'embedding': embedding
+                    'embedding': embedding.tolist()
                 })
 
     print(f"Created {len(records)} total chunks for incremental update")

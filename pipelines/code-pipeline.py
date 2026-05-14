@@ -153,6 +153,7 @@ def chunk_and_embed_code(
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = SentenceTransformer("sentence-transformers/all-mpnet-base-v2", device=device)
     print(f"Model loaded on {device}")
+    EMBED_BATCH_SIZE = 32
 
     # --- Inline chunking logic (KFP components can't import local modules) ---
 
@@ -335,9 +336,16 @@ def chunk_and_embed_code(
             chunks = chunk_code_file(content, file_path, chunk_size, chunk_overlap)
 
             print(f"File: {file_path} -> {len(chunks)} chunks")
+            if not chunks:
+                continue
 
-            for chunk_idx, chunk in enumerate(chunks):
-                embedding = model.encode(chunk["content"]).tolist()
+            chunk_texts = [chunk["content"] for chunk in chunks]
+            embeddings = model.encode(
+                chunk_texts,
+                batch_size=EMBED_BATCH_SIZE,
+                show_progress_bar=False,
+            )
+            for chunk_idx, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
                 records.append({
                     "file_unique_id": file_unique_id,
                     "repo_name": repo,
@@ -346,7 +354,7 @@ def chunk_and_embed_code(
                     "citation_url": citation_url[:1024],
                     "chunk_index": chunk_idx,
                     "content_text": chunk["content"][:2000],
-                    "embedding": embedding,
+                    "embedding": embedding.tolist(),
                     "resource_kind": chunk["resource_kind"][:128],
                     "resource_name": chunk["resource_name"][:256],
                     "resource_namespace": chunk["resource_namespace"][:256],

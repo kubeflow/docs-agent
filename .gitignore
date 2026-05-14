@@ -223,4 +223,5 @@ pipelines/*.yaml
 !pipelines/README.md
 
 # Local cluster / kubectl notes (optional; keep untracked)
+Arch.md
 kube.md

@@ -199,6 +199,7 @@ def chunk_and_embed_issues(
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model = SentenceTransformer('sentence-transformers/all-mpnet-base-v2', device=device)
     print(f"Model loaded on {device}")
+    EMBED_BATCH_SIZE = 32
 
     def parse_metadata(content):
         """Extract structured metadata from issue content."""
@@ -266,9 +267,13 @@ def chunk_and_embed_issues(
                 if not chunks:
                     chunks = [prefix + content[:effective_size]]
 
-            # Embed and create records
-            for chunk_idx, chunk_text in enumerate(chunks):
-                embedding = model.encode(chunk_text).tolist()
+            # Embed chunks in one call per issue to reduce model invocation overhead.
+            embeddings = model.encode(
+                chunks,
+                batch_size=EMBED_BATCH_SIZE,
+                show_progress_bar=False,
+            )
+            for chunk_idx, (chunk_text, embedding) in enumerate(zip(chunks, embeddings)):
                 records.append({
                     "file_unique_id": f"{metadata['repo_name']}:issues/{metadata['issue_number']}",
                     "repo_name": metadata["repo_name"],
@@ -278,7 +283,7 @@ def chunk_and_embed_issues(
                     "citation_url": metadata["citation_url"],
                     "chunk_index": chunk_idx,
                     "content_text": chunk_text[:2000],
-                    "embedding": embedding,
+                    "embedding": embedding.tolist(),
                     "source_type": "issue",
                 })
 
