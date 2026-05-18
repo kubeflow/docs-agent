@@ -1,4 +1,4 @@
-name: Tests
+name: PR Safety
 
 on:
   push:
@@ -7,7 +7,52 @@ on:
     branches: [main]
 
 jobs:
+  lint:
+    name: Lint and format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install lint tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ruff
+
+      - name: Run ruff lint
+        run: ruff check .
+
+      - name: Check formatting
+        run: ruff format --check kagent-feast-mcp/mcp-server tests
+
+  compile:
+    name: Python compile check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Compile Python sources
+        run: |
+          python -m compileall \
+            pipelines \
+            kagent-feast-mcp/mcp-server \
+            server \
+            server-https \
+            scripts \
+            tests
+
   test:
+    name: Pytest (${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -29,5 +74,4 @@ jobs:
           pip install -r requirements-test.txt
 
       - name: Run tests
-        run: |
-          pytest tests/ -v --tb=short
+        run: pytest -v --tb=short

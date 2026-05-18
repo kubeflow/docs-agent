@@ -3,3 +3,4 @@ pytest-asyncio>=0.21
 numpy
 fastmcp
 langchain-text-splitters
+pyyaml

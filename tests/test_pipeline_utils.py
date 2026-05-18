@@ -3,8 +3,6 @@
 import sys
 from pathlib import Path
 
-import pytest
-
 # Add pipelines directory to path
 PIPELINES_DIR = Path(__file__).parent.parent / "pipelines"
 sys.path.insert(0, str(PIPELINES_DIR))
@@ -31,7 +29,7 @@ class TestCleanContent:
 
     def test_removes_hugo_template_syntax(self):
         """Should remove {{ ... }} Hugo template expressions."""
-        content = "Install with {{ .Get \"name\" }} command. Then run it."
+        content = 'Install with {{ .Get "name" }} command. Then run it.'
         result = clean_content(content)
         assert "{{" not in result
         assert "Install with" in result

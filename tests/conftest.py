@@ -1,6 +1,5 @@
 """Shared fixtures for docs-agent tests."""
 
-import sys
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -27,26 +26,28 @@ def mock_sentence_transformer():
 @pytest.fixture
 def sample_milvus_hits():
     """Sample Milvus search results for testing output formatting."""
-    return [[
-        {
-            "id": 1,
-            "distance": 0.9234,
-            "entity": {
-                "content_text": "KServe provides serverless inference on Kubernetes.",
-                "citation_url": "https://www.kubeflow.org/docs/kserve/",
-                "file_path": "content/en/docs/kserve/overview.md",
+    return [
+        [
+            {
+                "id": 1,
+                "distance": 0.9234,
+                "entity": {
+                    "content_text": "KServe provides serverless inference on Kubernetes.",
+                    "citation_url": "https://www.kubeflow.org/docs/kserve/",
+                    "file_path": "content/en/docs/kserve/overview.md",
+                },
             },
-        },
-        {
-            "id": 2,
-            "distance": 0.8567,
-            "entity": {
-                "content_text": "Install Kubeflow Pipelines using the standalone deployment.",
-                "citation_url": "https://www.kubeflow.org/docs/pipelines/install/",
-                "file_path": "content/en/docs/pipelines/install.md",
+            {
+                "id": 2,
+                "distance": 0.8567,
+                "entity": {
+                    "content_text": "Install Kubeflow Pipelines using the standalone deployment.",
+                    "citation_url": "https://www.kubeflow.org/docs/pipelines/install/",
+                    "file_path": "content/en/docs/pipelines/install.md",
+                },
             },
-        },
-    ]]
+        ]
+    ]
 
 
 @pytest.fixture
@@ -80,38 +81,73 @@ def sample_github_pr_api_response():
         "labels": [],
         "comments": 0,
         "user": {"login": "contributor"},
-        "pull_request": {
-            "url": "https://api.github.com/repos/kubeflow/kubeflow/pulls/100"
-        },
+        "pull_request": {"url": "https://api.github.com/repos/kubeflow/kubeflow/pulls/100"},
     }
 
 
 @pytest.fixture
 def sample_issues_milvus_hits():
     """Sample Milvus search results from the issues_rag collection."""
-    return [[
-        {
-            "id": 1,
-            "distance": 0.8912,
-            "entity": {
-                "content_text": "[Issue #42] KServe model not loading | Repo: kubeflow/kubeflow\n\nThe model fails to load when using GPU.",
-                "citation_url": "https://github.com/kubeflow/kubeflow/issues/42",
-                "repo_name": "kubeflow/kubeflow",
-                "issue_number": 42,
-                "issue_state": "open",
-                "issue_labels": "kind/bug, area/kserve",
+    return [
+        [
+            {
+                "id": 1,
+                "distance": 0.8912,
+                "entity": {
+                    "content_text": "[Issue #42] KServe model not loading | Repo: kubeflow/kubeflow\n\nThe model fails to load when using GPU.",
+                    "citation_url": "https://github.com/kubeflow/kubeflow/issues/42",
+                    "repo_name": "kubeflow/kubeflow",
+                    "issue_number": 42,
+                    "issue_state": "open",
+                    "issue_labels": "kind/bug, area/kserve",
+                },
             },
-        },
-        {
-            "id": 2,
-            "distance": 0.7845,
-            "entity": {
-                "content_text": "[Issue #100] Pipeline timeout on large datasets | Repo: kubeflow/pipelines\n\nPipeline runs time out after 30 minutes.",
-                "citation_url": "https://github.com/kubeflow/pipelines/issues/100",
-                "repo_name": "kubeflow/pipelines",
-                "issue_number": 100,
-                "issue_state": "closed",
-                "issue_labels": "kind/bug",
+            {
+                "id": 2,
+                "distance": 0.7845,
+                "entity": {
+                    "content_text": "[Issue #100] Pipeline timeout on large datasets | Repo: kubeflow/pipelines\n\nPipeline runs time out after 30 minutes.",
+                    "citation_url": "https://github.com/kubeflow/pipelines/issues/100",
+                    "repo_name": "kubeflow/pipelines",
+                    "issue_number": 100,
+                    "issue_state": "closed",
+                    "issue_labels": "kind/bug",
+                },
             },
-        },
-    ]]
+        ]
+    ]
+
+
+@pytest.fixture
+def sample_code_milvus_hits():
+    """Sample Milvus search results from the code_rag collection."""
+    return [
+        [
+            {
+                "id": 1,
+                "distance": 0.8123,
+                "entity": {
+                    "content_text": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: ml-pipeline",
+                    "citation_url": "https://github.com/kubeflow/manifests/blob/main/apps/pipeline/deployment.yaml",
+                    "file_path": "apps/pipeline/deployment.yaml",
+                    "resource_kind": "Deployment",
+                    "resource_name": "ml-pipeline",
+                    "resource_namespace": "kubeflow",
+                    "file_type": "yaml",
+                },
+            },
+            {
+                "id": 2,
+                "distance": 0.7012,
+                "entity": {
+                    "content_text": "def reconcile_component(component):\n    return component",
+                    "citation_url": "https://github.com/kubeflow/pipelines/blob/main/sdk/compiler.py",
+                    "file_path": "sdk/compiler.py",
+                    "resource_kind": "function",
+                    "resource_name": "reconcile_component",
+                    "resource_namespace": "",
+                    "file_type": "python",
+                },
+            },
+        ]
+    ]

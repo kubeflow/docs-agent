@@ -8,15 +8,15 @@ since only the server module references them.
 """
 
 import sys
+import importlib.util
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
-# Add the MCP server directory to the path
 MCP_SERVER_DIR = Path(__file__).parent.parent / "kagent-feast-mcp" / "mcp-server"
-sys.path.insert(0, str(MCP_SERVER_DIR))
+MCP_SERVER_PATH = MCP_SERVER_DIR / "server.py"
 
 # Pre-mock heavy dependencies before importing server.
 # server.py does `from pymilvus import MilvusClient` and
@@ -26,9 +26,10 @@ sys.path.insert(0, str(MCP_SERVER_DIR))
 sys.modules.setdefault("sentence_transformers", MagicMock())
 sys.modules.setdefault("pymilvus", MagicMock())
 
-if "server" in sys.modules:
-    del sys.modules["server"]
-import server
+spec = importlib.util.spec_from_file_location("docs_agent_mcp_server", MCP_SERVER_PATH)
+server = importlib.util.module_from_spec(spec)
+sys.modules["docs_agent_mcp_server"] = server
+spec.loader.exec_module(server)
 
 
 @pytest.fixture(autouse=True)
@@ -202,13 +203,15 @@ class TestSearchKubeflowDocs:
     def test_handles_missing_entity_fields_gracefully(self, inject_mocks):
         """Should handle results where entity fields are missing without crashing."""
         mock_client, _ = inject_mocks
-        mock_client.search.return_value = [[
-            {
-                "id": 1,
-                "distance": 0.5,
-                "entity": {},  # no fields
-            }
-        ]]
+        mock_client.search.return_value = [
+            [
+                {
+                    "id": 1,
+                    "distance": 0.5,
+                    "entity": {},  # no fields
+                }
+            ]
+        ]
 
         result = server.search_kubeflow_docs("test")
 
@@ -283,15 +286,19 @@ class TestSearchCollection:
     def test_returns_raw_hits_with_entity_data(self, inject_mocks):
         """Should return raw Milvus hits with entity data intact."""
         mock_client, _ = inject_mocks
-        mock_client.search.return_value = [[{
-            "id": 1,
-            "distance": 0.9,
-            "entity": {
-                "content_text": "Test content",
-                "citation_url": "https://example.com",
-                "issue_number": 42,
-            },
-        }]]
+        mock_client.search.return_value = [
+            [
+                {
+                    "id": 1,
+                    "distance": 0.9,
+                    "entity": {
+                        "content_text": "Test content",
+                        "citation_url": "https://example.com",
+                        "issue_number": 42,
+                    },
+                }
+            ]
+        ]
 
         result = server._search_collection(
             collection_name="test_col",
@@ -403,3 +410,125 @@ class TestSearchGithubIssues:
         server.search_github_issues("test")
 
         assert mock_client.search.call_args.kwargs["limit"] == 5
+
+    @pytest.mark.parametrize(
+        ("field_name", "kwargs"),
+        [
+            ("repo", {"repo": 'kubeflow/pipelines" or issue_state == "open'}),
+            ("state", {"state": 'open" or repo_name == "kubeflow/kubeflow'}),
+        ],
+    )
+    def test_rejects_unsafe_filter_values(self, inject_mocks, field_name, kwargs):
+        """User-controlled issue filters should not be interpolated unchecked."""
+        mock_client, _ = inject_mocks
+
+        with pytest.raises(ValueError, match=f"Invalid {field_name} filter value"):
+            server.search_github_issues("test", **kwargs)
+
+        mock_client.search.assert_not_called()
+
+
+class TestSearchKubeflowCode:
+    """Tests for the search_kubeflow_code MCP tool."""
+
+    def test_returns_no_results_when_empty(self, inject_mocks):
+        """Should return 'No code results found' when code search is empty."""
+        mock_client, _ = inject_mocks
+        mock_client.search.return_value = [[]]
+
+        result = server.search_kubeflow_code("deployment")
+
+        assert result == "No code results found for your query."
+
+    def test_returns_formatted_code_results(self, inject_mocks, sample_code_milvus_hits):
+        """Should return code results with resource metadata and fenced content."""
+        mock_client, _ = inject_mocks
+        mock_client.search.return_value = sample_code_milvus_hits
+
+        result = server.search_kubeflow_code("pipeline deployment")
+
+        assert "### Result 1 (score: 0.8123)" in result
+        assert "https://github.com/kubeflow/manifests/blob/main/apps/pipeline/deployment.yaml" in result
+        assert "**File:** apps/pipeline/deployment.yaml" in result
+        assert "**Resource:** Deployment `ml-pipeline` (namespace: kubeflow)" in result
+        assert "**Type:** yaml" in result
+        assert "```\napiVersion: apps/v1\nkind: Deployment" in result
+
+    def test_results_separated_by_divider(self, inject_mocks, sample_code_milvus_hits):
+        """Multiple code results should be separated by markdown dividers."""
+        mock_client, _ = inject_mocks
+        mock_client.search.return_value = sample_code_milvus_hits
+
+        result = server.search_kubeflow_code("test")
+
+        assert "\n---\n" in result
+
+    def test_searches_code_collection(self, inject_mocks):
+        """Should search the CODE_COLLECTION_NAME."""
+        mock_client, _ = inject_mocks
+        mock_client.search.return_value = [[]]
+
+        server.search_kubeflow_code("test")
+
+        assert mock_client.search.call_args.kwargs["collection_name"] == server.CODE_COLLECTION_NAME
+
+    def test_default_top_k_is_five(self, inject_mocks):
+        """Default top_k should be 5."""
+        mock_client, _ = inject_mocks
+        mock_client.search.return_value = [[]]
+
+        server.search_kubeflow_code("test")
+
+        assert mock_client.search.call_args.kwargs["limit"] == 5
+
+    def test_respects_top_k_parameter(self, inject_mocks):
+        """top_k should be passed through to Milvus client.search limit."""
+        mock_client, _ = inject_mocks
+        mock_client.search.return_value = [[]]
+
+        server.search_kubeflow_code("test", top_k=2)
+
+        assert mock_client.search.call_args.kwargs["limit"] == 2
+
+    def test_requests_code_output_fields(self, inject_mocks):
+        """Should request code-specific output fields from Milvus."""
+        mock_client, _ = inject_mocks
+        mock_client.search.return_value = [[]]
+
+        server.search_kubeflow_code("test")
+
+        output_fields = mock_client.search.call_args.kwargs["output_fields"]
+        assert "content_text" in output_fields
+        assert "citation_url" in output_fields
+        assert "file_path" in output_fields
+        assert "resource_kind" in output_fields
+        assert "resource_name" in output_fields
+        assert "resource_namespace" in output_fields
+        assert "file_type" in output_fields
+
+    def test_filters_by_resource_kind(self, inject_mocks):
+        """Should construct a resource_kind filter expression."""
+        mock_client, _ = inject_mocks
+        mock_client.search.return_value = [[]]
+
+        server.search_kubeflow_code("test", resource_kind="Deployment")
+
+        assert mock_client.search.call_args.kwargs["filter"] == "resource_kind == 'Deployment'"
+
+    def test_no_filter_when_resource_kind_empty(self, inject_mocks):
+        """Should not include filter when resource_kind is empty."""
+        mock_client, _ = inject_mocks
+        mock_client.search.return_value = [[]]
+
+        server.search_kubeflow_code("test")
+
+        assert "filter" not in mock_client.search.call_args.kwargs
+
+    def test_rejects_unsafe_resource_kind_filter(self, inject_mocks):
+        """resource_kind should not allow expression injection."""
+        mock_client, _ = inject_mocks
+
+        with pytest.raises(ValueError, match="Invalid resource_kind filter value"):
+            server.search_kubeflow_code("test", resource_kind="Deployment' or file_type == 'python")
+
+        mock_client.search.assert_not_called()

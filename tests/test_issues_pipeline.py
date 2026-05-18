@@ -7,8 +7,6 @@ from the chunk_and_embed_issues KFP component for testability.
 import sys
 from pathlib import Path
 
-import pytest
-
 PIPELINES_DIR = Path(__file__).parent.parent / "pipelines"
 sys.path.insert(0, str(PIPELINES_DIR))
 
