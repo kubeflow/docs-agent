@@ -3,12 +3,12 @@ target-version = "py39"
 line-length = 120
 
 [tool.ruff.lint]
-per-file-ignores = { 
-  "kagent-feast-mcp/pipelines/*.py" = ["F403", "F405"],
-  "pipelines/*.py" = ["F403", "F405", "F841", "E741"],
-  "scripts/index_real_issues.py" = ["F401", "E741"],
-  "server/app.py" = ["F401"],
-  "tests/test_code_utils.py" = ["E402"],
-  "tests/test_issues_pipeline.py" = ["E402"],
-  "tests/test_pipeline_utils.py" = ["E402"],
-}
+
+[tool.ruff.lint.per-file-ignores]
+"kagent-feast-mcp/pipelines/*.py" = ["F403", "F405"]
+"pipelines/*.py" = ["F403", "F405", "F841", "E741"]
+"scripts/index_real_issues.py" = ["F401", "E741"]
+"server/app.py" = ["F401"]
+"tests/test_code_utils.py" = ["E402"]
+"tests/test_issues_pipeline.py" = ["E402"]
+"tests/test_pipeline_utils.py" = ["E402"]
