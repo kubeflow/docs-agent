@@ -1,4 +1,5 @@
 import os
+import re
 import threading
 
 from fastmcp import FastMCP
@@ -20,6 +21,8 @@ model: SentenceTransformer = None
 client: MilvusClient = None
 _init_lock = threading.Lock()
 
+_FILTER_VALUE_RE = re.compile(r"^[A-Za-z0-9_/.\-]+$")
+
 
 def _init():
     global model, client
@@ -32,7 +35,9 @@ def _init():
             client = MilvusClient(uri=MILVUS_URI, user=MILVUS_USER, password=MILVUS_PASSWORD)
 
 
-def _search_collection(collection_name: str, query: str, top_k: int, output_fields: list[str], filter_expr: str = "") -> list[dict]:
+def _search_collection(
+    collection_name: str, query: str, top_k: int, output_fields: list[str], filter_expr: str = ""
+) -> list[dict]:
     """Shared helper: encode query and search a Milvus collection."""
     _init()
     # Search requires the collection to be loaded; pipelines may release load after ingest.
@@ -54,6 +59,13 @@ def _search_collection(collection_name: str, query: str, top_k: int, output_fiel
     return hits
 
 
+def _safe_filter_value(name: str, value: str) -> str:
+    """Validate user-controlled values before interpolating Milvus expressions."""
+    if not _FILTER_VALUE_RE.fullmatch(value):
+        raise ValueError(f"Invalid {name} filter value: {value!r}")
+    return value
+
+
 @mcp.tool()
 def search_kubeflow_docs(query: str, top_k: int = 5) -> str:
     """Search Kubeflow documentation using semantic similarity.
@@ -66,7 +78,9 @@ def search_kubeflow_docs(query: str, top_k: int = 5) -> str:
         Formatted search results with content and citation URLs.
     """
     hits = _search_collection(
-        COLLECTION_NAME, query, top_k,
+        COLLECTION_NAME,
+        query,
+        top_k,
         ["content_text", "citation_url", "file_path"],
     )
 
@@ -103,15 +117,18 @@ def search_github_issues(query: str, top_k: int = 5, repo: str = "", state: str 
     """
     filters = []
     if repo:
+        repo = _safe_filter_value("repo", repo)
         filters.append(f'repo_name == "{repo}"')
     if state:
+        state = _safe_filter_value("state", state)
         filters.append(f'issue_state == "{state}"')
     filter_expr = " and ".join(filters)
 
     hits = _search_collection(
-        ISSUES_COLLECTION_NAME, query, top_k,
-        ["content_text", "citation_url", "repo_name",
-         "issue_number", "issue_state", "issue_labels"],
+        ISSUES_COLLECTION_NAME,
+        query,
+        top_k,
+        ["content_text", "citation_url", "repo_name", "issue_number", "issue_state", "issue_labels"],
         filter_expr=filter_expr,
     )
 
@@ -163,11 +180,22 @@ def search_kubeflow_code(query: str, top_k: int = 5, resource_kind: str = "") ->
         Formatted search results with code content, resource metadata,
         and citation URLs.
     """
+    if resource_kind:
+        resource_kind = _safe_filter_value("resource_kind", resource_kind)
     filter_expr = f"resource_kind == '{resource_kind}'" if resource_kind else ""
     hits = _search_collection(
-        CODE_COLLECTION_NAME, query, top_k,
-        ["content_text", "citation_url", "file_path", "resource_kind",
-         "resource_name", "resource_namespace", "file_type"],
+        CODE_COLLECTION_NAME,
+        query,
+        top_k,
+        [
+            "content_text",
+            "citation_url",
+            "file_path",
+            "resource_kind",
+            "resource_name",
+            "resource_namespace",
+            "file_type",
+        ],
         filter_expr=filter_expr,
     )
 
