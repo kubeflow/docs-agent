@@ -148,3 +148,30 @@ YAML
 
   depends_on = [helm_release.istiod, kubernetes_namespace.docs_agent]
 }
+
+# Allow KFP pipeline pods (kubeflow ns) -> ml-infra/milvus (RAG ingestion)
+resource "kubectl_manifest" "istio_allow_kubeflow_to_milvus" {
+  yaml_body = <<YAML
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-kubeflow-to-milvus
+  namespace: ml-infra
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: milvus
+      component: standalone
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        namespaces: ["kubeflow"]
+    to:
+    - operation:
+        ports: ["19530"]
+YAML
+
+  depends_on = [helm_release.istiod, kubernetes_namespace.ml_infra]
+}
+

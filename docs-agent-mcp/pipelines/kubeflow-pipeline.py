@@ -1,10 +1,13 @@
 import kfp
 from kfp import dsl
-from kfp.dsl import *
-from typing import *
+from typing import Optional
 
+
+# ---------------------------------------------------------------------------
+# Step 1: Download GitHub docs
+# ---------------------------------------------------------------------------
 @dsl.component(
-    base_image="python:3.13-slim",
+    base_image="python:3.11-slim",
     packages_to_install=["requests", "beautifulsoup4"]
 )
 def download_github_directory(
@@ -12,7 +15,7 @@ def download_github_directory(
     repo_name: str,
     directory_path: str,
     github_token: str,
-    github_data: dsl.Output[dsl.Dataset]
+    github_data: dsl.Output[dsl.Dataset],
 ):
     import requests
     import json
@@ -25,29 +28,27 @@ def download_github_directory(
     def get_files_recursive(url):
         files = []
         try:
-            response = requests.get(url, headers=headers)
+            response = requests.get(url, headers=headers, timeout=30)
             response.raise_for_status()
             items = response.json()
-
             for item in items:
-                if item['type'] == 'file' and (item['name'].endswith('.md') or item['name'].endswith('.html')):
-                    file_response = requests.get(item['url'], headers=headers)
+                if item["type"] == "file" and (
+                    item["name"].endswith(".md") or item["name"].endswith(".html")
+                ):
+                    file_response = requests.get(item["url"], headers=headers, timeout=30)
                     file_response.raise_for_status()
                     file_data = file_response.json()
-                    content = base64.b64decode(file_data['content']).decode('utf-8')
-
-                    # Extract text from HTML files
-                    if item['name'].endswith('.html'):
-                        soup = BeautifulSoup(content, 'html.parser')
-                        content = soup.get_text(separator=' ', strip=True)
-
+                    content = base64.b64decode(file_data["content"]).decode("utf-8")
+                    if item["name"].endswith(".html"):
+                        soup = BeautifulSoup(content, "html.parser")
+                        content = soup.get_text(separator=" ", strip=True)
                     files.append({
-                        'path': item['path'],
-                        'content': content,
-                        'file_name': item['name']
+                        "path": item["path"],
+                        "content": content,
+                        "file_name": item["name"],
                     })
-                elif item['type'] == 'dir':
-                    files.extend(get_files_recursive(item['url']))
+                elif item["type"] == "dir":
+                    files.extend(get_files_recursive(item["url"]))
         except Exception as e:
             print(f"Error fetching {url}: {e}")
         return files
@@ -55,17 +56,16 @@ def download_github_directory(
     files = get_files_recursive(api_url)
     print(f"Downloaded {len(files)} files")
 
-    with open(github_data.path, 'w', encoding='utf-8') as f:
+    with open(github_data.path, "w", encoding="utf-8") as f:
         for file_data in files:
-            f.write(json.dumps(file_data, ensure_ascii=False) + '\n')
+            f.write(json.dumps(file_data, ensure_ascii=False) + "\n")
 
 
+# ---------------------------------------------------------------------------
+# Step 2: Chunk and embed
+# ---------------------------------------------------------------------------
 @dsl.component(
-    base_image="python:3.13-slim",
-    packages_to_install=["requests"]
-)
-@dsl.component(
-    base_image="python:3.13-slim",
+    base_image="python:3.11-slim",
     packages_to_install=["sentence-transformers", "langchain-text-splitters"]
 )
 def chunk_and_embed(
@@ -74,7 +74,7 @@ def chunk_and_embed(
     base_url: str,
     chunk_size: int,
     chunk_overlap: int,
-    embedded_data: dsl.Output[dsl.Dataset]
+    embedded_data: dsl.Output[dsl.Dataset],
 ):
     import json
     import os
@@ -82,214 +82,167 @@ def chunk_and_embed(
     from sentence_transformers import SentenceTransformer
     from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-    model = SentenceTransformer('sentence-transformers/all-mpnet-base-v2')
-    print("Model loaded on CPU")
+    model = SentenceTransformer("sentence-transformers/all-mpnet-base-v2")
+    print("Embedding model loaded on CPU")
+
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        separators=["\n\n", "\n", ". ", " ", ""],
+    )
 
     records = []
-
-    with open(github_data.path, 'r', encoding='utf-8') as f:
+    with open(github_data.path, "r", encoding="utf-8") as f:
         for line in f:
             file_data = json.loads(line)
-            content = file_data['content']
+            content = file_data["content"]
 
-            # AGGRESSIVE CLEANING FOR BETTER EMBEDDINGS
+            # Clean Hugo frontmatter, templates, HTML, URLs
+            content = re.sub(r"^\s*[+\-]{3,}.*?[+\-]{3,}\s*", "", content, flags=re.DOTALL | re.MULTILINE)
+            content = re.sub(r"\{\{.*?\}\}", "", content, flags=re.DOTALL)
+            content = re.sub(r"<!--.*?-->", "", content, flags=re.DOTALL)
+            content = re.sub(r"<[^>]+>", " ", content)
+            content = re.sub(r"https?://\S+", "", content)
+            content = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", content)
+            content = re.sub(r"\s+", " ", content).strip()
 
-            # Remove Hugo frontmatter (both --- and +++ styles)
-            content = re.sub(r'^\s*[+\-]{3,}.*?[+\-]{3,}\s*', '', content, flags=re.DOTALL | re.MULTILINE)
-
-            # Remove Hugo template syntax
-            content = re.sub(r'\{\{.*?\}\}', '', content, flags=re.DOTALL)
-
-            # Remove HTML comments and tags
-            content = re.sub(r'<!--.*?-->', '', content, flags=re.DOTALL)
-            content = re.sub(r'<[^>]+>', ' ', content)
-
-            # Remove navigation/menu artifacts
-            content = re.sub(r'\b(Get Started|Contribute|GenAI|Home|Menu|Navigation)\b', '', content, flags=re.IGNORECASE)
-
-            # Clean up URLs and links
-            content = re.sub(r'https?://[^\s]+', '', content)
-            content = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', content)  # Convert [text](url) to text
-
-            # Remove excessive whitespace and normalize
-            content = re.sub(r'\s+', ' ', content)  # Multiple spaces to single
-            content = re.sub(r'\n\s*\n\s*\n+', '\n\n', content)  # Multiple newlines to double
-            content = content.strip()
-
-            # Skip files that are too short after cleaning
             if len(content) < 50:
-                print(f"Skipping file after cleaning: {file_data['path']} ({len(content)} chars)")
+                print(f"Skipping (too short after cleaning): {file_data['path']}")
                 continue
 
-            # Build citation URL (same as before)
-            path_parts = file_data['path'].split('/')
-            if 'content/en/docs' in file_data['path']:
-                docs_index = path_parts.index('docs')
-                url_path = '/'.join(path_parts[docs_index+1:])
+            # Build citation URL
+            path_parts = file_data["path"].split("/")
+            if "content/en/docs" in file_data["path"]:
+                docs_index = path_parts.index("docs")
+                url_path = "/".join(path_parts[docs_index + 1:])
                 url_path = os.path.splitext(url_path)[0]
                 citation_url = f"{base_url}/{url_path}"
             else:
                 citation_url = f"{base_url}/{file_data['path']}"
 
             file_unique_id = f"{repo_name}:{file_data['path']}"
-
-            # Create splitter
-            text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=chunk_size,
-                chunk_overlap=chunk_overlap,
-                length_function=len,
-                separators=["\n\n", "\n", ". ", " ", ""]
-            )
-
-            # Split into chunks
             chunks = text_splitter.split_text(content)
+            print(f"{file_data['path']} -> {len(chunks)} chunks")
 
-            print(f"File: {file_data['path']} -> {len(chunks)} chunks (avg: {sum(len(c) for c in chunks)/len(chunks):.0f} chars)")
-
-            # Create embeddings
             for chunk_idx, chunk in enumerate(chunks):
                 embedding = model.encode(chunk).tolist()
                 records.append({
-                    'file_unique_id': f"{file_unique_id}:{chunk_idx}",
-                    'repo_name': repo_name,
-                    'file_path': file_data['path'],
-                    'file_name': file_data['file_name'],
-                    'citation_url': citation_url,
-                    'chunk_index': chunk_idx,
-                    'content_text': chunk,
-                    'embedding': embedding
+                    "file_unique_id": f"{file_unique_id}:{chunk_idx}",
+                    "repo_name": repo_name,
+                    "file_path": file_data["path"],
+                    "file_name": file_data["file_name"],
+                    "citation_url": citation_url,
+                    "chunk_index": chunk_idx,
+                    "content_text": chunk,
+                    "embedding": embedding,
                 })
 
-    print(f"Created {len(records)} total chunks")
-
-    with open(embedded_data.path, 'w', encoding='utf-8') as f:
+    print(f"Total chunks created: {len(records)}")
+    with open(embedded_data.path, "w", encoding="utf-8") as f:
         for record in records:
-            f.write(json.dumps(record, ensure_ascii=False) + '\n')
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+# ---------------------------------------------------------------------------
+# Step 3: Store directly in Milvus (no Feast)
+# ---------------------------------------------------------------------------
 @dsl.component(
-    base_image="python:3.13-slim",
-    packages_to_install=["feast[milvus]", "pandas", "marshmallow>=3.13.0"]
+    base_image="python:3.11-slim",
+    packages_to_install=["pymilvus>=2.4.0"]
 )
-def store_via_feast(
+def store_in_milvus(
     embedded_data: dsl.Input[dsl.Dataset],
-    feast_online_store_host: str,
-    feast_project: str,
+    milvus_uri: str,
+    collection_name: str,
 ):
     import json
-    import os
-    import pandas as pd
-    import inspect
-    from datetime import datetime, timedelta
-    from feast import FeatureStore, Entity, FeatureView, Field, FileSource
-    from feast.types import String, Int64, Float32, Array, UnixTimestamp
+    from pymilvus import MilvusClient, DataType
 
-    # Patch Feast VARCHAR limit (hardcoded 512 -> 4096) and reload module
-    import importlib
-    import feast.infra.online_stores.milvus_online_store.milvus as milvus_mod
-    src_file = inspect.getfile(milvus_mod)
-    with open(src_file, "r") as f:
-        content = f.read()
-    if "max_length=512" in content:
-        with open(src_file, "w") as f:
-            f.write(content.replace("max_length=512", "max_length=4096"))
-        print("Patched Feast VARCHAR limit to 4096")
-    importlib.reload(milvus_mod)
-    print("Reloaded Feast Milvus module")
+    print(f"Connecting to Milvus at {milvus_uri}")
+    client = MilvusClient(uri=milvus_uri)
+    print("Connected.")
 
-    # Drop existing collection so it gets recreated with the patched schema
-    from pymilvus import connections, utility
-    milvus_host = feast_online_store_host.replace("http://", "").replace("https://", "")
-    connections.connect("default", host=milvus_host, port="19530")
-    collection_name = f"{feast_project}_docs_rag"
-    if utility.has_collection(collection_name):
-        utility.drop_collection(collection_name)
-        print(f"Dropped existing collection: {collection_name}")
-    connections.disconnect("default")
+    DIM = 768  # all-mpnet-base-v2 output dimension
 
-    feast_dir = "/tmp/feast_repo"
-    os.makedirs(f"{feast_dir}/data", exist_ok=True)
+    # Create collection if it does not exist
+    if not client.has_collection(collection_name):
+        schema = client.create_schema(auto_id=True, enable_dynamic_field=False)
+        schema.add_field("id",            DataType.INT64,        is_primary=True)
+        schema.add_field("file_unique_id",DataType.VARCHAR,      max_length=512)
+        schema.add_field("repo_name",     DataType.VARCHAR,      max_length=256)
+        schema.add_field("file_path",     DataType.VARCHAR,      max_length=512)
+        schema.add_field("file_name",     DataType.VARCHAR,      max_length=256)
+        schema.add_field("citation_url",  DataType.VARCHAR,      max_length=512)
+        schema.add_field("chunk_index",   DataType.INT64)
+        schema.add_field("content_text",  DataType.VARCHAR,      max_length=4096)
+        schema.add_field("vector",        DataType.FLOAT_VECTOR, dim=DIM)
 
-    with open(f"{feast_dir}/feature_store.yaml", "w") as f:
-        f.write(f"""project: {feast_project}
-provider: local
-registry: data/registry.db
-online_store:
-  type: milvus
-  host: {feast_online_store_host}
-  port: 19530
-  username: root
-  password: Milvus
-  vector_enabled: true
-  embedding_dim: 768
-  index_type: IVF_FLAT
-  metric_type: COSINE
-offline_store:
-  type: file
-entity_key_serialization_version: 3
-auth:
-  type: no_auth
-""")
+        index_params = client.prepare_index_params()
+        index_params.add_index(
+            field_name="vector",
+            metric_type="COSINE",
+            index_type="IVF_FLAT",
+            params={"nlist": 128},
+        )
 
-    # Define Feast objects inline
-    doc_chunk = Entity(name="doc_chunk", join_keys=["file_unique_id"])
-    docs_source = FileSource(path="data/embedded_docs.parquet", timestamp_field="event_timestamp")
-    docs_rag = FeatureView(
-        name="docs_rag",
-        entities=[doc_chunk],
-        schema=[
-            Field(name="file_unique_id", dtype=String),
-            Field(name="repo_name", dtype=String),
-            Field(name="file_path", dtype=String),
-            Field(name="file_name", dtype=String),
-            Field(name="citation_url", dtype=String),
-            Field(name="chunk_index", dtype=Int64),
-            Field(name="content_text", dtype=String),
-            Field(name="vector", dtype=Array(Float32), vector_index=True, vector_search_metric="COSINE"),
-            Field(name="event_timestamp", dtype=UnixTimestamp),
-        ],
-        source=docs_source,
-        ttl=timedelta(days=30),
-    )
+        client.create_collection(
+            collection_name=collection_name,
+            schema=schema,
+            index_params=index_params,
+        )
+        print(f"Collection '{collection_name}' created.")
+    else:
+        print(f"Collection '{collection_name}' already exists — will upsert.")
 
-    records = []
-    with open(embedded_data.path, 'r', encoding='utf-8') as f:
+    # Load records in batches
+    BATCH = 200
+    batch = []
+    total = 0
+
+    with open(embedded_data.path, "r", encoding="utf-8") as f:
         for line in f:
-            record = json.loads(line)
-            records.append({
-                "file_unique_id": record['file_unique_id'],
-                "repo_name": record["repo_name"],
-                "file_path": record["file_path"],
-                "file_name": record["file_name"],
-                "citation_url": record["citation_url"],
-                "chunk_index": record["chunk_index"],
-                "content_text": record["content_text"],
-                "vector": record["embedding"],
-                "event_timestamp": datetime.now(),
+            r = json.loads(line)
+            batch.append({
+                "file_unique_id": r["file_unique_id"][:512],
+                "repo_name":      r["repo_name"][:256],
+                "file_path":      r["file_path"][:512],
+                "file_name":      r["file_name"][:256],
+                "citation_url":   r["citation_url"][:512],
+                "chunk_index":    r["chunk_index"],
+                "content_text":   r["content_text"][:4096],
+                "vector":         r["embedding"],
             })
+            if len(batch) >= BATCH:
+                client.insert(collection_name=collection_name, data=batch)
+                total += len(batch)
+                print(f"Inserted batch — total so far: {total}")
+                batch = []
 
-    df = pd.DataFrame(records)
+    if batch:
+        client.insert(collection_name=collection_name, data=batch)
+        total += len(batch)
 
-    store = FeatureStore(repo_path=feast_dir)
-    store.apply([doc_chunk, docs_source, docs_rag])
-    store.write_to_online_store(feature_view_name="docs_rag", df=df)
-    print(f"Wrote {len(records)} records to Feast online store")
+    print(f"Done. Total records inserted: {total}")
+    client.close()
 
 
+# ---------------------------------------------------------------------------
+# Pipeline definition
+# ---------------------------------------------------------------------------
 @dsl.pipeline(
-    name="github-rag-feast",
-    description="RAG pipeline: GitHub docs -> chunk -> embed -> Feast"
+    name="github-rag-milvus",
+    description="RAG pipeline: GitHub docs -> chunk+embed -> Milvus (no Feast)",
 )
-def github_rag_feast_pipeline(
+def github_rag_pipeline(
     repo_owner: str = "kubeflow",
     repo_name: str = "website",
-    directory_path: str = "content/en",
+    directory_path: str = "content/en/docs",
     github_token: str = "",
-    base_url: str = "https://<YOUR_DOCS_BASE_URL>",
+    base_url: str = "https://www.kubeflow.org/docs",
     chunk_size: int = 1000,
     chunk_overlap: int = 100,
-    feast_online_store_host: str = "http://milvus.<YOUR_NAMESPACE>.svc.cluster.local",
-    feast_project: str = "kubeflow_docs",
+    milvus_uri: str = "http://milvus-milvus.ml-infra.svc.cluster.local:19530",
+    collection_name: str = "kubeflow_docs",
 ):
     download_task = download_github_directory(
         repo_owner=repo_owner,
@@ -306,18 +259,18 @@ def github_rag_feast_pipeline(
         chunk_overlap=chunk_overlap,
     )
 
-    store_via_feast(
+    store_in_milvus(
         embedded_data=chunk_task.outputs["embedded_data"],
-        feast_online_store_host=feast_online_store_host,
-        feast_project=feast_project,
+        milvus_uri=milvus_uri,
+        collection_name=collection_name,
     )
-
 
 
 if __name__ == "__main__":
     import os
-    os.environ['KFP_DISABLE_EXECUTION_CACHING_BY_DEFAULT'] = 'true'
+    os.environ["KFP_DISABLE_EXECUTION_CACHING_BY_DEFAULT"] = "true"
     kfp.compiler.Compiler().compile(
-        pipeline_func=github_rag_feast_pipeline,
+        pipeline_func=github_rag_pipeline,
         package_path="github_rag_pipeline.yaml",
     )
+    print("Compiled -> github_rag_pipeline.yaml")
