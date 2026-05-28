@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mcp-kubeflow-docs
-  namespace: <YOUR_NAMESPACE>
+  namespace: docs-agent
 spec:
   replicas: 1
   selector:
@@ -45,7 +45,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: mcp-kubeflow-docs
-  namespace: <YOUR_NAMESPACE>
+  namespace: docs-agent
 spec:
   selector:
     app: mcp-kubeflow-docs

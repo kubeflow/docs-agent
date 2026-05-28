@@ -2,7 +2,7 @@ apiVersion: security.istio.io/v1beta1
 kind: AuthorizationPolicy
 metadata:
   name: allow-milvus-etcd
-  namespace: <YOUR_NAMESPACE>
+  namespace: ml-infra
 spec:
   selector:
     matchLabels:
