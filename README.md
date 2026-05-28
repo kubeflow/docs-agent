@@ -1,5 +1,7 @@
 # Kubeflow Documentation AI Assistant
 
+**Author**: Santhosh Toorpu
+
 [![KEP-867](https://img.shields.io/badge/KEP-867-Documentation%20AI%20Assistant-blue)](https://github.com/kubeflow/community/issues/867)
 
 The official LLM implementation of the Kubeflow Documentation Assistant powered by Retrieval-Augmented Generation (RAG). This repository provides a comprehensive solution for Kubeflow users to search across documentation and get accurate, contextual answers to their queries.
@@ -708,3 +710,31 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 - [Milvus](https://milvus.io/) for the vector database
 - [KServe](https://kserve.github.io/website/) for model serving
 - [vLLM](https://github.com/vllm-project/vllm) for high-performance LLM inference
+
+---
+
+## Modern Infrastructure & CI/CD (Kagent & MCP)
+
+The project has evolved to utilize the Model Context Protocol (MCP) and **kagent** to route queries intelligently. The infrastructure is heavily automated using Terraform and GitHub Actions.
+
+### Terraform (`docs-agent-mcp/terraform/`)
+We use Terraform for declarative, reproducible cluster infrastructure on OKE.
+*   **`variables.tf`**: Single source of truth for component versions (Knative, Istio, KServe, etc.) and namespace names.
+*   **`namespaces.tf`**: Manages the `ml-infra` and `docs-agent` namespaces.
+*   **`knative.tf`**: Installs `cert-manager`, Knative Serving (Core & CRDs), Istio base/istiod, and KServe, applying crucial ConfigMap patches for scheduling.
+*   **`kubeflow_pipelines.tf`**: Deploys Kubeflow Pipelines (Standalone) into the `kubeflow` namespace without Istio sidecars (to prevent routing conflicts), persisting `fsGroup` patches for SeaweedFS.
+*   **`milvus.tf`**: Uses the Milvus Operator to deploy a lightweight Milvus Standalone instance strictly scheduled on CPU nodes, reserving GPU nodes purely for LLM inference.
+*   **`kagent.tf`**: Installs official `kagent-crds` and the `kagent` controller via OCI Helm charts, with bundled agents cleanly disabled.
+*   **`istio_policies.tf`**: Implements zero-trust networking, explicitly allowing internal cluster traffic where needed (e.g., KFP Pipeline to Milvus, Kagent to Milvus).
+
+### Pipeline Optimizations (`docs-agent-mcp/pipelines/`)
+The ingestion pipeline was rewritten to maximize efficiency and avoid Kubernetes ephemeral storage eviction:
+*   **Feast Removal**: The pipeline now writes embeddings directly to Milvus using `pymilvus`, dramatically lowering complexity.
+*   **Custom Base Image (`Dockerfile.pipeline`)**: We bake the massive PyTorch library and the Hugging Face `all-mpnet-base-v2` model directly into a custom Docker image. This reduces runtime disk usage from 5.5GB to zero, fixing OKE pod eviction errors, and preventing Hugging Face API rate limits.
+
+### GitHub Actions CI/CD (`.github/workflows/`)
+The repository is fully automated via CI/CD, securely connecting to the OKE cluster using temporary OCI tokens:
+*   **`build-pipeline-base.yaml`**: Automatically builds and pushes the custom pipeline Docker image when `Dockerfile.pipeline` is updated.
+*   **`run-pipeline.yaml`**: A weekly scheduled (and manually triggerable) workflow that compiles the Kubeflow Pipeline and submits the run to the cluster via KFP API port-forwarding.
+*   **`deploy-mcp.yaml`**: Builds the MCP Server Docker image, pushes it to Docker Hub, and applies it to the OKE cluster.
+*   **`deploy-agent.yaml`**: Continuously deploys your `kagent` custom resources (`setup.yaml`) to update the AI agent's configuration.
