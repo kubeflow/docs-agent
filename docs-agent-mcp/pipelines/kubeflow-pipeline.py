@@ -7,8 +7,7 @@ from typing import Optional
 # Step 1: Download GitHub docs
 # ---------------------------------------------------------------------------
 @dsl.component(
-    base_image="python:3.11-slim",
-    packages_to_install=["requests", "beautifulsoup4"]
+    base_image="docker.io/<YOUR_DOCKERHUB_USERNAME>/kubeflow-pipeline-base:latest"
 )
 def download_github_directory(
     repo_owner: str,
@@ -65,8 +64,7 @@ def download_github_directory(
 # Step 2: Chunk and embed
 # ---------------------------------------------------------------------------
 @dsl.component(
-    base_image="python:3.11-slim",
-    packages_to_install=["sentence-transformers", "langchain-text-splitters"]
+    base_image="docker.io/<YOUR_DOCKERHUB_USERNAME>/kubeflow-pipeline-base:latest"
 )
 def chunk_and_embed(
     github_data: dsl.Input[dsl.Dataset],
@@ -147,8 +145,7 @@ def chunk_and_embed(
 # Step 3: Store directly in Milvus (no Feast)
 # ---------------------------------------------------------------------------
 @dsl.component(
-    base_image="python:3.11-slim",
-    packages_to_install=["pymilvus>=2.4.0"]
+    base_image="docker.io/<YOUR_DOCKERHUB_USERNAME>/kubeflow-pipeline-base:latest"
 )
 def store_in_milvus(
     embedded_data: dsl.Input[dsl.Dataset],

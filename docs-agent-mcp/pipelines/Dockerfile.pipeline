@@ -1,0 +1,18 @@
+FROM python:3.11-slim
+
+# Install python packages without caching to keep image size small
+RUN pip install --no-cache-dir \
+    kfp>=2.0.0 \
+    pymilvus>=2.4.0 \
+    sentence-transformers \
+    langchain-text-splitters \
+    beautifulsoup4 \
+    requests
+
+# Pre-download the sentence-transformers model so it's baked into the image.
+# This prevents downloading it on every pipeline run, saving time, ephemeral storage,
+# and avoiding HuggingFace Hub rate limits.
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-mpnet-base-v2')"
+
+# Set huggingface cache location explicitly
+ENV HF_HOME=/root/.cache/huggingface
