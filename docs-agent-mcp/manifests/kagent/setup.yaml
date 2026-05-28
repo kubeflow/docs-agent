@@ -1,27 +1,27 @@
-# 1. Groq API Key Secret
+# 1. Local LLM API Key Secret (Dummy key for local deployment)
 apiVersion: v1
 kind: Secret
 metadata:
-  name: kagent-groq
+  name: kagent-llm-key
   namespace: docs-agent
 type: Opaque
 stringData:
-  GROQ_API_KEY: "<YOUR_GROQ_API_KEY>"
+  API_KEY: "dummy"
 
 ---
-# 2. LLM Provider Config (Groq is OpenAI-compatible)
+# 2. LLM Provider Config (Local KServe/vLLM is OpenAI-compatible)
 apiVersion: kagent.dev/v1alpha2
 kind: ModelConfig
 metadata:
-  name: groq-llama  
+  name: local-qwen  
   namespace: docs-agent
 spec:
-  apiKeySecret: kagent-groq
-  apiKeySecretKey: GROQ_API_KEY
-  model: <model of your choice>
+  apiKeySecret: kagent-llm-key
+  apiKeySecretKey: API_KEY
+  model: qwen2.5-14B
   provider: OpenAI
   openAI:
-    baseUrl: "https://api.groq.com/openai/v1"
+    baseUrl: "http://qwen-llm-predictor.ml-infra.svc.cluster.local/v1"
 
 ---
 # 3. MCP Server Reference
@@ -45,7 +45,7 @@ spec:
   description: "Kubeflow documentation assistant"
   type: Declarative
   declarative:
-    modelConfig: groq-llama
+    modelConfig: local-qwen
     tools:
       - type: McpServer
         mcpServer:
