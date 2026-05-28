@@ -43,11 +43,12 @@ spec:
         name: huggingface
       runtime: llm-runtime
       args:
-        - --model_name=qwen2.5-7B
-        - --model_id=Qwen/Qwen2.5-7B-Instruct
+        - --model_name=qwen2.5-14B
+        - --model_id=Qwen/Qwen2.5-14B-Instruct-AWQ
         - --backend=vllm
         - --max-model-len=32768
         - --gpu-memory-utilization=0.90
+        - --quantization=awq
       resources:
         requests:
           cpu: "4"
