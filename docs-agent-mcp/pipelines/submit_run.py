@@ -17,8 +17,9 @@ run = client.create_run_from_pipeline_package(
         "directory_path":   "content/en/docs",
         "github_token":     "",          # pass a token if you hit rate limits
         "base_url":         "https://www.kubeflow.org/docs",
-        "chunk_size":       1000,
-        "chunk_overlap":    100,
+        "chunk_size":       500,
+        "chunk_overlap":    50,
+        "embeddings_service_url": "http://embeddings-service-predictor.ml-infra.svc.cluster.local/embed",
         "milvus_uri":       "http://milvus-milvus.ml-infra.svc.cluster.local:19530",
         "collection_name":  "kubeflow_docs",
     },

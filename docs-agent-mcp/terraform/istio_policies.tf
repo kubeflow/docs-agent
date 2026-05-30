@@ -115,10 +115,10 @@ spec:
   rules:
   - from:
     - source:
-        namespaces: ["docs-agent"]
+        namespaces: ["docs-agent", "istio-system"]
     to:
     - operation:
-        ports: ["8080"]
+        ports: ["8080", "8012"]
 YAML
 
   depends_on = [helm_release.istiod, kubernetes_namespace.ml_infra, kubernetes_namespace.docs_agent]
@@ -170,6 +170,58 @@ spec:
     to:
     - operation:
         ports: ["19530"]
+YAML
+
+  depends_on = [helm_release.istiod, kubernetes_namespace.ml_infra]
+}
+
+# --- Allow traffic to embeddings-service ---
+
+# Allow docs-agent/mcp-server -> ml-infra/embeddings-service
+resource "kubectl_manifest" "istio_allow_mcp_to_embeddings" {
+  yaml_body = <<YAML
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-mcp-to-embeddings
+  namespace: ml-infra
+spec:
+  selector:
+    matchLabels:
+      serving.kserve.io/inferenceservice: embeddings-service
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        namespaces: ["docs-agent", "istio-system"]
+    to:
+    - operation:
+        ports: ["8080", "80", "8012"]
+YAML
+
+  depends_on = [helm_release.istiod, kubernetes_namespace.ml_infra, kubernetes_namespace.docs_agent]
+}
+
+# Allow kubeflow/pipeline pods -> ml-infra/embeddings-service
+resource "kubectl_manifest" "istio_allow_kubeflow_to_embeddings" {
+  yaml_body = <<YAML
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-kubeflow-to-embeddings
+  namespace: ml-infra
+spec:
+  selector:
+    matchLabels:
+      serving.kserve.io/inferenceservice: embeddings-service
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        namespaces: ["kubeflow", "istio-system"]
+    to:
+    - operation:
+        ports: ["8080", "80", "8012"]
 YAML
 
   depends_on = [helm_release.istiod, kubernetes_namespace.ml_infra]

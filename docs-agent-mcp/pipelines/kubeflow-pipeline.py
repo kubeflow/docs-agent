@@ -7,7 +7,8 @@ from typing import Optional
 # Step 1: Download GitHub docs
 # ---------------------------------------------------------------------------
 @dsl.component(
-    base_image="docker.io/<YOUR_DOCKERHUB_USERNAME>/kubeflow-pipeline-base:latest"
+    base_image="python:3.11-slim",
+    packages_to_install=["requests", "beautifulsoup4"]
 )
 def download_github_directory(
     repo_owner: str,
@@ -64,7 +65,8 @@ def download_github_directory(
 # Step 2: Chunk and embed
 # ---------------------------------------------------------------------------
 @dsl.component(
-    base_image="docker.io/<YOUR_DOCKERHUB_USERNAME>/kubeflow-pipeline-base:latest"
+    base_image="python:3.11-slim",
+    packages_to_install=["requests", "langchain-text-splitters"]
 )
 def chunk_and_embed(
     github_data: dsl.Input[dsl.Dataset],
@@ -72,16 +74,16 @@ def chunk_and_embed(
     base_url: str,
     chunk_size: int,
     chunk_overlap: int,
+    embeddings_service_url: str,
     embedded_data: dsl.Output[dsl.Dataset],
 ):
     import json
     import os
     import re
-    from sentence_transformers import SentenceTransformer
+    import requests
     from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-    model = SentenceTransformer("sentence-transformers/all-mpnet-base-v2")
-    print("Embedding model loaded on CPU")
+    print(f"Using external embeddings service at: {embeddings_service_url}")
 
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
@@ -123,7 +125,6 @@ def chunk_and_embed(
             print(f"{file_data['path']} -> {len(chunks)} chunks")
 
             for chunk_idx, chunk in enumerate(chunks):
-                embedding = model.encode(chunk).tolist()
                 records.append({
                     "file_unique_id": f"{file_unique_id}:{chunk_idx}",
                     "repo_name": repo_name,
@@ -131,11 +132,34 @@ def chunk_and_embed(
                     "file_name": file_data["file_name"],
                     "citation_url": citation_url,
                     "chunk_index": chunk_idx,
-                    "content_text": chunk,
-                    "embedding": embedding,
+                    "content_text": chunk[:1000],
                 })
 
-    print(f"Total chunks created: {len(records)}")
+    print(f"Total chunks created: {len(records)}. Generating embeddings via service...")
+
+    # Embed in batches to avoid huge payloads and allow progress reporting
+    BATCH_SIZE = 1
+    for i in range(0, len(records), BATCH_SIZE):
+        batch = records[i:i + BATCH_SIZE]
+        texts = [r["content_text"] for r in batch]
+        
+        try:
+            response = requests.post(
+                embeddings_service_url,
+                json={"inputs": texts},
+                headers={"Content-Type": "application/json"},
+                timeout=60
+            )
+            response.raise_for_status()
+            embeddings = response.json()
+            
+            for idx, emb in enumerate(embeddings):
+                batch[idx]["embedding"] = emb
+        except Exception as e:
+            print(f"Failed to generate embeddings for batch starting at {i}: {e}")
+            raise e
+
+    print(f"Successfully generated embeddings for all {len(records)} chunks.")
     with open(embedded_data.path, "w", encoding="utf-8") as f:
         for record in records:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -145,7 +169,8 @@ def chunk_and_embed(
 # Step 3: Store directly in Milvus (no Feast)
 # ---------------------------------------------------------------------------
 @dsl.component(
-    base_image="docker.io/<YOUR_DOCKERHUB_USERNAME>/kubeflow-pipeline-base:latest"
+    base_image="python:3.11-slim",
+    packages_to_install=["pymilvus>=2.4.0"]
 )
 def store_in_milvus(
     embedded_data: dsl.Input[dsl.Dataset],
@@ -238,6 +263,7 @@ def github_rag_pipeline(
     base_url: str = "https://www.kubeflow.org/docs",
     chunk_size: int = 1000,
     chunk_overlap: int = 100,
+    embeddings_service_url: str = "http://embeddings-service-predictor.ml-infra.svc.cluster.local/embed",
     milvus_uri: str = "http://milvus-milvus.ml-infra.svc.cluster.local:19530",
     collection_name: str = "kubeflow_docs",
 ):
@@ -254,6 +280,7 @@ def github_rag_pipeline(
         base_url=base_url,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
+        embeddings_service_url=embeddings_service_url,
     )
 
     store_in_milvus(

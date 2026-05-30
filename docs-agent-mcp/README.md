@@ -1,47 +1,21 @@
 # kagent Setup for Kubeflow Docs Agent
 
-Deploy the Kubeflow documentation assistant using kagent, MCP, Feast, and Milvus on Kubernetes.
+Deploy the Kubeflow documentation assistant using kagent, MCP, and Milvus on Kubernetes.
 
 ## Architecture
 
-![Kubeflow Docs Agent Architecture](../assets/kagentarch.png)
+* **KAgent UI / Runner:** Chat interface that orchestrates interactions.
+* **MCP Server:** Fetches context from Milvus.
+* **LLM Service:** Qwen-2.5-14B running on KServe/vLLM.
+* **Embeddings Service:** Sentence-Transformers MPNet via Hugging Face TEI.
+* **Milvus:** Direct vector database storage (no Feast dependency).
 
 ## Prerequisites
 
 - Kubernetes cluster with Helm 3.x
 - `kubectl` access to a namespace (examples use `<YOUR_NAMESPACE>`)
 - Python 3.9+
-- A Groq API key (or other OpenAI-compatible LLM provider)
 - Container registry (e.g. Docker Hub) to push the MCP server image
-
-## Placeholders and how to fill them
-
-- **`<YOUR_NAMESPACE>`**
-  - Any Kubernetes namespace you control, for example:
-    - Create it: `kubectl create namespace docs-agent`
-    - Then use `docs-agent` as `<YOUR_NAMESPACE>`.
-  - Used in:
-    - `manifests/mcp-server/mcp-server.yaml` (`metadata.namespace`, Service namespace)
-    - `manifests/kagent/setup.yaml` (all `metadata.namespace` fields and MCP URL)
-    - Istio AuthorizationPolicies under `manifests/istio/`
-    - All `kubectl` and `helm` commands in this README.
-
-- **`<YOUR_DOCKERHUB_USERNAME>`**
-  - Your Docker Hub (or other registry) account name.
-  - Build and push the MCP image from `mcp-server/`:
-    - `docker build -t <YOUR_DOCKERHUB_USERNAME>/mcp-kubeflow-docs:latest .`
-    - `docker push <YOUR_DOCKERHUB_USERNAME>/mcp-kubeflow-docs:latest`
-  - Used in:
-    - `manifests/mcp-server/mcp-server.yaml` (`image: <YOUR_DOCKERHUB_USERNAME>/mcp-kubeflow-docs:latest`)
-
-- **`<YOUR_GROQ_API_KEY>`**
-  - Get it from the Groq console and paste it into:
-    - `manifests/kagent/setup.yaml` → `stringData.GROQ_API_KEY`.
-  - This Secret is referenced by the `ModelConfig` in the same file.
-
-- **Feast / Milvus placeholders in `feast_repo/feature_store.yaml`**
-  - The `feast_repo/` folder is a **legacy/example configuration** and is **not required** for the default pipeline flow. The pipeline code configures Feast and Milvus directly.
-  - You can safely ignore or delete `feast_repo/` unless you explicitly want to experiment with a standalone Feast repo configuration.
 
 ## Deployment Guide
 
@@ -149,7 +123,7 @@ helm install kagent oci://ghcr.io/kagent-dev/kagent/helm/kagent \
   --set tools.querydoc.enabled=false
 ```
 
-Before configuring kagent, make sure you have a valid LLM API key (for example, a Groq API key) and that you have set `<YOUR_GROQ_API_KEY>` in `manifests/kagent/setup.yaml` under `stringData.GROQ_API_KEY`.
+Before configuring kagent, make sure you have the local Qwen model (`qwen-llm`) running on KServe and the stable service (`qwen-llm-stable`) created.
 
 Apply the custom agent configuration:
 

@@ -1,24 +1,20 @@
+import requests
 from fastmcp import FastMCP
 from pymilvus import MilvusClient
-from sentence_transformers import SentenceTransformer
 
-MILVUS_URI = "http://milvus.<YOUR_NAMESPACE>.svc.cluster.local:19530"
+MILVUS_URI = "http://milvus-milvus.ml-infra.svc.cluster.local:19530"
 MILVUS_USER = "root"
 MILVUS_PASSWORD = "Milvus"
-COLLECTION_NAME = "kubeflow_docs_docs_rag"
-EMBEDDING_MODEL = "sentence-transformers/all-mpnet-base-v2"
+COLLECTION_NAME = "kubeflow_docs"
+EMBEDDINGS_URL = "http://embeddings-service-predictor.ml-infra.svc.cluster.local/embed"
 PORT = 8000
 
 mcp = FastMCP("Kubeflow Docs MCP Server")
-
-model: SentenceTransformer = None
 client: MilvusClient = None
 
 
 def _init():
-    global model, client
-    if model is None:
-        model = SentenceTransformer(EMBEDDING_MODEL)
+    global client
     if client is None:
         client = MilvusClient(uri=MILVUS_URI, user=MILVUS_USER, password=MILVUS_PASSWORD)
 
@@ -36,7 +32,17 @@ def search_kubeflow_docs(query: str, top_k: int = 5) -> str:
     """
     _init()
 
-    embedding = model.encode(query).tolist()
+    try:
+        response = requests.post(
+            EMBEDDINGS_URL,
+            json={"inputs": [query]},
+            headers={"Content-Type": "application/json"},
+            timeout=10
+        )
+        response.raise_for_status()
+        embedding = response.json()[0]
+    except Exception as e:
+        return f"Error calling embeddings service: {e}"
 
     hits = client.search(
         collection_name=COLLECTION_NAME,

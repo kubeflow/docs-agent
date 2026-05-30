@@ -216,5 +216,5 @@ feast_repo/data/
 feast_repo/registry.db
 
 # Compiled pipeline YAML
-pipelines/*.yaml
+**/pipelines/*.yaml
 !pipelines/README.md
