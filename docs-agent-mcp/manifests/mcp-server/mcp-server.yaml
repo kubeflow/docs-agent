@@ -13,10 +13,6 @@ spec:
       labels:
         app: mcp-kubeflow-docs
     spec:
-      tolerations:
-        - key: "nvidia.com/gpu"
-          operator: "Exists"
-          effect: "NoSchedule"
       imagePullSecrets:
         - name: dockerhub-registry
       containers:
