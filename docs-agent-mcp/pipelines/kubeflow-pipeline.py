@@ -75,6 +75,7 @@ def chunk_and_embed(
     chunk_size: int,
     chunk_overlap: int,
     embeddings_service_url: str,
+    embedding_batch_size: int,
     embedded_data: dsl.Output[dsl.Dataset],
 ):
     import json
@@ -138,9 +139,8 @@ def chunk_and_embed(
     print(f"Total chunks created: {len(records)}. Generating embeddings via service...")
 
     # Embed in batches to avoid huge payloads and allow progress reporting
-    BATCH_SIZE = 1
-    for i in range(0, len(records), BATCH_SIZE):
-        batch = records[i:i + BATCH_SIZE]
+    for i in range(0, len(records), embedding_batch_size):
+        batch = records[i:i + embedding_batch_size]
         texts = [r["content_text"] for r in batch]
         
         try:
@@ -176,48 +176,16 @@ def store_in_milvus(
     embedded_data: dsl.Input[dsl.Dataset],
     milvus_uri: str,
     collection_name: str,
+    milvus_batch_size: int,
 ):
     import json
-    from pymilvus import MilvusClient, DataType
+    from pymilvus import MilvusClient
 
     print(f"Connecting to Milvus at {milvus_uri}")
     client = MilvusClient(uri=milvus_uri)
     print("Connected.")
 
-    DIM = 768  # all-mpnet-base-v2 output dimension
-
-    # Create collection if it does not exist
-    if not client.has_collection(collection_name):
-        schema = client.create_schema(auto_id=True, enable_dynamic_field=False)
-        schema.add_field("id",            DataType.INT64,        is_primary=True)
-        schema.add_field("file_unique_id",DataType.VARCHAR,      max_length=512)
-        schema.add_field("repo_name",     DataType.VARCHAR,      max_length=256)
-        schema.add_field("file_path",     DataType.VARCHAR,      max_length=512)
-        schema.add_field("file_name",     DataType.VARCHAR,      max_length=256)
-        schema.add_field("citation_url",  DataType.VARCHAR,      max_length=512)
-        schema.add_field("chunk_index",   DataType.INT64)
-        schema.add_field("content_text",  DataType.VARCHAR,      max_length=4096)
-        schema.add_field("vector",        DataType.FLOAT_VECTOR, dim=DIM)
-
-        index_params = client.prepare_index_params()
-        index_params.add_index(
-            field_name="vector",
-            metric_type="COSINE",
-            index_type="IVF_FLAT",
-            params={"nlist": 128},
-        )
-
-        client.create_collection(
-            collection_name=collection_name,
-            schema=schema,
-            index_params=index_params,
-        )
-        print(f"Collection '{collection_name}' created.")
-    else:
-        print(f"Collection '{collection_name}' already exists — will upsert.")
-
     # Load records in batches
-    BATCH = 200
     batch = []
     total = 0
 
@@ -234,7 +202,7 @@ def store_in_milvus(
                 "content_text":   r["content_text"][:4096],
                 "vector":         r["embedding"],
             })
-            if len(batch) >= BATCH:
+            if len(batch) >= milvus_batch_size:
                 client.insert(collection_name=collection_name, data=batch)
                 total += len(batch)
                 print(f"Inserted batch — total so far: {total}")
@@ -264,8 +232,10 @@ def github_rag_pipeline(
     chunk_size: int = 1000,
     chunk_overlap: int = 100,
     embeddings_service_url: str = "http://embeddings-service-predictor.ml-infra.svc.cluster.local/embed",
+    embedding_batch_size: int = 32,
     milvus_uri: str = "http://milvus-milvus.ml-infra.svc.cluster.local:19530",
     collection_name: str = "kubeflow_docs",
+    milvus_batch_size: int = 100,
 ):
     download_task = download_github_directory(
         repo_owner=repo_owner,
@@ -281,12 +251,14 @@ def github_rag_pipeline(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
         embeddings_service_url=embeddings_service_url,
+        embedding_batch_size=embedding_batch_size,
     )
 
     store_in_milvus(
         embedded_data=chunk_task.outputs["embedded_data"],
         milvus_uri=milvus_uri,
         collection_name=collection_name,
+        milvus_batch_size=milvus_batch_size,
     )
 
 
