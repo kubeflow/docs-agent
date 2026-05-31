@@ -177,6 +177,8 @@ function createChatbotElements() {
 }
 
 document.addEventListener('DOMContentLoaded', async function() {
+    console.log('Docs Bot Initialized (v1.0.1 - Parse Fix)');
+    
     // Create chatbot HTML structure dynamically and wait for completion
     const elementsCreated = await createChatbotElements();
     
