@@ -575,9 +575,14 @@ document.addEventListener('DOMContentLoaded', async function() {
                         const parsed = JSON.parse(dataStr);
                         
                         // Handle KAgent JSON-RPC Stream chunks
-                        if (parsed.result && parsed.result.message && parsed.result.message.parts) {
-                            const parts = parsed.result.message.parts;
-                            for (const part of parts) {
+                        const result = parsed.result;
+                        if (!result) continue;
+                        
+                        // Extract message whether it's direct in result or inside result.status
+                        const messageObj = result.message || (result.status && result.status.message);
+                        
+                        if (messageObj && messageObj.parts) {
+                            for (const part of messageObj.parts) {
                                 if (part.kind === 'text' && part.text) {
                                     handleAPIResponse({ type: 'content', content: part.text });
                                 }
@@ -585,7 +590,10 @@ document.addEventListener('DOMContentLoaded', async function() {
                         }
                         
                         // Detect KAgent end of stream signal
-                        if (parsed.result && parsed.result.message && parsed.result.message.metadata && parsed.result.message.metadata.turn_complete) {
+                        const isFinal = result.final === true;
+                        const turnComplete = messageObj && messageObj.metadata && messageObj.metadata.turn_complete;
+                        
+                        if (isFinal || turnComplete) {
                             if (currentMessageContent.trim()) {
                                 messagesHistory.push({
                                     role: 'assistant',
