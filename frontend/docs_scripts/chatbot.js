@@ -584,9 +584,16 @@ document.addEventListener('DOMContentLoaded', async function() {
                         const messageObj = result.message || (result.status && result.status.message);
                         
                         if (messageObj && messageObj.parts) {
-                            for (const part of messageObj.parts) {
-                                if (part.kind === 'text' && part.text) {
-                                    handleAPIResponse({ type: 'content', content: part.text });
+                            // Skip user messages echoed back by KAgent
+                            const isUserMessage = messageObj.role === 'user';
+                            // Skip the final full message if we already streamed partial chunks
+                            const isDuplicateFinal = messageObj.metadata && messageObj.metadata.kagent_adk_partial === false && currentMessageContent.length > 0;
+                            
+                            if (!isUserMessage && !isDuplicateFinal) {
+                                for (const part of messageObj.parts) {
+                                    if (part.kind === 'text' && part.text) {
+                                        handleAPIResponse({ type: 'content', content: part.text });
+                                    }
                                 }
                             }
                         }
