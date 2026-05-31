@@ -1,10 +1,11 @@
+import os
 import requests
 from fastmcp import FastMCP
 from pymilvus import MilvusClient
 
 MILVUS_URI = "http://milvus-milvus.ml-infra.svc.cluster.local:19530"
 MILVUS_USER = "root"
-MILVUS_PASSWORD = "Milvus"
+MILVUS_PASSWORD = os.getenv("MILVUS_PASSWORD", "Milvus")
 COLLECTION_NAME = "kubeflow_docs"
 EMBEDDINGS_URL = "http://embeddings-service-predictor.ml-infra.svc.cluster.local/embed"
 PORT = 8000

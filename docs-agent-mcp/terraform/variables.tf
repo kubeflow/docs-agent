@@ -62,3 +62,17 @@ variable "milvus_version" {
   type        = string
   default     = "v2.4.15"
 }
+
+# --- Ingress & Routing -------------------------------------------------------
+
+variable "domain_name" {
+  description = "Domain name for the kagent backend UI"
+  type        = string
+  default     = "agent.example.com"
+}
+
+variable "acme_email" {
+  description = "Email address for Let's Encrypt notifications"
+  type        = string
+  default     = "admin@example.com"
+}
