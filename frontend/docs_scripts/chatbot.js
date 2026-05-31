@@ -218,6 +218,14 @@ document.addEventListener('DOMContentLoaded', async function() {
         return;
     }
 
+    // Helper to generate UUIDs for KAgent
+    function generateUUID() {
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+            var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+            return v.toString(16);
+        });
+    }
+
     // State - TODO 1: Add chat stack state management ✅
     let isTyping = false;
     let currentMessageDiv = null;
@@ -225,6 +233,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     let messagesHistory = []; // Current chat messages
     let chatsStack = []; // Stack of all chats: [{name: string, messages: array}, ...]
     let currentChatIndex = -1; // Index of current chat in stack, -1 for new unsaved chat
+    let currentContextId = generateUUID(); // KAgent session ID
     
     // TODO 2: Browser storage functions ✅
     function saveChatsToStorage() {
@@ -267,6 +276,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             const chatName = generateChatName(messagesHistory);
             const currentChat = {
                 name: chatName,
+                contextId: currentContextId,
                 messages: [...messagesHistory] // Copy array
             };
             
@@ -287,6 +297,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         // Reset current chat state
         currentChatIndex = -1;
         messagesHistory = [];
+        currentContextId = generateUUID();
         
         // Clear UI
         clearChatUI();
@@ -321,6 +332,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             const chatName = generateChatName(messagesHistory);
             const currentChat = {
                 name: chatName,
+                contextId: currentContextId,
                 messages: [...messagesHistory]
             };
             
@@ -421,6 +433,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         const selectedChat = chatsStack[chatIndex];
         currentChatIndex = chatIndex;
         messagesHistory = [...selectedChat.messages];
+        currentContextId = selectedChat.contextId || generateUUID();
         
         // Clear and rebuild UI
         clearChatUI();
@@ -466,8 +479,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     }
 
     // API Configuration
-    const API_BASE_URL = 'https://129.80.218.9.nip.io/api/agent/chat';
-    const AUTH_TOKEN = process.env.AUTH_TOKEN;
+    const API_BASE_URL = 'https://agent.santhoshtoorpu.com/a2a/docs-agent/kubeflow-docs-agent';
     
     // API connection status
     let isConnected = false;
@@ -484,17 +496,31 @@ document.addEventListener('DOMContentLoaded', async function() {
         try {
             console.log('Sending message to API:', message);
             
+            const messageId = generateUUID();
+            const rpcId = generateUUID();
+            
             const payload = {
-                message: message,
-                stream: true,
-                messages: messagesHistory
+                jsonrpc: "2.0",
+                method: "message/stream",
+                params: {
+                    message: {
+                        kind: "message",
+                        messageId: messageId,
+                        role: "user",
+                        parts: [{"kind": "text", "text": message}],
+                        contextId: currentContextId,
+                        metadata: {"displaySource": "user"}
+                    },
+                    metadata: {}
+                },
+                id: rpcId
             };
             
             const response = await fetch(API_BASE_URL, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${AUTH_TOKEN}`
+                    'Accept': 'text/event-stream'
                 },
                 body: JSON.stringify(payload)
             });
@@ -526,33 +552,55 @@ document.addEventListener('DOMContentLoaded', async function() {
                     if (line.trim() === '') continue;
                     
                     try {
-                        // Handle Server-Sent Events format
+                        let dataStr = line;
                         if (line.startsWith('data: ')) {
-                            const data = line.substring(6);
-                            if (data === '[DONE]') {
-                                // End of stream
-                                if (currentMessageContent.trim()) {
-                                    messagesHistory.push({
-                                        role: 'assistant',
-                                        content: currentMessageContent.trim()
-                                    });
-                                }
-                                currentMessageDiv = null;
-                                currentMessageContent = '';
-                                autoSaveCurrentChat();
-                                removeTypingIndicator();
-                                return;
+                            dataStr = line.substring(6);
+                        }
+                        
+                        // KAgent doesn't always send [DONE], but we handle it just in case
+                        if (dataStr === '[DONE]') {
+                            if (currentMessageContent.trim()) {
+                                messagesHistory.push({
+                                    role: 'assistant',
+                                    content: currentMessageContent.trim()
+                                });
                             }
-                            
-                            const response = JSON.parse(data);
-                            handleAPIResponse(response);
-                        } else {
-                            // Try to parse as JSON directly
-                            const response = JSON.parse(line);
-                            handleAPIResponse(response);
+                            currentMessageDiv = null;
+                            currentMessageContent = '';
+                            autoSaveCurrentChat();
+                            removeTypingIndicator();
+                            return;
+                        }
+                        
+                        const parsed = JSON.parse(dataStr);
+                        
+                        // Handle KAgent JSON-RPC Stream chunks
+                        if (parsed.result && parsed.result.message && parsed.result.message.parts) {
+                            const parts = parsed.result.message.parts;
+                            for (const part of parts) {
+                                if (part.kind === 'text' && part.text) {
+                                    handleAPIResponse({ type: 'content', content: part.text });
+                                }
+                            }
+                        }
+                        
+                        // Detect KAgent end of stream signal
+                        if (parsed.result && parsed.result.message && parsed.result.message.metadata && parsed.result.message.metadata.turn_complete) {
+                            if (currentMessageContent.trim()) {
+                                messagesHistory.push({
+                                    role: 'assistant',
+                                    content: currentMessageContent.trim()
+                                });
+                            }
+                            currentMessageDiv = null;
+                            currentMessageContent = '';
+                            autoSaveCurrentChat();
+                            removeTypingIndicator();
+                            return;
                         }
                     } catch (parseError) {
-                        console.warn('Failed to parse response line:', line, parseError);
+                        // Some chunks might just be keep-alives or partial json, ignore gracefully
+                        console.debug('Failed to parse line:', line);
                     }
                 }
             }
