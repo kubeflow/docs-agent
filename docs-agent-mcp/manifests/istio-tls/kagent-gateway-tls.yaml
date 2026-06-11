@@ -1,0 +1,66 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: kagent-ui-cert
+  namespace: istio-system
+spec:
+  secretName: kagent-ui-tls
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  commonName: agent.santhoshtoorpu.com
+  dnsNames:
+  - agent.santhoshtoorpu.com
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: Gateway
+metadata:
+  name: kagent-gateway
+  namespace: istio-system
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - "agent.santhoshtoorpu.com"
+    tls:
+      httpsRedirect: true
+  - port:
+      number: 443
+      name: https
+      protocol: HTTPS
+    hosts:
+    - "agent.santhoshtoorpu.com"
+    tls:
+      mode: SIMPLE
+      credentialName: kagent-ui-tls
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: kagent-ui-routing
+  namespace: docs-agent
+spec:
+  hosts:
+  - "agent.santhoshtoorpu.com"
+  gateways:
+  - istio-system/kagent-gateway
+  http:
+  - corsPolicy:
+      allowOrigins:
+      - regex: ".*"
+      allowMethods:
+      - POST
+      - GET
+      - OPTIONS
+      allowHeaders:
+      - "*"
+    route:
+    - destination:
+        host: kagent-ui.docs-agent.svc.cluster.local
+        port:
+          number: 8080
