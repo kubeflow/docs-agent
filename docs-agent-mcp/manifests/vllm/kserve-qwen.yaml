@@ -1,0 +1,80 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ml-infra
+---
+apiVersion: serving.kserve.io/v1alpha1
+kind: ServingRuntime
+metadata:
+  name: llm-runtime
+  namespace: ml-infra
+spec:
+  supportedModelFormats:
+    - name: huggingface
+      version: "1"
+      autoSelect: true
+  containers:
+    - name: kserve-container
+      image: docker.io/kserve/huggingfaceserver:v0.18.0-gpu
+      command: ["python", "-m", "huggingfaceserver"]
+      resources:
+        requests:
+          cpu: "4"
+          memory: "16Gi"
+          nvidia.com/gpu: "1"
+        limits:
+          cpu: "16"
+          memory: "64Gi"
+          nvidia.com/gpu: "1"
+---
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: qwen-llm
+  namespace: ml-infra
+  annotations:
+    serving.kserve.io/storage-initializer-env: '{"HF_HUB_ENABLE_HF_TRANSFER": "0"}'
+    serving.kserve.io/minReplicas: "1"
+    serving.kserve.io/deploymentTimeout: "3600"
+spec:
+  predictor:
+    model:
+      modelFormat:
+        name: huggingface
+      runtime: llm-runtime
+      args:
+        - --model_name=qwen2.5-7B
+        - --model_id=Qwen/Qwen2.5-7B-Instruct-AWQ
+        - --backend=vllm
+        - --max-model-len=32768
+        - --gpu-memory-utilization=0.90
+        - --quantization=awq
+        - --enable-auto-tool-choice
+        - --tool-call-parser=hermes
+      resources:
+        requests:
+          cpu: "4"
+          memory: "16Gi"
+          nvidia.com/gpu: "1"
+        limits:
+          cpu: "16"
+          memory: "64Gi"
+          nvidia.com/gpu: "1"
+    nodeSelector:
+      nvidia.com/gpu: "true"
+      disk: 150gb
+    tolerations:
+      - operator: "Exists"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: qwen-llm-stable
+  namespace: ml-infra
+spec:
+  selector:
+    serving.kserve.io/inferenceservice: qwen-llm
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
