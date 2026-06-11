@@ -15,7 +15,7 @@ spec:
       autoSelect: true
   containers:
     - name: kserve-container
-      image: docker.io/kserve/huggingfaceserver:v0.15.2-gpu
+      image: docker.io/kserve/huggingfaceserver:v0.18.0-gpu
       command: ["python", "-m", "huggingfaceserver"]
       resources:
         requests:
@@ -43,8 +43,8 @@ spec:
         name: huggingface
       runtime: llm-runtime
       args:
-        - --model_name=qwen2.5-14B
-        - --model_id=Qwen/Qwen2.5-14B-Instruct-AWQ
+        - --model_name=qwen2.5-7B
+        - --model_id=Qwen/Qwen2.5-7B-Instruct-AWQ
         - --backend=vllm
         - --max-model-len=32768
         - --gpu-memory-utilization=0.90

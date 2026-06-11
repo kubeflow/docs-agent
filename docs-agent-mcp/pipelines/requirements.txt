@@ -1,5 +1,5 @@
-kfp>=2.0.0
-pymilvus>=2.4.0
-langchain-text-splitters
+kfp==2.16.1
+pymilvus==3.0.0
+langchain-text-splitters==1.1.2
 beautifulsoup4
 requests

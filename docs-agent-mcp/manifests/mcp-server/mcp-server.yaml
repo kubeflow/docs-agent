@@ -17,7 +17,7 @@ spec:
         - name: dockerhub-registry
       containers:
         - name: mcp-server
-          image: docker.io/<YOUR_DOCKERHUB_USERNAME>/mcp-kubeflow-docs:latest
+          image: <YOUR_DOCKERHUB_USERNAME>/mcp-kubeflow-docs:latest
           ports:
             - containerPort: 8000
           env:

@@ -222,10 +222,7 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     // Helper to generate UUIDs for KAgent
     function generateUUID() {
-        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-            var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
-            return v.toString(16);
-        });
+        return crypto.randomUUID();
     }
 
     // State - TODO 1: Add chat stack state management ✅
@@ -481,7 +478,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     }
 
     // API Configuration
-    const API_BASE_URL = 'https://agent.santhoshtoorpu.com/a2a/docs-agent/kubeflow-docs-agent';
+    const API_BASE_URL = process.env.API_BASE_URL;
     
     // API connection status
     let isConnected = false;
