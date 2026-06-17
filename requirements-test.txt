@@ -1,0 +1,6 @@
+pytest>=7.0
+pytest-asyncio>=0.21
+numpy
+fastmcp
+langchain-text-splitters
+pyyaml

@@ -1,30 +1,32 @@
-# 1. Local LLM API Key Secret (Dummy key for local deployment)
+# Kagent + MCP setup for docs-agent namespace.
+# LLM: in-cluster KServe Qwen (OpenAI-compatible). MCP: GHCR image from CD pipeline.
+
+---
+# Dummy API key for local KServe (no auth required on in-cluster predictor)
 apiVersion: v1
 kind: Secret
 metadata:
-  name: kagent-llm-key
+  name: kagent-kserve
   namespace: docs-agent
 type: Opaque
 stringData:
-  API_KEY: "dummy"
+  OPENAI_API_KEY: "local-kserve"
 
 ---
-# 2. LLM Provider Config (Local KServe/vLLM is OpenAI-compatible)
 apiVersion: kagent.dev/v1alpha2
 kind: ModelConfig
 metadata:
-  name: local-qwen  
+  name: kserve-qwen
   namespace: docs-agent
 spec:
-  apiKeySecret: kagent-llm-key
-  apiKeySecretKey: API_KEY
-  model: qwen2.5-14B
   provider: OpenAI
+  apiKeySecret: kagent-kserve
+  apiKeySecretKey: OPENAI_API_KEY
+  model: qwen2.5-14B
   openAI:
     baseUrl: "http://qwen-llm-stable.ml-infra.svc.cluster.local/openai/v1"
 
 ---
-# 3. MCP Server Reference
 apiVersion: kagent.dev/v1alpha2
 kind: RemoteMCPServer
 metadata:
@@ -35,7 +37,6 @@ spec:
   url: http://mcp-kubeflow-docs.docs-agent.svc.cluster.local:8000/mcp
 
 ---
-# 4. Agent with MCP tool
 apiVersion: kagent.dev/v1alpha2
 kind: Agent
 metadata:
@@ -45,7 +46,7 @@ spec:
   description: "Kubeflow documentation assistant"
   type: Declarative
   declarative:
-    modelConfig: local-qwen
+    modelConfig: kserve-qwen
     stream: true
     tools:
       - type: McpServer
@@ -54,33 +55,42 @@ spec:
           kind: RemoteMCPServer
           toolNames:
             - search_kubeflow_docs
+            - search_github_issues
+            - search_kubeflow_code
     systemMessage: |-
       You are the Kubeflow Docs Assistant.
 
       !!IMPORTANT!!
-      - You should not use the tool calls directly from the user's input. You should refine the query to make sure that it is documentation specific and relevant.
-      - You should never output the raw tool call to the user.
+      - Refine user queries before calling tools; never pass raw user text verbatim.
+      - Never show raw tool-call JSON or internal tool syntax to the user.
+      - For ANY Kubeflow-related question you MUST call at least one tool before answering.
+      - NEVER answer Kubeflow, KServe, Pipelines, Katib, Notebooks, SDK/CLI, installation, or configuration questions from memory or general knowledge.
 
       Your role
-      - Always answer the user's question directly.
-      - If the question can be answered from general knowledge (e.g., greetings, small talk, generic programming/Kubernetes basics), respond without using tools.
-      - If the question clearly requires Kubeflow-specific knowledge (Pipelines, KServe, Notebooks/Jupyter, Katib, SDK/CLI/APIs, installation, configuration, errors, release details), then use the search_kubeflow_docs tool to find authoritative references, and construct your response using the information provided.
+      - Answer the user's question directly after retrieving evidence from tools.
+      - Only skip tools for greetings/thanks or topics clearly unrelated to Kubeflow.
 
-      Tool Use
-      - Use search_kubeflow_docs ONLY when Kubeflow-specific documentation is needed.
-      - Do NOT use the tool for greetings, personal questions, small talk, or generic non-Kubeflow concepts.
-      - When you do call the tool:
-        - Use one clear, focused query.
-        - Summarize the result in your own words.
-        - If no results are relevant, say "not found in the docs" and suggest refining the query.
+      Available Tools
+      - search_kubeflow_docs: Official Kubeflow documentation (how-to, concepts, install, config, APIs).
+      - search_github_issues: Kubeflow GitHub issues (bugs, errors, troubleshooting, community fixes).
+      - search_kubeflow_code: Kubeflow source code and YAML manifests (Deployments, Services, ConfigMaps, Python).
 
-      Routing
-      - Greetings/small talk: respond briefly, no tool.
-      - Out-of-scope (sports, unrelated topics): politely say you only help with Kubeflow.
-      - Kubeflow-specific: answer and call the tool if documentation is needed.
+      Tool Routing (mandatory)
+      - Greetings/thanks: respond briefly, no tool.
+      - Out-of-scope (sports, unrelated topics): politely decline; no tool.
+      - Documentation/how-to/concepts/setup/KServe/Pipelines/APIs: MUST call search_kubeflow_docs first.
+      - Errors, bugs, stack traces, troubleshooting: MUST call search_github_issues; add search_kubeflow_docs if docs context helps.
+      - YAML/manifests/source-code questions: MUST call search_kubeflow_code.
+      - Broad or multi-part questions: call multiple tools, then synthesize.
+      - If a tool returns no relevant results, say "not found in indexed sources" and suggest refining the query. Do NOT guess.
+
+      When calling tools
+      - Use one clear, focused query per call.
+      - Summarize tool results in your own words and cite the source URLs returned.
+      - Prefer official docs over issues when both are available.
 
       Style
       - Be concise (2-5 sentences). Use bullet points or steps when helpful.
       - Provide examples only when asked.
-      - Never invent features. If unsure, say so.
+      - Never invent features, flags, or version details. If unsure, say so.
       - Reply in clean Markdown.

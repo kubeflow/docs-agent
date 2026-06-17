@@ -1,0 +1,14 @@
+[tool.ruff]
+target-version = "py39"
+line-length = 120
+exclude = ["legacy"]
+
+[tool.ruff.lint]
+
+[tool.ruff.lint.per-file-ignores]
+"docs-agent-mcp/pipelines/*.py" = ["F403", "F405", "F841", "E741"]
+"scripts/index_real_issues.py" = ["F401", "E741"]
+"legacy/server/app.py" = ["F401"]
+"tests/test_code_utils.py" = ["E402"]
+"tests/test_issues_pipeline.py" = ["E402"]
+"tests/test_pipeline_utils.py" = ["E402"]

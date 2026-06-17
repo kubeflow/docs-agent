@@ -1,0 +1,15 @@
+# Copy to terraform.tfvars and adjust before: terraform apply
+
+# --- Optional public Kagent UI (Istio + Let's Encrypt) ---
+# enable_kagent_ingress     = true
+# kagent_domain_name        = "agent.your-domain.example"
+# kagent_acme_email         = "you@example.com"
+# kagent_cors_allow_origin_regexes = [
+#   "https://.*\\.vercel\\.app",
+#   "https://www\\.kubeflow\\.org",
+# ]
+
+# --- TEI embeddings (ml-infra) ---
+# embeddings_model_id              = "sentence-transformers/all-mpnet-base-v2"
+# embeddings_max_client_batch_size = "64"
+# embeddings_max_batch_tokens      = "16384"

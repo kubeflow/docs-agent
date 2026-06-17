@@ -20,9 +20,15 @@ spec:
         image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.7
         args:
           - --model-id
-          - sentence-transformers/all-mpnet-base-v2
+          - ${var.embeddings_model_id}
           - --port
           - "8080"
+          # Truncate inputs to model max tokens instead of HTTP 413 (mpnet = 384 tokens).
+          - --auto-truncate
+          - --max-client-batch-size
+          - "${var.embeddings_max_client_batch_size}"
+          - --max-batch-tokens
+          - "${var.embeddings_max_batch_tokens}"
         resources:
           requests:
             cpu: "100m"
@@ -35,6 +41,5 @@ spec:
             protocol: TCP
 YAML
 
-  # Depend on ml-infra namespace being ready
   depends_on = [kubernetes_namespace.ml_infra]
 }

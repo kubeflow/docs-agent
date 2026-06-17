@@ -76,3 +76,23 @@ variable "acme_email" {
   type        = string
   default     = "admin@example.com"
 }
+
+# --- TEI Embeddings (ml-infra) -----------------------------------------------
+
+variable "embeddings_model_id" {
+  description = "Hugging Face model ID served by TEI (must match pipeline/MCP embedding dimension)"
+  type        = string
+  default     = "sentence-transformers/all-mpnet-base-v2"
+}
+
+variable "embeddings_max_client_batch_size" {
+  description = "TEI --max-client-batch-size (number of client requests batched per forward pass)"
+  type        = string
+  default     = "64"
+}
+
+variable "embeddings_max_batch_tokens" {
+  description = "TEI --max-batch-tokens (token budget per batched forward pass)"
+  type        = string
+  default     = "16384"
+}
