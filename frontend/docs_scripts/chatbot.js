@@ -22,17 +22,69 @@ function createChatbotElements() {
         const chatbotHeader = document.createElement('div');
         chatbotHeader.className = 'chatbot-header';
 
-        const chatbotTitle = document.createElement('div');
-        chatbotTitle.className = 'chatbot-title';
-        chatbotTitle.innerHTML = '<span>Docs Bot</span>';
+        const title = document.createElement('h3');
+        title.className = 'chatbot-title';
+        title.textContent = 'Flo Virtual Assistant';
 
-        const toggleButton = document.createElement('button');
-        toggleButton.id = 'toggle-chatbot';
-        toggleButton.className = 'toggle-chatbot';
-        toggleButton.innerHTML = '<span class="minimize-icon">×</span>';
+        const headerActions = document.createElement('div');
+        headerActions.className = 'header-actions';
+        
+        const optionsBtn = document.createElement('button');
+        optionsBtn.id = 'header-options-btn';
+        optionsBtn.className = 'header-icon-btn';
+        optionsBtn.title = 'Options';
+        optionsBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M6 12c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2zm12-2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm-6 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>';
 
-        chatbotHeader.appendChild(chatbotTitle);
-        chatbotHeader.appendChild(toggleButton);
+        const minBtn = document.createElement('button');
+        minBtn.id = 'header-min-btn';
+        minBtn.className = 'header-icon-btn';
+        minBtn.title = 'Minimize';
+        minBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z"/></svg>';
+
+        const expandBtn = document.createElement('button');
+        expandBtn.id = 'header-expand-btn';
+        expandBtn.className = 'header-icon-btn';
+        expandBtn.title = 'Expand to dashboard';
+        expandBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>';
+
+        const closeBtn = document.createElement('button');
+        closeBtn.id = 'toggle-chatbot';
+        closeBtn.className = 'header-icon-btn toggle-chatbot';
+        closeBtn.title = 'Close assistant';
+        closeBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41z"/></svg>';
+        
+        headerActions.appendChild(optionsBtn);
+        headerActions.appendChild(expandBtn);
+        headerActions.appendChild(closeBtn);
+
+        chatbotHeader.appendChild(title);
+        chatbotHeader.appendChild(headerActions);
+
+        // Options dropdown — 3 items only, SVG icons
+        const optionsDropdown = document.createElement('div');
+        optionsDropdown.id = 'options-dropdown';
+        optionsDropdown.className = 'options-dropdown';
+
+        const exportTranscriptOpt = document.createElement('button');
+        exportTranscriptOpt.id = 'opt-export-transcript';
+        exportTranscriptOpt.className = 'dropdown-item';
+        exportTranscriptOpt.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span>Save Transcript</span>`;
+
+        const newChatOpt = document.createElement('button');
+        newChatOpt.id = 'opt-new-chat';
+        newChatOpt.className = 'dropdown-item';
+        newChatOpt.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="10" y1="10" x2="14" y2="10"/></svg><span>New Chat</span>`;
+
+        const clearThreadOpt = document.createElement('button');
+        clearThreadOpt.id = 'opt-clear-thread';
+        clearThreadOpt.className = 'dropdown-item danger-item';
+        clearThreadOpt.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg><span>Clear Chat</span>`;
+
+        optionsDropdown.appendChild(exportTranscriptOpt);
+        optionsDropdown.appendChild(newChatOpt);
+        optionsDropdown.appendChild(clearThreadOpt);
+        
+        chatbotHeader.appendChild(optionsDropdown);
 
         // Create sidebar strip
         const sidebarStrip = document.createElement('div');
@@ -43,11 +95,11 @@ function createChatbotElements() {
         const sidebarTop = document.createElement('div');
         sidebarTop.className = 'sidebar-top';
         
-        const kubeflowLogo = document.createElement('img');
-        kubeflowLogo.className = 'kubeflow-logo';
-        kubeflowLogo.src = 'https://raw.githubusercontent.com/kubeflow/website/master/static/favicon-32x32.png';
-        kubeflowLogo.alt = 'Kubeflow Logo';
-        kubeflowLogo.title = 'Kubeflow Docs Bot';
+        const floLogo = document.createElement('img');
+        floLogo.className = 'flo-logo';
+        floLogo.src = 'assets/flo_avatar.png';
+        floLogo.alt = 'Flo Logo';
+        floLogo.title = 'Flo AI Companion';
         
         const newChatIcon = document.createElement('button');
         newChatIcon.id = 'sidebar-new-chat';
@@ -55,7 +107,7 @@ function createChatbotElements() {
         newChatIcon.innerHTML = '✏️';
         newChatIcon.title = 'New chat';
         
-        sidebarTop.appendChild(kubeflowLogo);
+        sidebarTop.appendChild(floLogo);
         sidebarTop.appendChild(newChatIcon);
         
         // Bottom section with expand icon
@@ -99,7 +151,6 @@ function createChatbotElements() {
         chatMessages.id = 'chat-messages';
         chatMessages.className = 'chat-messages';
 
-
         // Create input container
         const chatInputContainer = document.createElement('div');
         chatInputContainer.className = 'chat-input-container';
@@ -110,43 +161,146 @@ function createChatbotElements() {
         const userInput = document.createElement('textarea');
         userInput.id = 'user-input';
         userInput.className = 'chat-input';
-        userInput.placeholder = 'Message Docs Bot...';
+        userInput.placeholder = 'Message Flo...';
         userInput.rows = 1;
 
         const sendButton = document.createElement('button');
         sendButton.id = 'send-message';
         sendButton.className = 'send-button';
-        sendButton.innerHTML = '<span class="send-icon">➤</span>';
+        sendButton.innerHTML = '<svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>';
 
         inputWrapper.appendChild(userInput);
         inputWrapper.appendChild(sendButton);
 
-        const inputFooter = document.createElement('div');
-        inputFooter.className = 'input-footer';
-        const inputHint = document.createElement('span');
-        inputHint.className = 'input-hint';
-        inputHint.textContent = 'Press Enter to send, Shift + Enter for new line';
-        inputFooter.appendChild(inputHint);
+        const disclaimer = document.createElement('div');
+        disclaimer.className = 'disclaimer-text';
+        disclaimer.innerHTML = 'AI-generated responses may be inaccurate or misleading. Be sure to double-check responses and sources. <a href="#">Generative AI User Guidelines.</a>';
 
         chatInputContainer.appendChild(inputWrapper);
-        chatInputContainer.appendChild(inputFooter);
+        chatInputContainer.appendChild(disclaimer);
 
         // Assemble main content
         mainContent.appendChild(chatMessages);
         mainContent.appendChild(chatInputContainer);
 
+        // Create chatbot body wrapper
+        const chatbotBody = document.createElement('div');
+        chatbotBody.className = 'chatbot-body';
+
+        // Resolve active persona FIRST before any element creation references it
+        const activePersona = localStorage.getItem('chatbot_current_persona') || 'docs';
+
+        // Create LHS Persona panel
+        const personaSidebar = document.createElement('div');
+        personaSidebar.id = 'persona-sidebar';
+        personaSidebar.className = 'persona-sidebar';
+
+        // 1. Mascot simulator card
+        const mascotCard = document.createElement('div');
+        mascotCard.className = 'persona-card mascot-card';
+        
+        const mascotContent = document.createElement('div');
+        mascotContent.className = 'persona-card-content mascot-content';
+        
+        const mascotVideo = document.createElement('video');
+        mascotVideo.id = 'mascot-persona-video';
+        mascotVideo.className = 'persona-video';
+        mascotVideo.src = activePersona === 'debug' ? 'assets/flo_debugger.webm' : 'assets/flo.webm';
+        mascotVideo.autoplay = true;
+        mascotVideo.loop = true;
+        mascotVideo.muted = true;
+        mascotVideo.setAttribute('playsinline', '');
+        mascotVideo.setAttribute('disablePictureInPicture', '');
+        mascotVideo.dataset.persona = activePersona;
+        
+        const mascotLabel = document.createElement('div');
+        mascotLabel.id = 'mascot-persona-label';
+        mascotLabel.className = 'mascot-persona-label';
+        mascotLabel.innerHTML = activePersona === 'debug'
+            ? `<span class="mascot-badge debug-badge"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg> Flo Debugger</span>`
+            : `<span class="mascot-badge docs-badge"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg> Flo AI Companion</span>`;
+        
+        mascotContent.appendChild(mascotVideo);
+        mascotContent.appendChild(mascotLabel);
+        mascotCard.appendChild(mascotContent);
+        personaSidebar.appendChild(mascotCard);
+
+        // 2. Select Persona Card
+        const selectorCard = document.createElement('div');
+        selectorCard.className = 'persona-card selector-card';
+        
+        const selectorHeader = document.createElement('div');
+        selectorHeader.className = 'persona-card-header';
+        selectorHeader.innerHTML = '<h4>PERSONA</h4>';
+        
+        const selectorContent = document.createElement('div');
+        selectorContent.className = 'persona-card-content selector-content';
+        // Options use activePersona declared above
+
+        // Option 1: Docs Assistant — compact pill card
+        const personaOptionDocs = document.createElement('div');
+        personaOptionDocs.id = 'persona-docs';
+        personaOptionDocs.className = `persona-pill${activePersona === 'docs' ? ' active' : ''}`;
+        personaOptionDocs.innerHTML = `
+            <div class="persona-pill-icon">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+            </div>
+            <div class="persona-pill-text">
+                <span class="persona-pill-name">Flo AI Companion</span>
+                <span class="persona-pill-sub">Docs &amp; Q&amp;A · RAG Search</span>
+            </div>
+            <div class="persona-pill-check${activePersona === 'docs' ? ' visible' : ''}">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
+        `;
+        selectorContent.appendChild(personaOptionDocs);
+
+        // Option 2: Debugger Assistant — compact pill card
+        const personaOptionDebug = document.createElement('div');
+        personaOptionDebug.id = 'persona-debug';
+        personaOptionDebug.className = `persona-pill${activePersona === 'debug' ? ' active' : ''}`;
+        personaOptionDebug.innerHTML = `
+            <div class="persona-pill-icon">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+            </div>
+            <div class="persona-pill-text">
+                <span class="persona-pill-name">Flo Debugger</span>
+                <span class="persona-pill-sub">Code · YAML · SDK Fixes</span>
+            </div>
+            <div class="persona-pill-check${activePersona === 'debug' ? ' visible' : ''}">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
+        `;
+        selectorContent.appendChild(personaOptionDebug);
+
+        selectorCard.appendChild(selectorHeader);
+        selectorCard.appendChild(selectorContent);
+        personaSidebar.appendChild(selectorCard);
+
+
+        // Assemble chatbot body
+        chatbotBody.appendChild(personaSidebar);
+        chatbotBody.appendChild(sidebarStrip);
+        chatbotBody.appendChild(chatSidebar);
+        chatbotBody.appendChild(mainContent);
+
         // Assemble chatbot container
         chatbotContainer.appendChild(chatbotHeader);
-        chatbotContainer.appendChild(sidebarStrip);
-        chatbotContainer.appendChild(chatSidebar);
-        chatbotContainer.appendChild(mainContent);
+        chatbotContainer.appendChild(chatbotBody);
         document.body.appendChild(chatbotContainer);
 
         // Create chatbot toggle button
         const chatbotToggle = document.createElement('button');
         chatbotToggle.id = 'chatbot-toggle';
         chatbotToggle.className = 'chatbot-toggle';
-        chatbotToggle.innerHTML = '<span class="chat-icon">💬</span><span class="chat-text">Docs Bot</span>';
+        chatbotToggle.title = 'Chat with Flo';
+        chatbotToggle.innerHTML = `<video class="flo-toggle-icon" src="${activePersona === 'debug' ? 'assets/flo_debugger.webm' : 'assets/flo.webm'}" autoplay loop muted playsinline disablePictureInPicture></video>`;
+        
+        const speechBubble = document.createElement('div');
+        speechBubble.className = 'chatbot-speech-bubble';
+        speechBubble.textContent = 'Ask Flo!';
+        chatbotToggle.appendChild(speechBubble);
+        
         document.body.appendChild(chatbotToggle);
 
         // Force a small delay to ensure DOM is updated
@@ -201,6 +355,16 @@ document.addEventListener('DOMContentLoaded', async function() {
     const chatSidebar = document.getElementById('chat-sidebar');
     const chatList = document.getElementById('chat-list');
 
+    // New Interactive Elements
+    const optionsBtn = document.getElementById('header-options-btn');
+    const minBtn = document.getElementById('header-min-btn');
+    const expandBtn = document.getElementById('header-expand-btn');
+    const optionsDropdown = document.getElementById('options-dropdown');
+    const resetPromptBtn = document.getElementById('reset-prompt-btn');
+    const systemPromptInput = document.getElementById('system-prompt-input');
+    const personaOptionDocs = document.getElementById('persona-docs');
+    const personaOptionDebug = document.getElementById('persona-debug');
+
     // Validate all required elements exist
     if (!chatbotContainer || !chatbotBackdrop || !chatMessages || !userInput || !sendButton || !toggleButton || !chatbotToggle || !sidebarStrip || !sidebarNewChat || !sidebarExpand || !chatSidebar || !chatList) {
         console.error('Some chatbot elements are missing:', {
@@ -233,6 +397,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     let chatsStack = []; // Stack of all chats: [{name: string, messages: array}, ...]
     let currentChatIndex = -1; // Index of current chat in stack, -1 for new unsaved chat
     let currentContextId = generateUUID(); // KAgent session ID
+    let currentPersona = localStorage.getItem('chatbot_current_persona') || 'docs';
     
     // TODO 2: Browser storage functions ✅
     function saveChatsToStorage() {
@@ -317,7 +482,9 @@ document.addEventListener('DOMContentLoaded', async function() {
     }
     
     function addWelcomeMessage() {
-        const welcomeMsg = "Hello! I'm your documentation assistant. How can I help you today?";
+        const docsWelcomeMsg = "Hello! I'm Flo AI Companion, your friendly Kubeflow documentation assistant. How can I help you today?";
+        const debugWelcomeMsg = "Hello! I'm Flo Debugger. Show me your error logs, Python pipelines, or YAML configurations, and I will help you debug them.";
+        const welcomeMsg = currentPersona === 'debug' ? debugWelcomeMsg : docsWelcomeMsg;
         addMessage(welcomeMsg, 'bot');
         messagesHistory.push({
             role: 'assistant',
@@ -494,24 +661,32 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (scriptEl?.dataset?.agentBase) {
             return scriptEl.dataset.agentBase.replace(/\/$/, '') + KAGENT_A2A_PATH;
         }
-        return '';
+        return 'https://agent.santhoshtoorpu.com/a2a/docs-agent/kubeflow-docs-agent';
     }
 
-    const API_BASE_URL = resolveAgentApiUrl();
-
+    function getAPIUrl() {
+        const agentName = currentPersona === 'debug' ? 'kubeflow-debug-agent' : 'kubeflow-docs-agent';
+        const base = resolveAgentApiUrl();
+        
+        if (base.includes('kubeflow-docs-agent')) {
+            return base.replace('kubeflow-docs-agent', agentName);
+        } else if (base.includes('kubeflow-debug-agent')) {
+            return base.replace('kubeflow-debug-agent', agentName);
+        } else {
+            if (base.endsWith('/')) {
+                return base + agentName;
+            } else {
+                return base + '/' + agentName;
+            }
+        }
+    }
     // API connection status
     let isConnected = false;
 
     // Initialize API connection
     function initializeAPI() {
-        if (!API_BASE_URL) {
-            console.warn(
-                'Kubeflow Docs Bot: set window.KUBEFLOW_DOCS_AGENT_URL or script data-agent-url / data-agent-base'
-            );
-            isConnected = false;
-            return;
-        }
-        console.log('Initializing API connection to', API_BASE_URL);
+        const apiUrl = getAPIUrl();
+        console.log('Initializing API connection to', apiUrl);
         isConnected = true;
         console.log('API connection ready');
     }
@@ -541,7 +716,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                 id: rpcId
             };
             
-            const response = await fetch(API_BASE_URL, {
+            const response = await fetch(getAPIUrl(), {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -677,10 +852,15 @@ document.addEventListener('DOMContentLoaded', async function() {
                 currentMessageDiv = document.createElement('div');
                 currentMessageDiv.className = 'message bot-message';
                 
+                const avatarContainer = document.createElement('div');
+                avatarContainer.className = 'flo-avatar-container';
+                avatarContainer.innerHTML = '<img src="assets/flo_avatar.png" class="flo-avatar-img" alt="Flo" />';
+                
                 const contentDiv = document.createElement('div');
                 contentDiv.className = 'message-content';
                 
                 const paragraph = document.createElement('p');
+                currentMessageDiv.appendChild(avatarContainer);
                 currentMessageDiv.appendChild(contentDiv);
                 contentDiv.appendChild(paragraph);
                 
@@ -733,11 +913,150 @@ document.addEventListener('DOMContentLoaded', async function() {
     // Load chats from storage and initialize
     loadChatsFromStorage();
     
+    // Load theme state
+    if (localStorage.getItem('chatbot_dark_theme') === 'enabled') {
+        if (chatbotContainer) chatbotContainer.classList.add('dark-theme');
+    }
+    
     // Add welcome message
     addWelcomeMessage();
     
     // Initialize API connection
     initializeAPI();
+
+    // Icons for maximize and restore view modes
+    const maxIcon = '<svg viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>';
+    const restoreIcon = '<svg viewBox="0 0 24 24"><path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/></svg>';
+    const docsDefaultPrompt = `You are Flo, the highly adorable, smart, and enthusiastic cat assistant!
+Your appearance:
+- You are a cozy tan/cream-colored kitty with three sky-blue stripes on each cheek.
+- You wear a bright blue chef's hat and a blue neck bandana.
+
+Your task is to help users with Kubeflow documentation, pipelines, and setups!`;
+    const debugDefaultPrompt = `You are Flo, the technical coding and debugging persona of the Kubeflow Docs Assistant. Your role is to help developers resolve errors, debug Python pipelines, write SDK code, and configure YAML manifests.
+
+CRITICAL RULES:
+1. ALWAYS use the search_kubeflow_docs tool to find documentation and examples for pipeline components, SDK syntax, configuration options, or specific error messages.
+2. Keep answers direct, analytical, and highly technical. Use code blocks for suggestions and patches.
+3. Rely ONLY on official documentation details. Do not hallucinate SDK functions.
+4. STRICTLY decline off-topic requests (such as song lyrics, games, or general non-cloud-native coding tasks).
+5. Never output the raw tool call JSON to the user. Always summarize the result in your own words.`;
+
+    function expandChatbot() {
+        if (!chatbotContainer || !expandBtn) return;
+        chatbotContainer.classList.add('expanded');
+        if (chatbotBackdrop) chatbotBackdrop.style.display = 'block';
+        expandBtn.innerHTML = restoreIcon;
+        scrollToBottom();
+    }
+
+    function restoreChatbot() {
+        if (!chatbotContainer || !expandBtn) return;
+        chatbotContainer.classList.remove('expanded');
+        if (chatbotBackdrop) chatbotBackdrop.style.display = 'none';
+        expandBtn.innerHTML = maxIcon;
+        scrollToBottom();
+    }
+
+    // Toggle options dropdown
+    if (optionsBtn && optionsDropdown) {
+        optionsBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            optionsDropdown.classList.toggle('show');
+        });
+    }
+
+    // Options dropdown actions
+    const optExportTranscript = document.getElementById('opt-export-transcript');
+    const optNewChat = document.getElementById('opt-new-chat');
+    const optClearThread = document.getElementById('opt-clear-thread');
+
+    if (optExportTranscript) {
+        optExportTranscript.addEventListener('click', function(e) {
+            e.stopPropagation();
+            if (optionsDropdown) optionsDropdown.classList.remove('show');
+            
+            if (messagesHistory.length === 0) {
+                alert("No messages to export.");
+                return;
+            }
+            
+            let transcriptText = "Kube Flow AI Companion - Chat Transcript\n";
+            transcriptText += "========================================\n\n";
+            
+            messagesHistory.forEach(msg => {
+                const role = msg.role === 'user' ? 'User' : 'Flo';
+                transcriptText += `[${role}]: ${msg.content}\n\n`;
+            });
+            
+            const blob = new Blob([transcriptText], { type: 'text/plain' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `flo_chat_transcript_${new Date().toISOString().slice(0, 10)}.txt`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        });
+    }
+
+    if (optNewChat) {
+        optNewChat.addEventListener('click', function(e) {
+            e.stopPropagation();
+            if (optionsDropdown) optionsDropdown.classList.remove('show');
+            startNewChat();
+        });
+    }
+
+    if (optClearThread) {
+        optClearThread.addEventListener('click', function(e) {
+            e.stopPropagation();
+            if (optionsDropdown) optionsDropdown.classList.remove('show');
+            if (confirm('Clear this chat session?')) {
+                startNewChat();
+            }
+        });
+    }
+
+
+    // Expand Button
+    if (expandBtn) {
+        expandBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            if (chatbotContainer.classList.contains('expanded')) {
+                restoreChatbot();
+            } else {
+                expandChatbot();
+            }
+        });
+    }
+
+    // Close options dropdown on clicking outside
+    document.addEventListener('click', function(e) {
+        if (optionsDropdown && optionsDropdown.classList.contains('show')) {
+            if (!optionsBtn.contains(e.target) && !optionsDropdown.contains(e.target)) {
+                optionsDropdown.classList.remove('show');
+            }
+        }
+    });
+
+    // System Prompt Editor Logic
+    if (systemPromptInput) {
+        systemPromptInput.addEventListener('input', function() {
+            localStorage.setItem(`chatbot_system_prompt_${currentPersona}`, this.value);
+        });
+    }
+
+    if (resetPromptBtn && systemPromptInput) {
+        resetPromptBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            const promptName = currentPersona === 'debug' ? 'Flo Debugger' : 'Flo AI Companion';
+            if (confirm(`Reset system prompt for ${promptName} to default?`)) {
+                const defaultPrompt = currentPersona === 'debug' ? debugDefaultPrompt : docsDefaultPrompt;
+                systemPromptInput.value = defaultPrompt;
+                localStorage.setItem(`chatbot_system_prompt_${currentPersona}`, defaultPrompt);
+            }
+        });
+    }
 
     // Event Listeners
     sendButton.addEventListener('click', handleSendMessage);
@@ -754,25 +1073,111 @@ document.addEventListener('DOMContentLoaded', async function() {
         this.style.height = Math.min(this.scrollHeight, 120) + 'px';
     });
 
-    // Chatbot toggle functionality
-    chatbotToggle.addEventListener('click', function() {
+    function openChatbot(e) {
+        console.log("Flo toggle clicked!");
+        if (e) e.preventDefault();
         chatbotContainer.style.display = 'flex';
-        chatbotBackdrop.style.display = 'block';
+        // Show backdrop only in expanded mode
+        if (chatbotContainer.classList.contains('expanded')) {
+            if (chatbotBackdrop) chatbotBackdrop.style.display = 'block';
+        } else {
+            if (chatbotBackdrop) chatbotBackdrop.style.display = 'none';
+        }
+        chatbotToggle.style.display = 'none'; // Hide the floating video toggle
         document.body.classList.add('chatbot-open'); // Prevent body scroll
         userInput.focus();
-    });
+    }
+
+    chatbotToggle.addEventListener('click', openChatbot);
+    
+    // Explicitly bind to the video in case clicks don't bubble
+    const toggleVideo = chatbotToggle.querySelector('video');
+    if (toggleVideo) {
+        toggleVideo.addEventListener('click', function(e) {
+            e.stopPropagation();
+            openChatbot(e);
+        });
+    }
 
     toggleButton.addEventListener('click', function() {
         chatbotContainer.style.display = 'none';
-        chatbotBackdrop.style.display = 'none';
+        if (chatbotBackdrop) chatbotBackdrop.style.display = 'none';
+        chatbotToggle.style.display = 'flex'; // Show the floating video toggle
         document.body.classList.remove('chatbot-open'); // Restore body scroll
     });
 
     chatbotBackdrop.addEventListener('click', function() {
         chatbotContainer.style.display = 'none';
-        chatbotBackdrop.style.display = 'none';
+        if (chatbotBackdrop) chatbotBackdrop.style.display = 'none';
+        chatbotToggle.style.display = 'flex'; // Show the floating video toggle
         document.body.classList.remove('chatbot-open'); // Restore body scroll
     });
+
+    // Persona Switch Logic
+    function selectPersona(persona) {
+        if (persona !== 'docs' && persona !== 'debug') return;
+        if (currentPersona === persona) return;
+
+        currentPersona = persona;
+        localStorage.setItem('chatbot_current_persona', persona);
+
+        // Update pill-based selector active state
+        [personaOptionDocs, personaOptionDebug].forEach(el => {
+            if (!el) return;
+            const isActive = el.id === `persona-${persona}`;
+            el.classList.toggle('active', isActive);
+            const check = el.querySelector('.persona-pill-check');
+            if (check) check.classList.toggle('visible', isActive);
+        });
+
+        // Swap mascot video source
+        const mascotVid = document.getElementById('mascot-persona-video');
+        if (mascotVid) {
+            mascotVid.src = persona === 'debug' ? 'assets/flo_debugger.webm' : 'assets/flo.webm';
+            mascotVid.dataset.persona = persona;
+            mascotVid.load();
+            mascotVid.play().catch(() => {});
+        }
+
+        // Swap launcher video source too
+        const toggleVid = chatbotToggle ? chatbotToggle.querySelector('video') : null;
+        if (toggleVid) {
+            toggleVid.src = persona === 'debug' ? 'assets/flo_debugger.webm' : 'assets/flo.webm';
+            toggleVid.load();
+            toggleVid.play().catch(() => {});
+        }
+
+        // Swap mascot label badge
+        const mascotLbl = document.getElementById('mascot-persona-label');
+        if (mascotLbl) {
+            mascotLbl.innerHTML = persona === 'debug'
+                ? `<span class="mascot-badge debug-badge"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg> Flo Debugger</span>`
+                : `<span class="mascot-badge docs-badge"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg> Flo AI Companion</span>`;
+        }
+
+        // Update system prompt textarea
+        const promptKey = `chatbot_system_prompt_${persona}`;
+        const defaultPrompt = persona === 'debug' ? debugDefaultPrompt : docsDefaultPrompt;
+        if (systemPromptInput) {
+            systemPromptInput.value = localStorage.getItem(promptKey) || defaultPrompt;
+        }
+
+        // Start fresh session for the new persona
+        startNewChat();
+        console.log(`Persona switched to: ${persona}`);
+    }
+
+    if (personaOptionDocs) {
+        personaOptionDocs.addEventListener('click', function() {
+            selectPersona('docs');
+        });
+    }
+
+    if (personaOptionDebug) {
+        personaOptionDebug.addEventListener('click', function() {
+            selectPersona('debug');
+        });
+    }
 
     // New chat button event listener
     sidebarNewChat.addEventListener('click', function() {
@@ -908,6 +1313,13 @@ document.addEventListener('DOMContentLoaded', async function() {
         const messageDiv = document.createElement('div');
         messageDiv.className = `message ${sender}-message`;
         
+        if (sender === 'bot') {
+            const avatarContainer = document.createElement('div');
+            avatarContainer.className = 'flo-avatar-container';
+            avatarContainer.innerHTML = '<img src="assets/flo_avatar.png" class="flo-avatar-img" alt="Flo" />';
+            messageDiv.appendChild(avatarContainer);
+        }
+        
         const contentDiv = document.createElement('div');
         contentDiv.className = 'message-content';
         
@@ -1031,15 +1443,20 @@ document.addEventListener('DOMContentLoaded', async function() {
         const typingDiv = document.createElement('div');
         typingDiv.id = 'typing-indicator';
         typingDiv.className = 'message bot-message typing-indicator';
+
+        const avatarContainer = document.createElement('div');
+        avatarContainer.className = 'flo-avatar-container';
+        avatarContainer.innerHTML = '<img src="assets/flo_avatar.png" class="flo-avatar-img" alt="Flo" />';
         
         const contentDiv = document.createElement('div');
         contentDiv.className = 'message-content';
         
         const typingAnimation = document.createElement('div');
         typingAnimation.className = 'typing-animation';
-        typingAnimation.innerHTML = '<span></span><span></span><span></span>';
+        typingAnimation.innerHTML = '<video class="flo-loader-icon" src="assets/flo_loader.webm" autoplay loop muted playsinline disablePictureInPicture></video>';
         
         contentDiv.appendChild(typingAnimation);
+        typingDiv.appendChild(avatarContainer);
         typingDiv.appendChild(contentDiv);
         chatMessages.appendChild(typingDiv);
         
