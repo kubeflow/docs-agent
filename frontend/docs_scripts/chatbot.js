@@ -188,7 +188,7 @@ function createChatbotElements() {
         chatbotBody.className = 'chatbot-body';
 
         // Resolve active persona FIRST before any element creation references it
-        const activePersona = localStorage.getItem('chatbot_current_persona') || 'docs';
+        const activePersona = 'docs';
 
         // Create LHS Persona panel
         const personaSidebar = document.createElement('div');
@@ -357,11 +357,8 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     // New Interactive Elements
     const optionsBtn = document.getElementById('header-options-btn');
-    const minBtn = document.getElementById('header-min-btn');
     const expandBtn = document.getElementById('header-expand-btn');
     const optionsDropdown = document.getElementById('options-dropdown');
-    const resetPromptBtn = document.getElementById('reset-prompt-btn');
-    const systemPromptInput = document.getElementById('system-prompt-input');
     const personaOptionDocs = document.getElementById('persona-docs');
     const personaOptionDebug = document.getElementById('persona-debug');
 
@@ -397,7 +394,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     let chatsStack = []; // Stack of all chats: [{name: string, messages: array}, ...]
     let currentChatIndex = -1; // Index of current chat in stack, -1 for new unsaved chat
     let currentContextId = generateUUID(); // KAgent session ID
-    let currentPersona = localStorage.getItem('chatbot_current_persona') || 'docs';
+    let currentPersona = 'docs';
     
     // TODO 2: Browser storage functions ✅
     function saveChatsToStorage() {
@@ -908,20 +905,6 @@ document.addEventListener('DOMContentLoaded', async function() {
     // Icons for maximize and restore view modes
     const maxIcon = '<svg viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>';
     const restoreIcon = '<svg viewBox="0 0 24 24"><path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/></svg>';
-    const docsDefaultPrompt = `You are Flo, the highly adorable, smart, and enthusiastic cat assistant!
-Your appearance:
-- You are a cozy tan/cream-colored kitty with three sky-blue stripes on each cheek.
-- You wear a bright blue chef's hat and a blue neck bandana.
-
-Your task is to help users with Kubeflow documentation, pipelines, and setups!`;
-    const debugDefaultPrompt = `You are Flo, the technical coding and debugging persona of the Kubeflow Docs Assistant. Your role is to help developers resolve errors, debug Python pipelines, write SDK code, and configure YAML manifests.
-
-CRITICAL RULES:
-1. ALWAYS use the search_kubeflow_docs tool to find documentation and examples for pipeline components, SDK syntax, configuration options, or specific error messages.
-2. Keep answers direct, analytical, and highly technical. Use code blocks for suggestions and patches.
-3. Rely ONLY on official documentation details. Do not hallucinate SDK functions.
-4. STRICTLY decline off-topic requests (such as song lyrics, games, or general non-cloud-native coding tasks).
-5. Never output the raw tool call JSON to the user. Always summarize the result in your own words.`;
 
     function expandChatbot() {
         if (!chatbotContainer || !expandBtn) return;
@@ -1020,24 +1003,7 @@ CRITICAL RULES:
         }
     });
 
-    // System Prompt Editor Logic
-    if (systemPromptInput) {
-        systemPromptInput.addEventListener('input', function() {
-            localStorage.setItem(`chatbot_system_prompt_${currentPersona}`, this.value);
-        });
-    }
 
-    if (resetPromptBtn && systemPromptInput) {
-        resetPromptBtn.addEventListener('click', function(e) {
-            e.stopPropagation();
-            const promptName = currentPersona === 'debug' ? 'Flo Debugger' : 'Flo AI Companion';
-            if (confirm(`Reset system prompt for ${promptName} to default?`)) {
-                const defaultPrompt = currentPersona === 'debug' ? debugDefaultPrompt : docsDefaultPrompt;
-                systemPromptInput.value = defaultPrompt;
-                localStorage.setItem(`chatbot_system_prompt_${currentPersona}`, defaultPrompt);
-            }
-        });
-    }
 
     // Event Listeners
     sendButton.addEventListener('click', handleSendMessage);
@@ -1136,12 +1102,7 @@ CRITICAL RULES:
                 : `<span class="mascot-badge docs-badge"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg> Flo AI Companion</span>`;
         }
 
-        // Update system prompt textarea
-        const promptKey = `chatbot_system_prompt_${persona}`;
-        const defaultPrompt = persona === 'debug' ? debugDefaultPrompt : docsDefaultPrompt;
-        if (systemPromptInput) {
-            systemPromptInput.value = localStorage.getItem(promptKey) || defaultPrompt;
-        }
+
 
         // Start fresh session for the new persona
         startNewChat();

@@ -545,66 +545,7 @@
     flex-shrink: 0;
 }
 
-/* Read-only prompt badge */
-.prompt-readonly-badge {
-    font-size: 9px;
-    font-weight: 600;
-    background: #fff3cd;
-    color: #856404;
-    border-radius: 4px;
-    padding: 1px 5px;
-    margin-left: 6px;
-    letter-spacing: 0.2px;
-    vertical-align: middle;
-    text-transform: uppercase;
-}
 
-/* System Prompt Input */
-.system-prompt-textarea {
-    width: 100%;
-    height: 100px;
-    font-family: inherit;
-    font-size: 12px;
-    line-height: 1.4;
-    border: 1px solid #dcdcdc;
-    border-radius: 6px;
-    padding: 8px;
-    resize: none;
-    outline: none;
-    box-sizing: border-box;
-    color: #333333;
-}
-
-.system-prompt-textarea:focus {
-    border-color: #0054e6;
-}
-
-.reset-prompt-link {
-    background: none;
-    border: none;
-    color: #0054e6;
-    font-size: 11px;
-    cursor: pointer;
-    font-weight: 600;
-    padding: 0;
-}
-
-.reset-prompt-link:hover {
-    text-decoration: underline;
-}
-
-.prompt-footer-info {
-    display: flex;
-    justify-content: space-between;
-    font-size: 10px;
-    color: #8a8a8a;
-    margin-top: 4px;
-}
-
-.active-indicator {
-    color: #2e7d32;
-    font-weight: 600;
-}
 
 /* Options dropdown styling */
 .chatbot-header {
@@ -877,35 +818,11 @@
     background: #3d1f00 !important;
     color: #fb923c !important;
 }
-
-
-.chatbot-container.dark-theme .system-prompt-textarea {
-    background: #252525 !important;
-    color: #ffffff !important;
-    border-color: #383838 !important;
-}
-
-.chatbot-container.dark-theme .system-prompt-textarea:focus {
-    border-color: #555555 !important;
-}
-
-.chatbot-container.dark-theme .reset-prompt-link {
-    color: #60a5fa !important;
-}
-
-.chatbot-container.dark-theme .prompt-footer-info {
-    color: #888888 !important;
-}
-
-.chatbot-container.dark-theme .active-indicator {
-    color: #81c784 !important;
-}
-
 /* Dropdown Menu in Dark Mode */
 .chatbot-container.dark-theme .options-dropdown {
     background: #252525 !important;
     border-color: #383838 !important;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.4) !important;
 }
 
 .chatbot-container.dark-theme .dropdown-item {
@@ -914,14 +831,15 @@
 
 .chatbot-container.dark-theme .dropdown-item:hover {
     background: #333333 !important;
+    color: #ffffff !important;
 }
 
-.chatbot-container.dark-theme .dropdown-item.close-item {
+.chatbot-container.dark-theme .dropdown-item.danger-item {
     border-top-color: #383838 !important;
     color: #ef5350 !important;
 }
 
-.chatbot-container.dark-theme .dropdown-item.close-item:hover {
+.chatbot-container.dark-theme .dropdown-item.danger-item:hover {
     background: #3c1c1c !important;
 }
 
