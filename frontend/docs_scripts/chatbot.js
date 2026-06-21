@@ -97,7 +97,7 @@ function createChatbotElements() {
         
         const floLogo = document.createElement('img');
         floLogo.className = 'flo-logo';
-        floLogo.src = 'assets/flo_avatar.png';
+        floLogo.src = 'https://cdn.jsdelivr.net/gh/SanthoshToorpu/docs-agent@main/assets/flo_avatar.png';
         floLogo.alt = 'Flo Logo';
         floLogo.title = 'Flo AI Companion';
         
@@ -205,7 +205,7 @@ function createChatbotElements() {
         const mascotVideo = document.createElement('video');
         mascotVideo.id = 'mascot-persona-video';
         mascotVideo.className = 'persona-video';
-        mascotVideo.src = activePersona === 'debug' ? 'assets/flo_debugger.webm' : 'assets/flo.webm';
+        mascotVideo.src = activePersona === 'debug' ? 'https://cdn.jsdelivr.net/gh/SanthoshToorpu/docs-agent@main/assets/flo_debugger.webm' : 'https://cdn.jsdelivr.net/gh/SanthoshToorpu/docs-agent@main/assets/flo.webm';
         mascotVideo.autoplay = true;
         mascotVideo.loop = true;
         mascotVideo.muted = true;
@@ -294,7 +294,7 @@ function createChatbotElements() {
         chatbotToggle.id = 'chatbot-toggle';
         chatbotToggle.className = 'chatbot-toggle';
         chatbotToggle.title = 'Chat with Flo';
-        chatbotToggle.innerHTML = `<video class="flo-toggle-icon" src="${activePersona === 'debug' ? 'assets/flo_debugger.webm' : 'assets/flo.webm'}" autoplay loop muted playsinline disablePictureInPicture></video>`;
+        chatbotToggle.innerHTML = `<video class="flo-toggle-icon" src="${activePersona === 'debug' ? 'https://cdn.jsdelivr.net/gh/SanthoshToorpu/docs-agent@main/assets/flo_debugger.webm' : 'https://cdn.jsdelivr.net/gh/SanthoshToorpu/docs-agent@main/assets/flo.webm'}" autoplay loop muted playsinline disablePictureInPicture></video>`;
         
         const speechBubble = document.createElement('div');
         speechBubble.className = 'chatbot-speech-bubble';
@@ -854,7 +854,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                 
                 const avatarContainer = document.createElement('div');
                 avatarContainer.className = 'flo-avatar-container';
-                avatarContainer.innerHTML = '<img src="assets/flo_avatar.png" class="flo-avatar-img" alt="Flo" />';
+                avatarContainer.innerHTML = '<img src="https://cdn.jsdelivr.net/gh/SanthoshToorpu/docs-agent@main/assets/flo_avatar.png" class="flo-avatar-img" alt="Flo" />';
                 
                 const contentDiv = document.createElement('div');
                 contentDiv.className = 'message-content';
@@ -1133,7 +1133,7 @@ CRITICAL RULES:
         // Swap mascot video source
         const mascotVid = document.getElementById('mascot-persona-video');
         if (mascotVid) {
-            mascotVid.src = persona === 'debug' ? 'assets/flo_debugger.webm' : 'assets/flo.webm';
+            mascotVid.src = persona === 'debug' ? 'https://cdn.jsdelivr.net/gh/SanthoshToorpu/docs-agent@main/assets/flo_debugger.webm' : 'https://cdn.jsdelivr.net/gh/SanthoshToorpu/docs-agent@main/assets/flo.webm';
             mascotVid.dataset.persona = persona;
             mascotVid.load();
             mascotVid.play().catch(() => {});
@@ -1142,7 +1142,7 @@ CRITICAL RULES:
         // Swap launcher video source too
         const toggleVid = chatbotToggle ? chatbotToggle.querySelector('video') : null;
         if (toggleVid) {
-            toggleVid.src = persona === 'debug' ? 'assets/flo_debugger.webm' : 'assets/flo.webm';
+            toggleVid.src = persona === 'debug' ? 'https://cdn.jsdelivr.net/gh/SanthoshToorpu/docs-agent@main/assets/flo_debugger.webm' : 'https://cdn.jsdelivr.net/gh/SanthoshToorpu/docs-agent@main/assets/flo.webm';
             toggleVid.load();
             toggleVid.play().catch(() => {});
         }
@@ -1316,7 +1316,7 @@ CRITICAL RULES:
         if (sender === 'bot') {
             const avatarContainer = document.createElement('div');
             avatarContainer.className = 'flo-avatar-container';
-            avatarContainer.innerHTML = '<img src="assets/flo_avatar.png" class="flo-avatar-img" alt="Flo" />';
+            avatarContainer.innerHTML = '<img src="https://cdn.jsdelivr.net/gh/SanthoshToorpu/docs-agent@main/assets/flo_avatar.png" class="flo-avatar-img" alt="Flo" />';
             messageDiv.appendChild(avatarContainer);
         }
         
@@ -1446,14 +1446,14 @@ CRITICAL RULES:
 
         const avatarContainer = document.createElement('div');
         avatarContainer.className = 'flo-avatar-container';
-        avatarContainer.innerHTML = '<img src="assets/flo_avatar.png" class="flo-avatar-img" alt="Flo" />';
+        avatarContainer.innerHTML = '<img src="https://cdn.jsdelivr.net/gh/SanthoshToorpu/docs-agent@main/assets/flo_avatar.png" class="flo-avatar-img" alt="Flo" />';
         
         const contentDiv = document.createElement('div');
         contentDiv.className = 'message-content';
         
         const typingAnimation = document.createElement('div');
         typingAnimation.className = 'typing-animation';
-        typingAnimation.innerHTML = '<video class="flo-loader-icon" src="assets/flo_loader.webm" autoplay loop muted playsinline disablePictureInPicture></video>';
+        typingAnimation.innerHTML = '<video class="flo-loader-icon" src="https://cdn.jsdelivr.net/gh/SanthoshToorpu/docs-agent@main/assets/flo_loader.webm" autoplay loop muted playsinline disablePictureInPicture></video>';
         
         contentDiv.appendChild(typingAnimation);
         typingDiv.appendChild(avatarContainer);
