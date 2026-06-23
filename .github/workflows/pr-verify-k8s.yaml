@@ -1,0 +1,27 @@
+name: "PR: Validate Kubernetes Manifests"
+
+on:
+  pull_request:
+    paths:
+      - "manifests/**"
+      - ".github/workflows/pr-verify-k8s.yaml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-yaml:
+    name: Lint & Validate Manifests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Kubeconform
+        uses: bzub/setup-kubeconform@v1
+        with:
+          kubeconform-version: "v0.6.4"
+
+      - name: Run Kubeconform Strict Validation
+        run: kubeconform -summary -ignore-missing-schemas manifests/

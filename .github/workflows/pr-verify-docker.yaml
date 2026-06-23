@@ -1,0 +1,55 @@
+name: "PR: Validate Container Builds"
+
+on:
+  pull_request:
+    paths:
+      - "server/**"
+      - "server-https/**"
+      - "kagent-feast-mcp/mcp-server/**"
+      - "**/Dockerfile"
+      - ".github/workflows/pr-verify-docker.yaml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Build Multi-Service Images
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service_path: server
+            image_name: docs-agent-ws
+          - service_path: server-https
+            image_name: docs-agent-https
+          - service_path: kagent-feast-mcp/mcp-server
+            image_name: docs-agent-mcp
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Configure Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Check if Dockerfile exists
+        id: check_dockerfile
+        run: |
+          if [ -f "${{ matrix.service_path }}/Dockerfile" ]; then
+            echo "exists=true" >> $GITHUB_ENV
+          else
+            echo "exists=false" >> $GITHUB_ENV
+          fi
+
+      - name: Validate Container Build (${{ matrix.image_name }})
+        if: ${{ env.exists == 'true' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ./${{ matrix.service_path }}
+          push: false
+          tags: ${{ matrix.image_name }}:pr-test
+          cache-from: type=gha,scope=${{ matrix.image_name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image_name }}
