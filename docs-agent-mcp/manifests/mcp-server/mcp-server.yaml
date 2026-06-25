@@ -34,7 +34,7 @@ spec:
         - name: ghcrsecret
       containers:
         - name: mcp-server
-          image: ghcr.io/OWNER/mcp-kubeflow-docs:latest
+          image: ghcr.io/kubeflow/mcp-kubeflow-docs:v0.1.0
           ports:
             - name: mcp
               containerPort: 8000

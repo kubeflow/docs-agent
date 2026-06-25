@@ -132,7 +132,6 @@ jobs:
           push: true
           tags: |
             ${{ env.IMAGE_REPO }}:${{ env.tag }}
-            ${{ env.IMAGE_REPO }}:latest
 
       - name: Configure kubectl for OKE
         uses: oracle-actions/configure-kubectl-oke@v1.5.0
@@ -157,8 +156,8 @@ jobs:
             --docker-email="${GHCR_USERNAME}@users.noreply.github.com" \
             --dry-run=client -o yaml | kubectl apply -f -
 
-          # Manifest template uses OWNER; deploy always sets the real GHCR image below.
-          sed "s|ghcr.io/OWNER/mcp-kubeflow-docs:latest|${FULL_IMAGE}|g" \
+          # Replace pinned manifest image with the commit-scoped tag built above.
+          sed "s|ghcr.io/kubeflow/mcp-kubeflow-docs:v0.1.0|${FULL_IMAGE}|g" \
             docs-agent-mcp/manifests/mcp-server/mcp-server.yaml | kubectl apply -f -
           kubectl set image deployment/mcp-kubeflow-docs \
             mcp-server="${FULL_IMAGE}" \
