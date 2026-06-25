@@ -1,8 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mcp-server-config
+  namespace: docs-agent
+data:
+  COLLECTION_NAME: kubeflow_docs
+  ISSUES_COLLECTION_NAME: issues_rag
+  CODE_COLLECTION_NAME: code_rag
+  EMBEDDINGS_URL: http://embeddings-service-predictor.ml-infra.svc.cluster.local/embed
+  MILVUS_URI: http://milvus-milvus.ml-infra.svc.cluster.local:19530
+  MILVUS_USER: root
+  PORT: "8000"
+  PYTHONUNBUFFERED: "1"
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mcp-kubeflow-docs
   namespace: docs-agent
+  labels:
+    app: mcp-kubeflow-docs
 spec:
   replicas: 1
   selector:
@@ -14,17 +31,23 @@ spec:
         app: mcp-kubeflow-docs
     spec:
       imagePullSecrets:
-        - name: dockerhub-registry
+        - name: ghcrsecret
       containers:
         - name: mcp-server
-          image: <YOUR_DOCKERHUB_USERNAME>/mcp-kubeflow-docs:latest
+          image: ghcr.io/kubeflow/mcp-kubeflow-docs:v0.1.0
           ports:
-            - containerPort: 8000
+            - name: mcp
+              containerPort: 8000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: mcp-server-config
           env:
-            - name: PORT
-              value: "8000"
-            - name: PYTHONUNBUFFERED
-              value: "1"
+            - name: MILVUS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mcp-server-secret
+                  key: MILVUS_PASSWORD
           readinessProbe:
             tcpSocket:
               port: 8000
@@ -37,10 +60,10 @@ spec:
             periodSeconds: 30
           resources:
             requests:
-              memory: "1Gi"
-              cpu: "500m"
+              memory: "256Mi"
+              cpu: "250m"
             limits:
-              memory: "2Gi"
+              memory: "1Gi"
               cpu: "1"
 ---
 apiVersion: v1
@@ -52,6 +75,8 @@ spec:
   selector:
     app: mcp-kubeflow-docs
   ports:
-    - port: 8000
+    - name: mcp
+      port: 8000
       targetPort: 8000
+      protocol: TCP
   type: ClusterIP

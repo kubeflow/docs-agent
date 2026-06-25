@@ -1,0 +1,236 @@
+# Test + optional OKE CD. PRs and main always run compile/test/lint.
+# Deploy job runs only when repository variable ENABLE_OKE_DEPLOY=true (set on operator forks).
+name: Build, Test, and Deploy to OKE
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      deploy_kserve:
+        description: Deploy/update KServe Qwen (single GPU — recycles revision)
+        type: boolean
+        default: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: mcp-kubeflow-docs
+  K8S_NAMESPACE: docs-agent
+  OKE_CLUSTER_OCID: ${{ secrets.OKE_CLUSTER_OCID }}
+
+jobs:
+  test-and-compile:
+    name: Compile and Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r docs-agent-mcp/mcp-server/requirements.txt
+          pip install -r requirements-test.txt
+          pip install ruff kfp kfp-kubernetes
+
+      - name: Compile docs RAG pipeline
+        working-directory: docs-agent-mcp/pipelines
+        run: |
+          python kubeflow-pipeline.py
+          python issues-pipeline.py
+          python code-pipeline.py
+
+      - name: Ruff lint
+        run: ruff check docs-agent-mcp/mcp-server tests docs-agent-mcp/pipelines
+
+      - name: Compile MCP server
+        run: python -m py_compile docs-agent-mcp/mcp-server/*.py
+
+      - name: Run Unit Tests
+        run: pytest -v --tb=short
+
+  build-and-deploy:
+    name: Build, Push, and Deploy to OKE
+    needs: test-and-compile
+    # Off by default in kubeflow/docs-agent (no OKE secrets). Fork operators set repo variable ENABLE_OKE_DEPLOY=true.
+    if: |
+      (github.event_name == 'workflow_dispatch' || github.event_name == 'push') &&
+      vars.ENABLE_OKE_DEPLOY == 'true'
+    runs-on: ubuntu-latest
+    # Secrets are stored under Settings → Environments → kubeflow (not repo secrets)
+    environment: kubeflow
+    permissions:
+      contents: read
+      packages: write
+    env:
+      # oracle-actions/configure-kubectl-oke expects OCI_CLI_* env vars
+      OCI_CLI_USER: ${{ secrets.OCI_USER_OCID }}
+      OCI_CLI_TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
+      OCI_CLI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+      OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_KEY_FILE }}
+      OCI_CLI_REGION: ${{ secrets.OCI_REGION }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Validate deploy secrets
+        env:
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GHCR_PULL_TOKEN || secrets.Github_Pat }}
+          OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
+          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_KEY_FILE: ${{ secrets.OCI_KEY_FILE }}
+          OCI_REGION: ${{ secrets.OCI_REGION }}
+          OKE_CLUSTER_OCID: ${{ secrets.OKE_CLUSTER_OCID }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in OCI_USER_OCID OCI_TENANCY_OCID OCI_FINGERPRINT OCI_KEY_FILE OCI_REGION OKE_CLUSTER_OCID; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if [ -z "${GHCR_PULL_TOKEN:-}" ]; then
+            missing+=("GHCR_TOKEN or GHCR_PULL_TOKEN or Github_Pat (needs read:packages for cluster image pull)")
+          fi
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Missing required GitHub Actions secrets in environment 'kubeflow':"
+            printf '  - %s\n' "${missing[@]}"
+            echo "Add them under Settings → Environments → kubeflow → Environment secrets."
+            exit 1
+          fi
+
+      - name: Set image coordinates
+        env:
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+        run: |
+          owner_lc="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
+          ghcr_user="${GHCR_USERNAME:-$owner_lc}"
+          echo "IMAGE_REPO=ghcr.io/${owner_lc}/${{ env.IMAGE_NAME }}" >> "$GITHUB_ENV"
+          echo "GHCR_USERNAME=${ghcr_user}" >> "$GITHUB_ENV"
+          echo "tag=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and Push MCP Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./docs-agent-mcp/mcp-server
+          file: ./docs-agent-mcp/mcp-server/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_REPO }}:${{ env.tag }}
+
+      - name: Configure kubectl for OKE
+        uses: oracle-actions/configure-kubectl-oke@v1.5.0
+        with:
+          cluster: ${{ secrets.OKE_CLUSTER_OCID }}
+
+      - name: Deploy to OKE
+        env:
+          FULL_IMAGE: ${{ env.IMAGE_REPO }}:${{ env.tag }}
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GHCR_PULL_TOKEN || secrets.Github_Pat }}
+          GHCR_USERNAME: ${{ env.GHCR_USERNAME }}
+        run: |
+          set -euo pipefail
+
+          kubectl create namespace "${{ env.K8S_NAMESPACE }}" --dry-run=client -o yaml | kubectl apply -f -
+
+          kubectl create secret docker-registry ghcrsecret \
+            --namespace "${{ env.K8S_NAMESPACE }}" \
+            --docker-server="${{ env.REGISTRY }}" \
+            --docker-username="${GHCR_USERNAME}" \
+            --docker-password="${GHCR_PULL_TOKEN}" \
+            --docker-email="${GHCR_USERNAME}@users.noreply.github.com" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          # Replace pinned manifest image with the commit-scoped tag built above.
+          sed "s|ghcr.io/kubeflow/mcp-kubeflow-docs:v0.1.0|${FULL_IMAGE}|g" \
+            docs-agent-mcp/manifests/mcp-server/mcp-server.yaml | kubectl apply -f -
+          kubectl set image deployment/mcp-kubeflow-docs \
+            mcp-server="${FULL_IMAGE}" \
+            -n "${{ env.K8S_NAMESPACE }}" || true
+          kubectl patch deployment/mcp-kubeflow-docs -n "${{ env.K8S_NAMESPACE }}" --type=merge \
+            -p '{"spec":{"template":{"spec":{"imagePullSecrets":[{"name":"ghcrsecret"}]}}}}'
+          kubectl rollout status deployment/mcp-kubeflow-docs \
+            -n "${{ env.K8S_NAMESPACE }}" --timeout=600s
+
+          kubectl apply -f docs-agent-mcp/manifests/kagent/setup.yaml
+
+          DEPLOY_KSERVE=false
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.deploy_kserve }}" = "true" ]; then
+            DEPLOY_KSERVE=true
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            if git diff --name-only --diff-filter=M "${{ github.event.before }}" "${{ github.sha }}" \
+              | grep -qE '^docs-agent-mcp/manifests/vllm/kserve-qwen\.yaml$'; then
+              DEPLOY_KSERVE=true
+            fi
+          fi
+
+          if [ "${DEPLOY_KSERVE}" = "true" ]; then
+            echo "Removing legacy docs-agent GPU InferenceService (frees GPU for ml-infra/qwen-llm)"
+            kubectl delete inferenceservice/qwen -n "${{ env.K8S_NAMESPACE }}" --ignore-not-found=true
+            kubectl delete svc/qwen-llm -n "${{ env.K8S_NAMESPACE }}" --ignore-not-found=true
+            echo "Applying ml-infra Qwen KServe manifests"
+            kubectl apply -f docs-agent-mcp/manifests/vllm/kserve-qwen.yaml
+            kubectl rollout status deployment -n ml-infra -l serving.kserve.io/inferenceservice=qwen-llm --timeout=600s 2>/dev/null || true
+          else
+            echo "Skipping Qwen GPU deploy (no vllm manifest change; use workflow_dispatch to force)"
+          fi
+
+      - name: Wait for ml-infra dependencies
+        run: |
+          set -euo pipefail
+          kubectl wait --for=condition=Ready inferenceservice/embeddings-service \
+            -n ml-infra --timeout=600s
+          # Milvus CR reports Healthy in .status.status, not a Ready condition.
+          for i in $(seq 1 60); do
+            status="$(kubectl get milvus milvus -n ml-infra -o jsonpath='{.status.status}' 2>/dev/null || true)"
+            if [ "${status}" = "Healthy" ]; then
+              echo "milvus status=${status}"
+              break
+            fi
+            echo "waiting for milvus (status=${status:-unknown}) attempt ${i}/60"
+            sleep 10
+          done
+          kubectl get milvus -n ml-infra
+          test "$(kubectl get milvus milvus -n ml-infra -o jsonpath='{.status.status}')" = "Healthy"
+
+      - name: Smoke test MCP tools and embeddings (ml-infra)
+        run: |
+          set -euo pipefail
+          kubectl rollout status deployment/mcp-kubeflow-docs \
+            -n "${{ env.K8S_NAMESPACE }}" --timeout=120s
+          kubectl exec -n "${{ env.K8S_NAMESPACE }}" deploy/mcp-kubeflow-docs -- \
+            python3 /app/smoke_tools.py
+          kubectl get agent,modelconfig -n "${{ env.K8S_NAMESPACE }}"
+
+      - name: Smoke test Qwen (non-blocking)
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          POD="$(kubectl get pods -n ml-infra -l serving.kserve.io/inferenceservice=qwen-llm \
+            --field-selector=status.phase=Running \
+            -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+          if [ -z "${POD}" ]; then
+            echo "No running qwen-llm pod in ml-infra — skipping LLM smoke test"
+            exit 0
+          fi
+          kubectl exec -n ml-infra "${POD}" -c kserve-container -- python3 -c "
+          import urllib.request, json
+          p=json.dumps({'model':'qwen2.5-14B','messages':[{'role':'user','content':'ping'}],'max_tokens':8}).encode()
+          r=urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8080/openai/v1/chat/completions',data=p,headers={'Content-Type':'application/json'}), timeout=60)
+          print('kserve ok', r.status)
+          "

@@ -177,7 +177,7 @@ function createChatbotElements() {
 }
 
 document.addEventListener('DOMContentLoaded', async function() {
-    console.log('Docs Bot Initialized (v1.0.1 - Parse Fix)');
+    console.log('Docs Bot Initialized (v1.1.0 - Kagent A2A, configurable URL)');
     
     // Create chatbot HTML structure dynamically and wait for completion
     const elementsCreated = await createChatbotElements();
@@ -477,16 +477,42 @@ document.addEventListener('DOMContentLoaded', async function() {
         console.log(`Deleted chat: ${chatToDelete.name}`);
     }
 
-    // API Configuration
-    const API_BASE_URL = process.env.API_BASE_URL;
-    
+    // API Configuration — override for kubeflow.org, Vercel, or custom ingress:
+    //   window.KUBEFLOW_DOCS_AGENT_URL = 'https://your-host/a2a/docs-agent/kubeflow-docs-agent'
+    // or <script src="chatbot.js" data-agent-url="https://...">
+    // or data-agent-base="http://LOAD_BALANCER_IP" (appends default A2A path below)
+    const KAGENT_A2A_PATH = '/a2a/docs-agent/kubeflow-docs-agent';
+
+    function resolveAgentApiUrl() {
+        if (typeof window !== 'undefined' && window.KUBEFLOW_DOCS_AGENT_URL) {
+            return String(window.KUBEFLOW_DOCS_AGENT_URL).replace(/\/$/, '');
+        }
+        const scriptEl = document.querySelector('script[data-agent-url], script[data-agent-base]');
+        if (scriptEl?.dataset?.agentUrl) {
+            return scriptEl.dataset.agentUrl.replace(/\/$/, '');
+        }
+        if (scriptEl?.dataset?.agentBase) {
+            return scriptEl.dataset.agentBase.replace(/\/$/, '') + KAGENT_A2A_PATH;
+        }
+        return '';
+    }
+
+    const API_BASE_URL = resolveAgentApiUrl();
+
     // API connection status
     let isConnected = false;
-    
+
     // Initialize API connection
     function initializeAPI() {
-        console.log('Initializing API connection...');
-        isConnected = true; // API is stateless, so we consider it always "connected"
+        if (!API_BASE_URL) {
+            console.warn(
+                'Kubeflow Docs Bot: set window.KUBEFLOW_DOCS_AGENT_URL or script data-agent-url / data-agent-base'
+            );
+            isConnected = false;
+            return;
+        }
+        console.log('Initializing API connection to', API_BASE_URL);
+        isConnected = true;
         console.log('API connection ready');
     }
     

@@ -1,11 +1,11 @@
-FROM python:3.10-slim
+FROM python:3.11-slim
 
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-COPY server.py .
+COPY embeddings_client.py rag_collections.py server.py smoke_tools.py .
 
 ENV PORT=8000
 
