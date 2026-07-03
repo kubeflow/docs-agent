@@ -2,6 +2,8 @@
 
 import re
 
+from utils import MAX_TEI_INPUT_CHARS
+
 
 def parse_issue_metadata(content: str) -> dict:
     """Extract structured metadata from download_github_issues output format.
@@ -56,7 +58,7 @@ def build_metadata_prefix(metadata: dict) -> str:
 def split_issue_into_chunks(
     content: str,
     metadata_prefix: str,
-    chunk_size: int = 1500,
+    chunk_size: int = 1000,
     chunk_overlap: int = 150,
 ) -> list[str]:
     """Split issue content into chunks at comment boundaries.
@@ -70,7 +72,9 @@ def split_issue_into_chunks(
     Args:
         content: Full issue content string.
         metadata_prefix: Prefix to prepend to each chunk.
-        chunk_size: Maximum chunk size in characters.
+        chunk_size: Maximum chunk size in characters. Clamped to
+            MAX_TEI_INPUT_CHARS so every chunk is short enough that its
+            full text is actually embedded, not silently truncated by TEI.
         chunk_overlap: Overlap between subdivided chunks.
 
     Returns:
@@ -78,8 +82,10 @@ def split_issue_into_chunks(
     """
     from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-    # Available space for content after prefix
-    effective_size = chunk_size - len(metadata_prefix)
+    # Available space for content after prefix. Clamp chunk_size to the TEI
+    # embedding limit so the embedding step (which truncates at
+    # MAX_TEI_INPUT_CHARS) never sees less text than what's actually stored.
+    effective_size = min(chunk_size, MAX_TEI_INPUT_CHARS) - len(metadata_prefix)
     if effective_size < 100:
         effective_size = 100
 

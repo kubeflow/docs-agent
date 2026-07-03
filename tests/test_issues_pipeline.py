@@ -10,7 +10,12 @@ from pathlib import Path
 PIPELINES_DIR = Path(__file__).parent.parent / "docs-agent-mcp" / "pipelines"
 sys.path.insert(0, str(PIPELINES_DIR))
 
-from issues_utils import parse_issue_metadata, build_metadata_prefix, split_issue_into_chunks
+from issues_utils import (
+    MAX_TEI_INPUT_CHARS,
+    parse_issue_metadata,
+    build_metadata_prefix,
+    split_issue_into_chunks,
+)
 
 
 # --- Sample content fixtures ---
@@ -198,3 +203,15 @@ class TestSplitIssueIntoChunks:
     def test_handles_empty_content(self):
         chunks = split_issue_into_chunks("", "prefix\n\n", chunk_size=1000)
         assert len(chunks) == 1
+
+    def test_clamps_to_max_tei_input_chars_even_with_larger_chunk_size(self):
+        """Regression test: a chunk_size above MAX_TEI_INPUT_CHARS must not produce
+        chunks longer than what TEI actually embeds, or the tail of the chunk is
+        silently invisible to semantic search (see issues-pipeline.py chunk_and_embed_issues).
+        """
+        meta = parse_issue_metadata(SAMPLE_ISSUE_CONTENT)
+        prefix = build_metadata_prefix(meta)
+        long_body = SAMPLE_ISSUE_CONTENT + ("\n\nMore detail. " * 200)
+        chunks = split_issue_into_chunks(long_body, prefix, chunk_size=1500)
+        for chunk in chunks:
+            assert len(chunk) <= MAX_TEI_INPUT_CHARS + 100
