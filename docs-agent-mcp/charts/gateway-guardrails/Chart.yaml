@@ -1,0 +1,17 @@
+apiVersion: v2
+name: gateway-guardrails
+description: >-
+  Public gateway guardrails for the Kubeflow docs-agent chatbot: Istio
+  Gateway + TLS, CORS-locked VirtualService, global and per-IP rate limits,
+  anonymous session-JWT authentication, and the mesh AuthorizationPolicies
+  for the RAG stack. Replaces the raw kubectl_manifest heredocs previously
+  embedded in terraform (istio_policies.tf, kagent_ingress.tf) and the
+  standalone manifests under manifests/istio*.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - istio
+  - rate-limit
+  - kubeflow
+  - docs-agent

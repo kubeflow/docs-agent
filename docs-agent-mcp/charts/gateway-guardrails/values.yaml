@@ -1,0 +1,101 @@
+# =============================================================================
+# gateway-guardrails values
+#
+# Everything the mentors may want to tune lives here:
+#   helm upgrade gateway-guardrails . --set rateLimit.global.requestsPerMinute=120
+# =============================================================================
+
+# Public FQDN of the chatbot (must resolve to the Istio ingress LB).
+domain: agent.santhoshtoorpu.com
+
+namespaces:
+  docsAgent: docs-agent
+  mlInfra: ml-infra
+  kubeflow: kubeflow
+  istioSystem: istio-system
+
+gateway:
+  enabled: true
+  # Label selector of the shared Istio ingress gateway workload.
+  selector:
+    istio: ingressgateway
+  tls:
+    enabled: true
+    credentialName: kagent-ui-tls
+    acme:
+      # Creates the Let's Encrypt ClusterIssuer + Certificate (cert-manager).
+      enabled: true
+      clusterIssuerName: letsencrypt-prod
+      server: https://acme-v02.api.letsencrypt.org/directory
+      email: toorpusanthosh@gmail.com
+
+routing:
+  # kagent UI service that fronts the A2A agent.
+  uiService: kagent-ui
+  uiPort: 8080
+  # Cap slow/stuck upstream (LLM) calls so a hung request can't pin a worker.
+  timeout: 30s
+  cors:
+    # Lock embedding to the published chatbot origin(s) — no wildcard.
+    allowOrigins:
+      - exact: "https://kubeflowdemochatbot.netlify.app"
+    allowMethods:
+      - POST
+      - GET
+      - OPTIONS
+    allowHeaders:
+      - content-type
+      - authorization # session JWT (see sessionAuth)
+    maxAge: "24h"
+
+rateLimit:
+  # Layer 1: local (per-gateway-pod) token bucket on the chatbot HTTPS
+  # listener. Port-scoped so the knative/internal LLM listeners on the shared
+  # ingress pod are unaffected. NOTE: with >1 ingress replica the effective
+  # cap is replicas * requestsPerMinute.
+  global:
+    enabled: true
+    portNumber: 443
+    requestsPerMinute: 60
+  # Layer 2: per-client-IP limit via the Envoy global ratelimit service +
+  # Redis. PREREQUISITE: ingress must see real client IPs
+  # (externalTrafficPolicy: Local, or meshConfig.numTrustedProxies) — a no-op
+  # until then, so it ships disabled.
+  perIP:
+    enabled: false
+    requestsPerMinute: 10
+    ratelimitImage: envoyproxy/ratelimit:19f2079f
+    redisImage: redis:7-alpine
+
+sessionAuth:
+  # Anonymous session JWTs: the widget POSTs /api/session for a short-lived
+  # RS256 token and sends it as `Authorization: Bearer`. Istio validates
+  # signature + expiry at the ingress gateway (RequestAuthentication).
+  enabled: true
+  # enforce=false -> "canary" mode: requests carrying an invalid/expired token
+  # are rejected, but token-less requests still pass. Flip to true once the
+  # chat widget attaches tokens, to hard-require a session on protectedPaths.
+  enforce: false
+  issuer: kubeflow-docs-session-issuer
+  ttlSeconds: 1800
+  # Paths that require a valid session JWT when enforce=true.
+  # (OPTIONS is always exempt so CORS preflights succeed.)
+  protectedPaths:
+    - /api/a2a/*
+  image: ghcr.io/kmr-rohit/kubeflow-session-issuer:latest
+  # Secret holding the RS256 signing key at key `private.pem`. Create with:
+  #   openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out private.pem
+  #   kubectl -n docs-agent create secret generic session-issuer-key --from-file=private.pem
+  # (terraform creates this automatically via tls_private_key)
+  keySecretName: session-issuer-key
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+# The RAG-stack AuthorizationPolicies previously defined in istio_policies.tf.
+meshPolicies:
+  enabled: true

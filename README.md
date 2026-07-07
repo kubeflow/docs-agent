@@ -734,7 +734,13 @@ We use Terraform for declarative, reproducible cluster infrastructure on OKE.
 *   **`kubeflow_pipelines.tf`**: Deploys Kubeflow Pipelines (Standalone) into the `kubeflow` namespace without Istio sidecars (to prevent routing conflicts), persisting `fsGroup` patches for SeaweedFS.
 *   **`milvus.tf`**: Uses the Milvus Operator to deploy a lightweight Milvus Standalone instance strictly scheduled on CPU nodes, reserving GPU nodes purely for LLM inference.
 *   **`kagent.tf`**: Installs official `kagent-crds` and the `kagent` controller via OCI Helm charts, with bundled agents cleanly disabled.
-*   **`istio_policies.tf`**: Implements zero-trust networking, explicitly allowing internal cluster traffic where needed (e.g., KFP Pipeline to Milvus, Kagent to Milvus).
+*   **`gateway_guardrails.tf`**: Installs the local `charts/gateway-guardrails` Helm chart — the single source of truth for the public edge: Istio Gateway + TLS, CORS-locked VirtualService, rate limits, anonymous session-JWT auth, and the zero-trust AuthorizationPolicies (previously inline in `istio_policies.tf` / `kagent_ingress.tf`).
+
+### Gateway Guardrails Helm Chart (`docs-agent-mcp/charts/gateway-guardrails/`)
+Guardrails protecting the publicly shared chatbot, all tunable via `values.yaml`:
+*   **Rate limiting**: 60 req/min global token bucket on the chatbot HTTPS listener (EnvoyFilter), plus an optional per-client-IP layer (Envoy ratelimit service + Redis, off until the ingress preserves client IPs).
+*   **CORS lockdown**: only the published widget origin may embed the chatbot; 30s route timeout caps hung LLM calls.
+*   **Session auth**: the widget fetches a short-lived anonymous RS256 JWT from `POST /api/session` (`docs-agent-mcp/session-issuer/`); Istio `RequestAuthentication` validates signature + expiry at the ingress gateway, so invalid/expired sessions never reach the LLM. `sessionAuth.enforce=true` hard-requires a token on the A2A paths.
 
 ### Pipeline Optimizations (`docs-agent-mcp/pipelines/`)
 The ingestion pipeline was rewritten to maximize efficiency and avoid Kubernetes ephemeral storage eviction:

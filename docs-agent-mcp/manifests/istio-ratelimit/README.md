@@ -1,5 +1,12 @@
 # A2A Gateway Guardrails (Phase 0)
 
+> **⚠️ Superseded:** these manifests have been migrated into the
+> [`charts/gateway-guardrails`](../../charts/gateway-guardrails/) Helm chart,
+> which is now the canonical source (installed by terraform via
+> `gateway_guardrails.tf`, live on the GSOC-2026 cluster as release
+> `gateway-guardrails`). The YAML here is kept as a kubectl-applyable
+> reference; prefer `helm upgrade` for any change.
+
 Edge guardrails for the public Kubeflow Docs chatbot (A2A path), applied at the
 Istio ingress gateway that fronts `agent.santhoshtoorpu.com` → `kagent-ui:8080`.
 
@@ -48,6 +55,6 @@ for i in $(seq 1 80); do \
 ```
 
 ## Follow-ups
-- Mirror these into Terraform / Helm (ties into the CRD→Helm workstream).
+- ~~Mirror these into Terraform / Helm~~ → done: `charts/gateway-guardrails` + `terraform/gateway_guardrails.tf`.
 - Tune `60/min` global and `10/min` per-IP against measured GPU throughput.
 - Add app-layer guardrails (prompt length cap, per-session message cap) in the agent.
