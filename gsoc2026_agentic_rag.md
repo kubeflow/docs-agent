@@ -6,6 +6,15 @@ This project evolves `kubeflow/docs-agent` from a baseline retrieval script into
 To ensure maximum community adoption, we are scoping three modular architectural blueprints while standardizing on a primary "live" deployment.
 
 ---
+## How the RAG Pipeline Works
+
+1. Documentation is fetched from GitHub repositories.
+2. Text is cleaned and preprocessed.
+3. Documents are split into smaller chunks.
+4. Embeddings are generated using sentence-transformers.
+5. Embeddings are stored in Milvus vector database.
+6. User queries trigger semantic search.
+7. Retrieved context is passed to the LLM to generate answers.
 
 ## 1. Architectural Blueprints (The "Art of the Possible")
 We are designing the system across four decoupled layers so that users can adopt the components that fit their target environments:
