@@ -48,10 +48,10 @@ jobs:
           python code-pipeline.py
 
       - name: Ruff lint
-        run: ruff check docs-agent-mcp/mcp-server tests docs-agent-mcp/pipelines
+        run: ruff check docs-agent-mcp/mcp-server docs-agent-mcp/session-issuer tests docs-agent-mcp/pipelines
 
       - name: Compile MCP server
-        run: python -m py_compile docs-agent-mcp/mcp-server/*.py
+        run: python -m py_compile docs-agent-mcp/mcp-server/*.py docs-agent-mcp/session-issuer/*.py
 
       - name: Run Unit Tests
         run: pytest -v --tb=short

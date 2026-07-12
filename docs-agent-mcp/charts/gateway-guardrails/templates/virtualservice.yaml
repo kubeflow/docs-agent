@@ -12,6 +12,23 @@ spec:
   gateways:
     - {{ .Values.namespaces.istioSystem }}/kagent-gateway
   http:
+    {{- if .Values.sessionAuth.enabled }}
+    # Session-token issuance + public JWKS (debugging aid; istiod fetches the
+    # JWKS in-cluster). Short timeout — issuance is cheap and local.
+    - name: session-issuer
+      match:
+        - uri:
+            exact: /api/session
+        - uri:
+            exact: /.well-known/jwks.json
+      {{- include "gateway-guardrails.corsPolicy" . | nindent 6 }}
+      timeout: 10s
+      route:
+        - destination:
+            host: {{ include "gateway-guardrails.issuerHost" . }}
+            port:
+              number: 8000
+    {{- end }}
     - name: kagent-ui
       {{- include "gateway-guardrails.corsPolicy" . | nindent 6 }}
       timeout: {{ .Values.routing.timeout }}

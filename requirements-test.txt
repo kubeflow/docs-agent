@@ -4,3 +4,4 @@ numpy==2.2.6
 fastmcp==3.4.2
 langchain-text-splitters==0.3.8
 pyyaml==6.0.2
+PyJWT[crypto]==2.10.1

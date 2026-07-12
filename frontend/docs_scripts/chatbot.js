@@ -677,6 +677,81 @@ document.addEventListener('DOMContentLoaded', async function() {
             }
         }
     }
+    // --- Anonymous session tokens ------------------------------------------
+    // The gateway can require a short-lived session JWT on the agent paths.
+    // There are no user accounts: the widget silently fetches an anonymous
+    // token on first use and re-fetches it when the gateway rejects one.
+    // Harmless when the gateway does not enforce sessions — the header is
+    // simply ignored.
+    const SESSION_PATH = '/api/session';
+    // Refresh this many ms before expiry so a request never races the clock.
+    const SESSION_REFRESH_MARGIN_MS = 60 * 1000;
+
+    let sessionToken = null;
+    let sessionExpiresAt = 0;
+    let sessionFetch = null;
+
+    function getSessionUrl() {
+        return new URL(SESSION_PATH, getAPIUrl()).toString();
+    }
+
+    async function fetchSessionToken() {
+        const response = await fetch(getSessionUrl(), { method: 'POST' });
+        if (!response.ok) {
+            throw new Error(`session request failed: ${response.status}`);
+        }
+        const data = await response.json();
+        sessionToken = data.access_token;
+        sessionExpiresAt = Date.now() + (data.expires_in * 1000);
+        return sessionToken;
+    }
+
+    // Returns a valid token, minting one if absent or near expiry. Concurrent
+    // callers share a single in-flight request.
+    async function getSessionToken({ forceRefresh = false } = {}) {
+        if (forceRefresh) {
+            sessionToken = null;
+        }
+        if (sessionToken && Date.now() < sessionExpiresAt - SESSION_REFRESH_MARGIN_MS) {
+            return sessionToken;
+        }
+        if (!sessionFetch) {
+            sessionFetch = fetchSessionToken().finally(() => { sessionFetch = null; });
+        }
+        return sessionFetch;
+    }
+
+    // POST to the agent with a session token attached. A 401/403 means the
+    // token was rejected (expired, or the signing key rotated), so mint a
+    // fresh one and retry exactly once.
+    async function postToAgent(payload) {
+        const send = async (token) => fetch(getAPIUrl(), {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'text/event-stream',
+                ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+            },
+            body: JSON.stringify(payload)
+        });
+
+        let token = null;
+        try {
+            token = await getSessionToken();
+        } catch (error) {
+            // Session endpoint unavailable (e.g. gateway without session auth).
+            // Fall through unauthenticated rather than blocking the chat.
+            console.warn('Could not obtain a session token:', error);
+        }
+
+        let response = await send(token);
+        if (token && (response.status === 401 || response.status === 403)) {
+            console.log('Session token rejected — refreshing and retrying');
+            response = await send(await getSessionToken({ forceRefresh: true }));
+        }
+        return response;
+    }
+
     // API connection status
     let isConnected = false;
 
@@ -713,15 +788,11 @@ document.addEventListener('DOMContentLoaded', async function() {
                 id: rpcId
             };
             
-            const response = await fetch(getAPIUrl(), {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Accept': 'text/event-stream'
-                },
-                body: JSON.stringify(payload)
-            });
-            
+            const response = await postToAgent(payload);
+
+            if (response.status === 429) {
+                throw new Error('Rate limit reached — please wait a moment and try again.');
+            }
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
