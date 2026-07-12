@@ -1,0 +1,32 @@
+name: CI Gatekeeper
+
+on:
+  workflow_call:
+    outputs:
+      approved:
+        description: "Whether the linked issue is approved"
+        value: ${{ jobs.gatekeeper.outputs.approved }}
+
+jobs:
+  gatekeeper:
+    runs-on: ubuntu-latest
+
+    outputs:
+      approved: ${{ steps.result.outputs.approved }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check linked issue approval
+        id: result
+        run: |
+          echo "Gatekeeper started"
+
+          # TODO:
+          # 1. Find linked issue
+          # 2. Read issue labels
+          # 3. Check for "approved"
+          # 4. Output approved=true/false
+
+          echo "approved=false" >> "$GITHUB_OUTPUT"
