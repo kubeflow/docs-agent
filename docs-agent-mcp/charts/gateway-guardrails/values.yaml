@@ -45,6 +45,7 @@ routing:
       - OPTIONS
     allowHeaders:
       - content-type
+      - authorization # session JWT (see sessionAuth)
     maxAge: "24h"
 
 rateLimit:
@@ -65,6 +66,35 @@ rateLimit:
     requestsPerMinute: 10
     ratelimitImage: envoyproxy/ratelimit:19f2079f
     redisImage: redis:7-alpine
+
+sessionAuth:
+  # Anonymous session JWTs: the widget POSTs /api/session for a short-lived
+  # RS256 token and sends it as `Authorization: Bearer`. Istio validates
+  # signature + expiry at the ingress gateway (RequestAuthentication).
+  enabled: true
+  # enforce=false -> "canary" mode: requests carrying an invalid/expired token
+  # are rejected, but token-less requests still pass. Flip to true once the
+  # chat widget attaches tokens, to hard-require a session on protectedPaths.
+  enforce: false
+  issuer: kubeflow-docs-session-issuer
+  ttlSeconds: 1800
+  # Paths that require a valid session JWT when enforce=true.
+  # (OPTIONS is always exempt so CORS preflights succeed.)
+  protectedPaths:
+    - /api/a2a/*
+  image: ghcr.io/kubeflow/kubeflow-session-issuer:latest
+  # Secret holding the RS256 signing key at key `private.pem`. Create with:
+  #   openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out private.pem
+  #   kubectl -n docs-agent create secret generic session-issuer-key --from-file=private.pem
+  # (terraform creates this automatically via tls_private_key)
+  keySecretName: session-issuer-key
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
 
 # The RAG-stack AuthorizationPolicies previously defined in istio_policies.tf.
 meshPolicies:

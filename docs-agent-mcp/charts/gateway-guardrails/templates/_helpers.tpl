@@ -17,3 +17,8 @@ corsPolicy:
   maxAge: {{ .Values.routing.cors.maxAge | quote }}
 {{- end }}
 
+{{/* FQDN of the session issuer service. */}}
+{{- define "gateway-guardrails.issuerHost" -}}
+session-issuer.{{ .Values.namespaces.docsAgent }}.svc.cluster.local
+{{- end }}
+
