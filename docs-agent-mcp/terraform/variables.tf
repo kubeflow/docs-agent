@@ -63,19 +63,8 @@ variable "milvus_version" {
   default     = "v2.4.15"
 }
 
-# --- Ingress & Routing -------------------------------------------------------
-
-variable "domain_name" {
-  description = "Domain name for the kagent backend UI"
-  type        = string
-  default     = "agent.example.com"
-}
-
-variable "acme_email" {
-  description = "Email address for Let's Encrypt notifications"
-  type        = string
-  default     = "admin@example.com"
-}
+# --- Ingress & Routing ---------------------------------------------------------
+# (moved to gateway_guardrails.tf — the guardrails Helm chart owns the edge config)
 
 # --- TEI Embeddings (ml-infra) -----------------------------------------------
 

@@ -1,0 +1,120 @@
+# =============================================================================
+# Envoy global rate limit service (Lyft ratelimit) + Redis backend.
+# Backs per-IP limiting for the A2A gateway. Deploy alongside perip-global-ratelimit.yaml.
+#
+# PREREQUISITE: the ingress gateway must see the real client IP. Today it is
+# externalTrafficPolicy: Cluster (source IP is SNAT'd). Set it to Local, or trust
+# X-Forwarded-For via meshConfig.numTrustedProxies, before this has any effect.
+#
+# Descriptor: 10 requests / minute per client IP (/32). Tune with mentors.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ratelimit-config
+  namespace: istio-system
+data:
+  a2a.yaml: |
+    domain: a2a
+    descriptors:
+      - key: masked_remote_address
+        rate_limit:
+          unit: minute
+          requests_per_unit: 10
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ratelimit-redis
+  namespace: istio-system
+  labels: { app: ratelimit-redis }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: ratelimit-redis }
+  template:
+    metadata:
+      labels: { app: ratelimit-redis }
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - containerPort: 6379
+          resources:
+            requests: { cpu: "50m", memory: "64Mi" }
+            limits: { cpu: "200m", memory: "128Mi" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ratelimit-redis
+  namespace: istio-system
+spec:
+  selector: { app: ratelimit-redis }
+  ports:
+    - port: 6379
+      targetPort: 6379
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ratelimit
+  namespace: istio-system
+  labels: { app: ratelimit }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: ratelimit }
+  template:
+    metadata:
+      labels: { app: ratelimit }
+    spec:
+      containers:
+        - name: ratelimit
+          image: envoyproxy/ratelimit:19f2079f  # pin a known-good tag before prod
+          command: ["/bin/ratelimit"]
+          ports:
+            - name: grpc
+              containerPort: 8081
+            - name: http-debug
+              containerPort: 6070
+          env:
+            - name: USE_STATSD
+              value: "false"
+            - name: LOG_LEVEL
+              value: "info"
+            - name: REDIS_SOCKET_TYPE
+              value: "tcp"
+            - name: REDIS_URL
+              value: "ratelimit-redis.istio-system.svc.cluster.local:6379"
+            - name: RUNTIME_ROOT
+              value: "/data"
+            - name: RUNTIME_SUBDIRECTORY
+              value: "ratelimit"
+            - name: RUNTIME_WATCH_ROOT
+              value: "false"
+            - name: RUNTIME_IGNOREDOTFILES
+              value: "true"
+          volumeMounts:
+            - name: config
+              mountPath: /data/ratelimit/config
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits: { cpu: "500m", memory: "256Mi" }
+      volumes:
+        - name: config
+          configMap:
+            name: ratelimit-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ratelimit
+  namespace: istio-system
+spec:
+  selector: { app: ratelimit }
+  ports:
+    - name: grpc
+      port: 8081
+      targetPort: 8081
