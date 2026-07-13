@@ -1,32 +1,63 @@
 name: CI Gatekeeper
 
 on:
-  workflow_call:
-    outputs:
-      approved:
-        description: "Whether the linked issue is approved"
-        value: ${{ jobs.gatekeeper.outputs.approved }}
+  pull_request:
+    types:
+      - opened
+      - edited
+      - reopened
+      - synchronize
+
+permissions:
+  issues: read
+  pull-requests: write
 
 jobs:
-  gatekeeper:
+  verify-linked-issue:
     runs-on: ubuntu-latest
 
-    outputs:
-      approved: ${{ steps.result.outputs.approved }}
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Check linked issue
+        id: check
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const body = context.payload.pull_request.body || "";
+            const prNumber = context.payload.pull_request.number;
 
-      - name: Check linked issue approval
-        id: result
-        run: |
-          echo "Gatekeeper started"
+            // Find issue reference (#123)
+            const match = body.match(/#(\d+)/);
 
-          # TODO:
-          # 1. Find linked issue
-          # 2. Read issue labels
-          # 3. Check for "approved"
-          # 4. Output approved=true/false
+            if (!match) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: "❌ CI is blocked because this pull request is not linked to any issue.\n\nPlease reference an existing issue (for example: `Fixes #123`)."
+              });
 
-          echo "approved=false" >> "$GITHUB_OUTPUT"
+              core.setFailed("No linked issue found.");
+              return;
+            }
+
+            const issueNumber = parseInt(match[1]);
+
+            try {
+              await github.rest.issues.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber
+              });
+
+              console.log(`Linked issue #${issueNumber} exists.`);
+            } catch (error) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: `❌ CI is blocked because linked issue #${issueNumber} does not exist.`
+              });
+
+              core.setFailed(`Issue #${issueNumber} does not exist.`);
+            }
