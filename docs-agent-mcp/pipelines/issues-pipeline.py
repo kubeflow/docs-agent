@@ -209,11 +209,17 @@ def chunk_and_embed_issues(
     """
     import json
     import re
+    import sys
     import requests
     from langchain_text_splitters import RecursiveCharacterTextSplitter
 
     print(f"Using embeddings service: {embeddings_service_url}")
     embedding_batch_size = max(1, int(embedding_batch_size))
+
+    # TEI all-mpnet-base-v2 rejects inputs >=384 tokens (~1000 chars safe).
+    # Used both to clamp chunk splitting below and to truncate at embed time,
+    # so a chunk's embedding always covers its full stored text.
+    max_tei_chars = 1000
 
     def parse_metadata(content):
         """Extract structured metadata from issue content."""
@@ -223,7 +229,7 @@ def chunk_and_embed_issues(
         url_match = re.search(r'\*\*URL:\*\*\s*(.+)', content)
         labels_match = re.search(r'\*\*Labels:\*\*[ \t]*(.*)', content)
         state_match = re.search(r'\*\*State:\*\*\s*(\w+)', content)
-        return {
+        metadata = {
             "title": title_match.group(1).strip() if title_match else "",
             "repo_name": repo_match.group(1).strip() if repo_match else "",
             "issue_number": int(number_match.group(1)) if number_match else 0,
@@ -231,6 +237,15 @@ def chunk_and_embed_issues(
             "issue_labels": labels_match.group(1).strip() if labels_match else "",
             "citation_url": url_match.group(1).strip() if url_match else "",
         }
+        if metadata["issue_number"] == 0 and not any(
+            v for k, v in metadata.items() if k != "issue_number"
+        ):
+            print(
+                "WARNING: Failed to parse GitHub issue metadata. "
+                "Upstream markdown format may have changed.",
+                file=sys.stderr,
+            )
+        return metadata
 
     def build_prefix(meta):
         """Build metadata prefix for each chunk."""
@@ -250,7 +265,7 @@ def chunk_and_embed_issues(
             content = issue["content"]
             metadata = parse_metadata(content)
             prefix = build_prefix(metadata)
-            effective_size = chunk_size - len(prefix)
+            effective_size = min(chunk_size, max_tei_chars) - len(prefix)
             if effective_size < 100:
                 effective_size = 100
 
@@ -298,7 +313,6 @@ def chunk_and_embed_issues(
 
     print(f"Total chunks: {len(records)}; requesting embeddings from TEI service...")
 
-    max_tei_chars = 1000
     for i in range(0, len(records), embedding_batch_size):
         batch = records[i:i + embedding_batch_size]
         texts = [r["content_text"][:max_tei_chars] for r in batch]
@@ -477,7 +491,9 @@ def github_issues_rag_pipeline(
     state: str = "all",
     max_issues_per_repo: int = 200,
     github_token: str = "",
-    chunk_size: int = 1500,
+    # Must stay <= the TEI embedding truncation limit (max_tei_chars in
+    # chunk_and_embed_issues) or chunks get silently clamped at embed time.
+    chunk_size: int = 1000,
     chunk_overlap: int = 150,
     embeddings_service_url: str = (
         "http://embeddings-service-predictor.ml-infra.svc.cluster.local/embed"
