@@ -1,0 +1,63 @@
+name: CI Gatekeeper
+
+on:
+  pull_request:
+    types:
+      - opened
+      - edited
+      - reopened
+      - synchronize
+
+permissions:
+  issues: read
+  pull-requests: write
+
+jobs:
+  verify-linked-issue:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check linked issue
+        id: check
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const body = context.payload.pull_request.body || "";
+            const prNumber = context.payload.pull_request.number;
+
+            // Find issue reference (#123)
+            const match = body.match(/#(\d+)/);
+
+            if (!match) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: "❌ CI is blocked because this pull request is not linked to any issue.\n\nPlease reference an existing issue (for example: `Fixes #123`)."
+              });
+
+              core.setFailed("No linked issue found.");
+              return;
+            }
+
+            const issueNumber = parseInt(match[1]);
+
+            try {
+              await github.rest.issues.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber
+              });
+
+              console.log(`Linked issue #${issueNumber} exists.`);
+            } catch (error) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: `❌ CI is blocked because linked issue #${issueNumber} does not exist.`
+              });
+
+              core.setFailed(`Issue #${issueNumber} does not exist.`);
+            }
