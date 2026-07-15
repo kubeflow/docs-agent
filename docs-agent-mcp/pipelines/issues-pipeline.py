@@ -209,6 +209,7 @@ def chunk_and_embed_issues(
     """
     import json
     import re
+    import sys
     import requests
     from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -228,7 +229,7 @@ def chunk_and_embed_issues(
         url_match = re.search(r'\*\*URL:\*\*\s*(.+)', content)
         labels_match = re.search(r'\*\*Labels:\*\*[ \t]*(.*)', content)
         state_match = re.search(r'\*\*State:\*\*\s*(\w+)', content)
-        return {
+        metadata = {
             "title": title_match.group(1).strip() if title_match else "",
             "repo_name": repo_match.group(1).strip() if repo_match else "",
             "issue_number": int(number_match.group(1)) if number_match else 0,
@@ -236,6 +237,15 @@ def chunk_and_embed_issues(
             "issue_labels": labels_match.group(1).strip() if labels_match else "",
             "citation_url": url_match.group(1).strip() if url_match else "",
         }
+        if metadata["issue_number"] == 0 and not any(
+            v for k, v in metadata.items() if k != "issue_number"
+        ):
+            print(
+                "WARNING: Failed to parse GitHub issue metadata. "
+                "Upstream markdown format may have changed.",
+                file=sys.stderr,
+            )
+        return metadata
 
     def build_prefix(meta):
         """Build metadata prefix for each chunk."""

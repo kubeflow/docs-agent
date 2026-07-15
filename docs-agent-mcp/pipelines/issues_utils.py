@@ -1,6 +1,7 @@
 """Utility functions for GitHub issues pipeline chunking and metadata extraction."""
 
 import re
+import sys
 
 from utils import MAX_TEI_INPUT_CHARS
 
@@ -26,7 +27,7 @@ def parse_issue_metadata(content: str) -> dict:
     labels_match = re.search(r'\*\*Labels:\*\*[ \t]*(.*)', content)
     state_match = re.search(r'\*\*State:\*\*\s*(\w+)', content)
 
-    return {
+    metadata = {
         "title": title_match.group(1).strip() if title_match else "",
         "repo_name": repo_match.group(1).strip() if repo_match else "",
         "issue_number": int(number_match.group(1)) if number_match else 0,
@@ -34,6 +35,17 @@ def parse_issue_metadata(content: str) -> dict:
         "issue_labels": labels_match.group(1).strip() if labels_match else "",
         "citation_url": url_match.group(1).strip() if url_match else "",
     }
+
+    if metadata["issue_number"] == 0 and not any(
+        v for k, v in metadata.items() if k != "issue_number"
+    ):
+        print(
+            "WARNING: Failed to parse GitHub issue metadata. "
+            "Upstream markdown format may have changed.",
+            file=sys.stderr,
+        )
+
+    return metadata
 
 
 def build_metadata_prefix(metadata: dict) -> str:

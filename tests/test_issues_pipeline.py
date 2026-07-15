@@ -111,6 +111,14 @@ class TestParseIssueMetadata:
         assert meta["repo_name"] == ""
         assert meta["citation_url"] == ""
 
+    def test_warns_when_all_fields_empty(self, capsys):
+        parse_issue_metadata("Just plain text")
+        assert "WARNING: Failed to parse GitHub issue metadata" in capsys.readouterr().err
+
+    def test_no_warning_when_fields_present(self, capsys):
+        parse_issue_metadata(SAMPLE_ISSUE_CONTENT)
+        assert capsys.readouterr().err == ""
+
 
 class TestBuildMetadataPrefix:
     """Tests for build_metadata_prefix."""
