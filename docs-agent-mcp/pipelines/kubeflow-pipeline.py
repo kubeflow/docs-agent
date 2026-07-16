@@ -401,7 +401,9 @@ def store_milvus(
     embedded_data: dsl.Input[dsl.Dataset],
     milvus_host: str,
     milvus_port: str,
-    collection_name: str
+    collection_name: str,
+    repo_name: str,
+    directory_path: str,
 ):
     from pymilvus import connections, utility, FieldSchema, CollectionSchema, DataType, Collection
     import json
@@ -411,6 +413,89 @@ def store_milvus(
     SCHEMA_VERSION = 1
     SCHEMA_DESCRIPTION = f"RAG collection for documentation (v={SCHEMA_VERSION})"
     DELETE_BATCH_SIZE = 100
+    QUERY_BATCH_SIZE = 2000
+
+    def _escape_milvus_str(value: str) -> str:
+        return value.replace("\\", "\\\\").replace('"', '\\"')
+
+    def _normalize_directory_path(path: str) -> str:
+        return path.strip().strip("/")
+
+    def _build_scope_expr(repo_name: str, directory_path: str) -> str:
+        normalized_dir = _normalize_directory_path(directory_path)
+        scoped_prefix = f"{repo_name}:{normalized_dir}/"
+        return f'file_unique_id like "{_escape_milvus_str(scoped_prefix)}%"'
+
+    def _file_unique_id_in_scope(file_unique_id: str, repo_name: str, directory_path: str) -> bool:
+        normalized_dir = _normalize_directory_path(directory_path)
+        scope_prefix = f"{repo_name}:{normalized_dir}/"
+        return file_unique_id.startswith(scope_prefix)
+
+    def _delete_file_unique_ids(collection: Collection, file_ids: list[str], batch_size: int) -> int:
+        deleted = 0
+        current_batch_ids = None
+        try:
+            for i in range(0, len(file_ids), batch_size):
+                current_batch_ids = file_ids[i:i + batch_size]
+                quoted = ", ".join(f'"{_escape_milvus_str(uid)}"' for uid in current_batch_ids)
+                expr = f"file_unique_id in [{quoted}]"
+                old = collection.query(expr=expr, output_fields=["id"], limit=16384)
+                if old:
+                    collection.delete(expr)
+                    deleted += len(old)
+        except Exception as e:
+            print(f"ERROR during delete phase: {e}")
+            print(f"Failed batch unique_ids ({len(current_batch_ids) if current_batch_ids else 0} ids): {current_batch_ids}")
+            raise
+        return deleted
+
+    def _collect_scoped_file_unique_ids(collection: Collection, repo_name: str, directory_path: str) -> set[str]:
+        existing_file_ids: set[str] = set()
+        scope_expr = _build_scope_expr(repo_name, directory_path)
+
+        try:
+            iterator = collection.query_iterator(
+                batch_size=QUERY_BATCH_SIZE,
+                expr=scope_expr,
+                output_fields=["file_unique_id"],
+            )
+            try:
+                while True:
+                    batch = iterator.next()
+                    if not batch:
+                        break
+                    for row in batch:
+                        file_unique_id = row.get("file_unique_id")
+                        if file_unique_id:
+                            existing_file_ids.add(file_unique_id)
+            finally:
+                iterator.close()
+            return existing_file_ids
+        except Exception as e:
+            print(
+                "WARNING: Scoped Milvus query_iterator failed; "
+                f"falling back to repo-level filtering in Python. Error: {e}"
+            )
+
+        repo_expr = f'repo_name == "{_escape_milvus_str(repo_name)}"'
+        iterator = collection.query_iterator(
+            batch_size=QUERY_BATCH_SIZE,
+            expr=repo_expr,
+            output_fields=["file_unique_id"],
+        )
+        try:
+            while True:
+                batch = iterator.next()
+                if not batch:
+                    break
+                for row in batch:
+                    file_unique_id = row.get("file_unique_id")
+                    if file_unique_id and _file_unique_id_in_scope(file_unique_id, repo_name, directory_path):
+                        existing_file_ids.add(file_unique_id)
+        finally:
+            iterator.close()
+
+        return existing_file_ids
 
     milvus_user = os.environ.get("MILVUS_USER", "root")
     milvus_password = os.environ.get("MILVUS_PASSWORD", "")
@@ -455,7 +540,6 @@ def store_milvus(
         collection = Collection(collection_name, schema)
         print(f"Created new collection: {collection_name} (schema v={SCHEMA_VERSION})")
 
-    # Rest of your existing code remains the same...
     records = []
     timestamp = int(datetime.now().timestamp())
 
@@ -474,42 +558,59 @@ def store_milvus(
                 "last_updated": timestamp
             })
 
+    current_file_ids = {r["file_unique_id"] for r in records}
+
+    # Full rebuild reconciliation: remove Milvus documents that no longer exist
+    # in the GitHub directory being indexed. Without this, deleted or renamed
+    # files leave orphan vectors because the per-run delete only targets IDs
+    # present in the current ingest records.
+    if collection_existed and len(collection.indexes) > 0:
+        collection.load()
+        existing_file_ids = _collect_scoped_file_unique_ids(
+            collection=collection,
+            repo_name=repo_name,
+            directory_path=directory_path,
+        )
+        orphan_ids = sorted(existing_file_ids - current_file_ids)
+
+        print(f"Found {len(existing_file_ids)} existing documents in Milvus")
+        print(f"Found {len(current_file_ids)} documents from GitHub")
+        print(f"Removing {len(orphan_ids)} orphan documents")
+
+        if orphan_ids:
+            orphan_deleted = _delete_file_unique_ids(collection, orphan_ids, DELETE_BATCH_SIZE)
+            collection.flush()
+            print(f"Deleted {orphan_deleted} orphan chunks for {len(orphan_ids)} files")
+
     if records:
         # load() before delete requires an existing index; new collections have none yet
         if collection_existed and len(collection.indexes) > 0:
-            collection.load()
-            unique_ids = sorted(set(r["file_unique_id"] for r in records))
-            deleted = 0
-            try:
-                for i in range(0, len(unique_ids), DELETE_BATCH_SIZE):
-                    batch_ids = unique_ids[i:i + DELETE_BATCH_SIZE]
-                    quoted = ", ".join(f'"{uid}"' for uid in batch_ids)
-                    expr = f"file_unique_id in [{quoted}]"
-                    old = collection.query(expr=expr, output_fields=["id"], limit=16384)
-                    if old:
-                        collection.delete(expr)
-                        deleted += len(old)
-                if deleted:
-                    collection.flush()
-                    print(f"Deleted {deleted} old chunks for {len(unique_ids)} files")
-            except Exception as e:
-                print(f"ERROR during delete phase: {e}")
-                print(f"Failed batch unique_ids: {unique_ids[i:i + DELETE_BATCH_SIZE]}")
-                raise
+            unique_ids = sorted(current_file_ids)
+            deleted = _delete_file_unique_ids(collection, unique_ids, DELETE_BATCH_SIZE)
+            if deleted:
+                collection.flush()
+                print(f"Deleted {deleted} old chunks for {len(unique_ids)} files")
 
         # Insert new chunks (failure-aware)
         batch_size = 1000
         inserted = 0
+        current_batch = None
+        current_batch_start = 0
         try:
             for i in range(0, len(records), batch_size):
-                batch = records[i:i + batch_size]
-                collection.insert(batch)
-                inserted += len(batch)
+                current_batch_start = i
+                current_batch = records[i:i + batch_size]
+                collection.insert(current_batch)
+                inserted += len(current_batch)
+            current_batch = None
             collection.flush()
         except Exception as e:
             print(f"ERROR during insert. Inserted={inserted}/{len(records)}. Error: {e}")
-            failed_ids = sorted(set(r["file_unique_id"] for r in records[i:i + batch_size]))
-            print(f"Failed batch starts at record {i}, file_unique_ids in failing batch: {failed_ids}")
+            if current_batch is not None:
+                failed_ids = sorted(set(r["file_unique_id"] for r in current_batch))
+                print(f"Failed batch starts at record {current_batch_start}, file_unique_ids in failing batch: {failed_ids}")
+            else:
+                print("Failure occurred during flush() after all batches were submitted")
             raise
 
         # Create index if not already present
@@ -576,6 +677,8 @@ def github_rag_pipeline(
         milvus_host=milvus_host,
         milvus_port=milvus_port,
         collection_name=collection_name,
+        repo_name=repo_name,
+        directory_path=directory_path,
     )
 
     if k8s is not None:
