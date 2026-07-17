@@ -1,0 +1,55 @@
+{{- if .Values.rateLimit.global.enabled }}
+# Local rate limit on the chatbot HTTPS listener (Layer 1, demo-ready).
+# Port-scoped: the shared ingress pod also serves knative-ingress-gateway /
+# knative-local-gateway (agent->LLM path) on other ports — those are untouched.
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: a2a-global-ratelimit
+  namespace: {{ .Values.namespaces.istioSystem }}
+  labels:
+    {{- include "gateway-guardrails.labels" . | nindent 4 }}
+spec:
+  workloadSelector:
+    labels:
+      {{- toYaml .Values.gateway.selector | nindent 6 }}
+  configPatches:
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          portNumber: {{ .Values.rateLimit.global.portNumber }}
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+              subFilter:
+                name: envoy.filters.http.router
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.local_ratelimit
+          typed_config:
+            "@type": type.googleapis.com/udpa.type.v1.TypedStruct
+            type_url: type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+            value:
+              stat_prefix: a2a_http_local_rate_limiter
+              token_bucket:
+                max_tokens: {{ .Values.rateLimit.global.requestsPerMinute }}
+                tokens_per_fill: {{ .Values.rateLimit.global.requestsPerMinute }}
+                fill_interval: 60s
+              filter_enabled:
+                runtime_key: local_rate_limit_enabled
+                default_value:
+                  numerator: 100
+                  denominator: HUNDRED
+              filter_enforced:
+                runtime_key: local_rate_limit_enforced
+                default_value:
+                  numerator: 100
+                  denominator: HUNDRED
+              response_headers_to_add:
+                - append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                  header:
+                    key: x-ratelimit-scope
+                    value: global
+{{- end }}

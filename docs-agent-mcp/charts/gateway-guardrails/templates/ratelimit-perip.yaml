@@ -1,0 +1,207 @@
+{{- if .Values.rateLimit.perIP.enabled }}
+# Layer 2: per-client-IP limiting via the Envoy global ratelimit service.
+# PREREQUISITE: ingress must see real client IPs (externalTrafficPolicy: Local
+# or meshConfig.numTrustedProxies) — otherwise every request shares the node
+# SNAT IP and this is a single global bucket.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ratelimit-config
+  namespace: {{ .Values.namespaces.istioSystem }}
+  labels:
+    {{- include "gateway-guardrails.labels" . | nindent 4 }}
+data:
+  a2a.yaml: |
+    domain: a2a
+    descriptors:
+      - key: masked_remote_address
+        rate_limit:
+          unit: minute
+          requests_per_unit: {{ .Values.rateLimit.perIP.requestsPerMinute }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ratelimit-redis
+  namespace: {{ .Values.namespaces.istioSystem }}
+  labels:
+    app: ratelimit-redis
+    {{- include "gateway-guardrails.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ratelimit-redis
+  template:
+    metadata:
+      labels:
+        app: ratelimit-redis
+    spec:
+      containers:
+        - name: redis
+          image: {{ .Values.rateLimit.perIP.redisImage }}
+          ports:
+            - containerPort: 6379
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 200m, memory: 128Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ratelimit-redis
+  namespace: {{ .Values.namespaces.istioSystem }}
+  labels:
+    {{- include "gateway-guardrails.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: ratelimit-redis
+  ports:
+    - port: 6379
+      targetPort: 6379
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ratelimit
+  namespace: {{ .Values.namespaces.istioSystem }}
+  labels:
+    app: ratelimit
+    {{- include "gateway-guardrails.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ratelimit
+  template:
+    metadata:
+      labels:
+        app: ratelimit
+    spec:
+      containers:
+        - name: ratelimit
+          image: {{ .Values.rateLimit.perIP.ratelimitImage }}
+          command: ["/bin/ratelimit"]
+          ports:
+            - name: grpc
+              containerPort: 8081
+            - name: http-debug
+              containerPort: 6070
+          env:
+            - name: USE_STATSD
+              value: "false"
+            - name: LOG_LEVEL
+              value: "info"
+            - name: REDIS_SOCKET_TYPE
+              value: "tcp"
+            - name: REDIS_URL
+              value: "ratelimit-redis.{{ .Values.namespaces.istioSystem }}.svc.cluster.local:6379"
+            - name: RUNTIME_ROOT
+              value: "/data"
+            - name: RUNTIME_SUBDIRECTORY
+              value: "ratelimit"
+            - name: RUNTIME_WATCH_ROOT
+              value: "false"
+            - name: RUNTIME_IGNOREDOTFILES
+              value: "true"
+          volumeMounts:
+            - name: config
+              mountPath: /data/ratelimit/config
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+      volumes:
+        - name: config
+          configMap:
+            name: ratelimit-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ratelimit
+  namespace: {{ .Values.namespaces.istioSystem }}
+  labels:
+    {{- include "gateway-guardrails.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: ratelimit
+  ports:
+    - name: grpc
+      port: 8081
+      targetPort: 8081
+---
+# Wires the ingress gateway to the ratelimit service.
+# failure_mode_deny: false -> fail-open if the ratelimit service is down
+# (the Layer-1 global bucket still caps total volume).
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: a2a-perip-ratelimit
+  namespace: {{ .Values.namespaces.istioSystem }}
+  labels:
+    {{- include "gateway-guardrails.labels" . | nindent 4 }}
+spec:
+  workloadSelector:
+    labels:
+      {{- toYaml .Values.gateway.selector | nindent 6 }}
+  configPatches:
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+              subFilter:
+                name: envoy.filters.http.router
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.ratelimit
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.ratelimit.v3.RateLimit
+            domain: a2a
+            failure_mode_deny: false
+            timeout: 0.1s
+            rate_limit_service:
+              transport_api_version: V3
+              grpc_service:
+                envoy_grpc:
+                  cluster_name: outbound_ratelimit_cluster
+
+    - applyTo: CLUSTER
+      match:
+        cluster:
+          service: ratelimit.{{ .Values.namespaces.istioSystem }}.svc.cluster.local
+      patch:
+        operation: ADD
+        value:
+          name: outbound_ratelimit_cluster
+          type: STRICT_DNS
+          connect_timeout: 1s
+          lb_policy: ROUND_ROBIN
+          http2_protocol_options: {}
+          load_assignment:
+            cluster_name: outbound_ratelimit_cluster
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address:
+                          address: ratelimit.{{ .Values.namespaces.istioSystem }}.svc.cluster.local
+                          port_value: 8081
+
+    - applyTo: VIRTUAL_HOST
+      match:
+        context: GATEWAY
+        routeConfiguration:
+          vhost:
+            name: "{{ .Values.domain }}:443"
+      patch:
+        operation: MERGE
+        value:
+          rate_limits:
+            - actions:
+                - masked_remote_address:
+                    v4_prefix_mask_len: 32
+{{- end }}

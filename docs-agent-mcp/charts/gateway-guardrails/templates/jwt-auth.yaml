@@ -1,0 +1,51 @@
+{{- if .Values.sessionAuth.enabled }}
+# Validates session JWTs at the ingress gateway. On its own ("canary" mode)
+# this rejects requests with an INVALID or EXPIRED token but still allows
+# token-less requests; the AuthorizationPolicy below (enforce=true) is what
+# hard-requires a session on the protected paths.
+apiVersion: security.istio.io/v1beta1
+kind: RequestAuthentication
+metadata:
+  name: a2a-session-jwt
+  namespace: {{ .Values.namespaces.istioSystem }}
+  labels:
+    {{- include "gateway-guardrails.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- toYaml .Values.gateway.selector | nindent 6 }}
+  jwtRules:
+    - issuer: {{ .Values.sessionAuth.issuer | quote }}
+      jwksUri: http://{{ include "gateway-guardrails.issuerHost" . }}:8000/.well-known/jwks.json
+      forwardOriginalToken: true
+{{- if .Values.sessionAuth.enforce }}
+---
+# DENY requests to the protected paths that carry no valid session principal.
+# OPTIONS is exempt so CORS preflights (which never carry Authorization)
+# succeed. Host-scoped so knative listeners on the shared pod are unaffected.
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: a2a-require-session
+  namespace: {{ .Values.namespaces.istioSystem }}
+  labels:
+    {{- include "gateway-guardrails.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- toYaml .Values.gateway.selector | nindent 6 }}
+  action: DENY
+  rules:
+    - from:
+        - source:
+            notRequestPrincipals: ["*"]
+      to:
+        - operation:
+            hosts:
+              - {{ .Values.domain | quote }}
+              - "{{ .Values.domain }}:*"
+            paths:
+              {{- toYaml .Values.sessionAuth.protectedPaths | nindent 14 }}
+            notMethods: ["OPTIONS"]
+{{- end }}
+{{- end }}

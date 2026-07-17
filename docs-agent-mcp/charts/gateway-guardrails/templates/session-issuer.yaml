@@ -1,0 +1,70 @@
+{{- if .Values.sessionAuth.enabled }}
+# Anonymous session-token issuer (docs-agent-mcp/session-issuer/).
+# Mints short-lived RS256 JWTs; Istio validates them at the ingress gateway.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: session-issuer
+  namespace: {{ .Values.namespaces.docsAgent }}
+  labels:
+    app: session-issuer
+    {{- include "gateway-guardrails.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: session-issuer
+  template:
+    metadata:
+      labels:
+        app: session-issuer
+    spec:
+      containers:
+        - name: session-issuer
+          image: {{ .Values.sessionAuth.image }}
+          ports:
+            - containerPort: 8000
+          env:
+            - name: SESSION_ISSUER
+              value: {{ .Values.sessionAuth.issuer | quote }}
+            - name: SESSION_TTL_SECONDS
+              value: {{ .Values.sessionAuth.ttlSeconds | quote }}
+            - name: PRIVATE_KEY_PATH
+              value: /keys/private.pem
+          volumeMounts:
+            - name: signing-key
+              mountPath: /keys
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.sessionAuth.resources | nindent 12 }}
+      volumes:
+        - name: signing-key
+          secret:
+            secretName: {{ .Values.sessionAuth.keySecretName }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: session-issuer
+  namespace: {{ .Values.namespaces.docsAgent }}
+  labels:
+    {{- include "gateway-guardrails.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: session-issuer
+  ports:
+    - port: 8000
+      targetPort: 8000
+{{- end }}
