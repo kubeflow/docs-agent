@@ -43,45 +43,58 @@ def download_github_directory(
     headers = {"Authorization": f"token {github_token}"} if github_token else {}
 
     def api_request(url, params=None):
-        max_retries = 3
+        max_retries = 5
+        backoff_seconds = [1, 2, 4, 5, 5]
+        last_error = None
+
         for attempt in range(max_retries):
             try:
                 resp = requests.get(url, params=params, headers=headers)
 
-                if resp.status_code == 403:
-                    remaining = resp.headers.get("X-RateLimit-Remaining", "0")
-                    if remaining == "0":
-                        reset_time = int(resp.headers.get("X-RateLimit-Reset", 0))
-                        wait_time = max(reset_time - int(time.time()), 60)
-                        print(f"Rate limited. Waiting {wait_time}s...")
-                        time.sleep(min(wait_time, 300))
-                        continue
-                    print(f"Forbidden (403) for {url}: {resp.text[:200]}")
-
                 if resp.status_code == 200:
                     return resp.json()
 
-                print(f"API error: HTTP {resp.status_code} for {url}")
-                return None
+                if resp.status_code == 403:
+                    remaining = resp.headers.get("X-RateLimit-Remaining", "0")
+                    if remaining == "0":
+                        print(f"Rate limited for {url}")
+                    else:
+                        print(f"Forbidden (403) for {url}: {resp.text[:200]}")
+                else:
+                    print(f"API error: HTTP {resp.status_code} for {url}")
 
+                last_error = f"HTTP {resp.status_code}"
             except Exception as e:
+                last_error = str(e)
                 print(f"Request failed (attempt {attempt + 1}): {e}")
-                time.sleep(2 ** attempt)
 
-        return None
+            if attempt < max_retries - 1:
+                time.sleep(backoff_seconds[attempt])
+
+        raise RuntimeError(
+            f"GitHub API request failed after {max_retries} retries for {url}: {last_error}"
+        )
 
     def get_files_recursive(url):
         files = []
-        items = api_request(url)
-        if not items or not isinstance(items, list):
-            return files
+        try:
+            items = api_request(url)
+        except RuntimeError:
+            raise RuntimeError(
+                f"Failed to fetch GitHub directory listing: {url}"
+            )
+        if not isinstance(items, list):
+            raise RuntimeError(
+                f"Unexpected GitHub API response while listing: {url}"
+            )
 
         for item in items:
             if item['type'] == 'file' and (item['name'].endswith('.md') or item['name'].endswith('.html')):
                 file_data = api_request(item['url'])
                 if not file_data or 'content' not in file_data:
-                    print(f"Skipping unreadable file: {item['path']}")
-                    continue
+                    raise RuntimeError(
+                        f"Failed to fetch GitHub file content: {item['path']}"
+                    )
                 content = base64.b64decode(file_data['content']).decode('utf-8')
 
                 if item['name'].endswith('.html'):
@@ -569,9 +582,7 @@ def store_milvus(
     current_file_ids = {r["file_unique_id"] for r in records}
 
     # Full rebuild reconciliation: remove Milvus documents that no longer exist
-    # in the GitHub directory being indexed. Without this, deleted or renamed
-    # files leave orphan vectors because the per-run delete only targets IDs
-    # present in the current ingest records.
+    
     if collection_existed and len(collection.indexes) > 0:
         collection.load()
         existing_file_ids = _collect_scoped_file_unique_ids(
