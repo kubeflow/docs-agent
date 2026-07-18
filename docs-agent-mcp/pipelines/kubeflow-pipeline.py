@@ -405,6 +405,7 @@ def store_milvus(
     repo_name: str,
     directory_path: str,
 ):
+   
     from pymilvus import connections, utility, FieldSchema, CollectionSchema, DataType, Collection
     import json
     import os
@@ -557,6 +558,13 @@ def store_milvus(
                 "vector": record["embedding"],
                 "last_updated": timestamp
             })
+
+    if not records:
+        raise RuntimeError(
+            "No records were produced during ingestion. "
+            "Aborting before Milvus reconciliation to prevent "
+            "accidental deletion of existing documents."
+        )
 
     current_file_ids = {r["file_unique_id"] for r in records}
 
