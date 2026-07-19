@@ -8,7 +8,7 @@ try:
 except ImportError:  # pragma: no cover - optional at compile time
     k8s = None
 
-from utils import DOCS_COLLECTION
+from utils import DEFAULT_EMBEDDING_BATCH_SIZE, DOCS_COLLECTION
 
 @dsl.component(
     base_image="docker.io/library/python:3.9",
@@ -171,12 +171,8 @@ def delete_old_vectors(
 
 
 @dsl.component(
-    base_image="docker.io/pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime",
-    packages_to_install=[
-        "sentence-transformers==3.3.1",
-        "transformers==4.44.2",
-        "langchain-text-splitters",
-    ],
+    base_image="python:3.11-slim",
+    packages_to_install=["requests", "langchain-text-splitters"],
 )
 def chunk_and_embed_incremental(
     github_data: dsl.Input[dsl.Dataset],
@@ -184,19 +180,18 @@ def chunk_and_embed_incremental(
     base_url: str,
     chunk_size: int,
     chunk_overlap: int,
+    embeddings_service_url: str,
+    embedding_batch_size: int,
     embedded_data: dsl.Output[dsl.Dataset]
 ):
     import json
     import os
     import re
-    import torch
-    from sentence_transformers import SentenceTransformer
+    import requests
     from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    model = SentenceTransformer('sentence-transformers/all-mpnet-base-v2', device=device)
-    print(f"Model loaded on {device}")
-    EMBED_BATCH_SIZE = 32
+    print(f"Using embeddings service: {embeddings_service_url}")
+    embedding_batch_size = max(1, int(embedding_batch_size))
 
     records = []
 
@@ -259,13 +254,7 @@ def chunk_and_embed_incremental(
 
             print(f"File: {file_data['path']} -> {len(chunks)} chunks (avg: {sum(len(c) for c in chunks)/len(chunks):.0f} chars)")
 
-            # Create embeddings in batches to avoid per-chunk model overhead.
-            embeddings = model.encode(
-                chunks,
-                batch_size=EMBED_BATCH_SIZE,
-                show_progress_bar=False,
-            )
-            for chunk_idx, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+            for chunk_idx, chunk in enumerate(chunks):
                 records.append({
                     'file_unique_id': file_unique_id,
                     'repo_name': repo_name,
@@ -274,10 +263,27 @@ def chunk_and_embed_incremental(
                     'citation_url': citation_url[:1024],
                     'chunk_index': chunk_idx,
                     'content_text': chunk[:2000],
-                    'embedding': embedding.tolist()
                 })
 
-    print(f"Created {len(records)} total chunks for incremental update")
+    print(f"Created {len(records)} total chunks for incremental update; requesting embeddings from TEI service...")
+
+    # TEI all-mpnet-base-v2 rejects any input >=384 tokens (~1000 chars).
+    max_tei_chars = 1000
+    for i in range(0, len(records), embedding_batch_size):
+        batch = records[i:i + embedding_batch_size]
+        texts = [r["content_text"][:max_tei_chars] for r in batch]
+        response = requests.post(
+            embeddings_service_url,
+            json={"inputs": texts},
+            headers={"Content-Type": "application/json"},
+            timeout=120,
+        )
+        response.raise_for_status()
+        vectors = response.json()
+        for idx, vector in enumerate(vectors):
+            batch[idx]["embedding"] = vector
+
+    print(f"Embedded {len(records)} chunks")
 
     with open(embedded_data.path, 'w', encoding='utf-8') as f:
         for record in records:
@@ -404,6 +410,10 @@ def github_rag_incremental_pipeline(
     base_url: str = "https://www.kubeflow.org/docs",
     chunk_size: int = 1200,
     chunk_overlap: int = 100,
+    embeddings_service_url: str = (
+        "http://embeddings-service-predictor.ml-infra.svc.cluster.local/embed"
+    ),
+    embedding_batch_size: int = DEFAULT_EMBEDDING_BATCH_SIZE,
     milvus_host: str = "milvus-milvus.ml-infra.svc.cluster.local",
     milvus_port: str = "19530",
     collection_name: str = DOCS_COLLECTION
@@ -441,7 +451,9 @@ def github_rag_incremental_pipeline(
         repo_name=repo_name,
         base_url=base_url,
         chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap
+        chunk_overlap=chunk_overlap,
+        embeddings_service_url=embeddings_service_url,
+        embedding_batch_size=embedding_batch_size,
     )
     
     # Step 4: Store new vectors in Milvus (after deletion is complete)
