@@ -10,7 +10,17 @@ from pathlib import Path
 PIPELINES_DIR = Path(__file__).parent.parent / "docs-agent-mcp" / "pipelines"
 sys.path.insert(0, str(PIPELINES_DIR))
 
-from issues_utils import parse_issue_metadata, build_metadata_prefix, split_issue_into_chunks
+from issues_utils import (
+    build_issue_record,
+    build_metadata_prefix,
+    format_issue_markdown,
+    has_structured_metadata,
+    issue_content_segments,
+    parse_issue_metadata,
+    resolve_issue_metadata,
+    split_issue_into_chunks,
+    split_issue_record_into_chunks,
+)
 
 
 # --- Sample content fixtures ---
@@ -60,9 +70,34 @@ NO_LABELS_CONTENT = """# Feature request
 
 Please add support for caching."""
 
+SAMPLE_STRUCTURED_RECORD = build_issue_record(
+    repo_name="kubeflow/kubeflow",
+    repo_short_name="kubeflow",
+    issue_number=42,
+    title="KServe model not loading",
+    url="https://github.com/kubeflow/kubeflow/issues/42",
+    labels="kind/bug, area/kserve",
+    state="open",
+    created_at="2026-01-15",
+    updated_at="2026-01-20",
+    body=("The model fails to load when using GPU. I've tried multiple configurations\nbut keep getting OOM errors."),
+    comments=[
+        {
+            "author": "alice",
+            "created_at": "2026-01-16",
+            "body": "Have you tried setting memory limits in your InferenceService spec?",
+        },
+        {
+            "author": "bob",
+            "created_at": "2026-01-17",
+            "body": "Fixed by upgrading KServe to v0.12. The GPU memory allocation was improved.",
+        },
+    ],
+)
+
 
 class TestParseIssueMetadata:
-    """Tests for parse_issue_metadata."""
+    """Tests for parse_issue_metadata (legacy markdown regex path)."""
 
     def test_extracts_title(self):
         meta = parse_issue_metadata(SAMPLE_ISSUE_CONTENT)
@@ -105,6 +140,80 @@ class TestParseIssueMetadata:
         assert meta["title"] == ""
         assert meta["repo_name"] == ""
         assert meta["citation_url"] == ""
+
+
+class TestStructuredIssueRecord:
+    """Tests for machine-readable download_github_issues JSONL records."""
+
+    def test_build_issue_record_includes_markdown_and_structured_fields(self):
+        record = SAMPLE_STRUCTURED_RECORD
+        assert record["content"].startswith("# KServe model not loading")
+        assert "**Repository:** kubeflow/kubeflow" in record["content"]
+        assert record["title"] == "KServe model not loading"
+        assert record["repo_name"] == "kubeflow/kubeflow"
+        assert record["issue_number"] == 42
+        assert record["issue_state"] == "open"
+        assert record["issue_labels"] == "kind/bug, area/kserve"
+        assert record["url"] == "https://github.com/kubeflow/kubeflow/issues/42"
+        assert record["body"].startswith("The model fails")
+        assert len(record["comments"]) == 2
+        assert record["comments"][0]["author"] == "alice"
+
+    def test_format_issue_markdown_matches_legacy_layout(self):
+        md = format_issue_markdown(
+            title="Typo in docs",
+            repo_name="kubeflow/website",
+            issue_number=99,
+            url="https://github.com/kubeflow/website/issues/99",
+            labels="kind/docs",
+            state="closed",
+            created_at="2026-02-01",
+            updated_at="2026-02-02",
+            body="There is a typo on the installation page.",
+            comments=[],
+        )
+        assert md == SHORT_ISSUE_CONTENT
+
+    def test_has_structured_metadata(self):
+        assert has_structured_metadata(SAMPLE_STRUCTURED_RECORD) is True
+        assert has_structured_metadata({"content": SAMPLE_ISSUE_CONTENT}) is False
+
+    def test_resolve_prefers_structured_fields_over_markdown(self):
+        # Intentionally corrupt content; structured fields must win
+        record = dict(SAMPLE_STRUCTURED_RECORD)
+        record["content"] = "garbage that would fail regex parsing"
+        meta = resolve_issue_metadata(record)
+        assert meta["title"] == "KServe model not loading"
+        assert meta["issue_number"] == 42
+        assert meta["citation_url"] == "https://github.com/kubeflow/kubeflow/issues/42"
+
+    def test_resolve_falls_back_to_markdown_regex(self):
+        legacy = {"content": SAMPLE_ISSUE_CONTENT, "url": "ignored-when-parsed-from-md"}
+        meta = resolve_issue_metadata(legacy)
+        assert meta["title"] == "KServe model not loading"
+        assert meta["issue_number"] == 42
+        assert meta["citation_url"] == "https://github.com/kubeflow/kubeflow/issues/42"
+
+    def test_resolve_warns_when_legacy_parse_empty(self, capsys):
+        meta = resolve_issue_metadata({"content": "no metadata here"})
+        assert meta["issue_number"] == 0
+        captured = capsys.readouterr()
+        assert "WARNING: Failed to parse GitHub issue metadata" in captured.out
+
+    def test_issue_content_segments_from_structured_comments(self):
+        segments = issue_content_segments(SAMPLE_STRUCTURED_RECORD)
+        assert len(segments) == 3  # header+body, comment1, comment2
+        assert "KServe model not loading" in segments[0]
+        assert "Comment by @alice" in segments[1]
+        assert "Comment by @bob" in segments[2]
+
+    def test_split_issue_record_uses_structured_segments(self):
+        meta = resolve_issue_metadata(SAMPLE_STRUCTURED_RECORD)
+        prefix = build_metadata_prefix(meta)
+        chunks = split_issue_record_into_chunks(SAMPLE_STRUCTURED_RECORD, prefix, chunk_size=300)
+        assert len(chunks) > 1
+        for chunk in chunks:
+            assert chunk.startswith("[Issue #42]")
 
 
 class TestBuildMetadataPrefix:
