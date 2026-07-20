@@ -51,14 +51,19 @@ spec:
   - istio-system/kagent-gateway
   http:
   - corsPolicy:
+      # Phase 0 guardrail: lock embedding to the published chatbot origin(s)
+      # instead of the previous wide-open `regex: ".*"`.
       allowOrigins:
-      - regex: ".*"
+      - exact: "https://kubeflowdemochatbot.netlify.app"
       allowMethods:
       - POST
       - GET
       - OPTIONS
       allowHeaders:
-      - "*"
+      - content-type
+      maxAge: "24h"
+    # Cap slow/stuck upstream calls (LLM) so a hung request can't pin a worker.
+    timeout: 30s
     route:
     - destination:
         host: kagent-ui.docs-agent.svc.cluster.local
