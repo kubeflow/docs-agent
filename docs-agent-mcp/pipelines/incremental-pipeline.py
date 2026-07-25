@@ -4,6 +4,10 @@ from kfp.dsl import *
 from typing import *
 
 from utils import DEFAULT_EMBEDDING_BATCH_SIZE, DOCS_COLLECTION
+try:
+    import kfp.kubernetes as k8s
+except ImportError:  # pragma: no cover - optional at compile time
+    k8s = None
 
 @dsl.component(
     base_image="docker.io/library/python:3.9",
@@ -100,10 +104,22 @@ def delete_old_vectors(
 ):
     from pymilvus import connections, Collection
     import json
-    
+    import os
+
+    milvus_user = os.environ.get("MILVUS_USER", "root")
+    milvus_password = os.environ.get("MILVUS_PASSWORD", "")
+    if not milvus_password:
+        raise RuntimeError("MILVUS_PASSWORD must be set via pipeline secret (not in source code)")
+
     # Connect to Milvus
-    connections.connect("default", host=milvus_host, port=milvus_port)
-    
+    connections.connect(
+        "default",
+        host=milvus_host,
+        port=milvus_port,
+        user=milvus_user,
+        password=milvus_password,
+    )
+
     # Parse file paths
     try:
         file_paths_list = json.loads(file_paths)
@@ -285,9 +301,21 @@ def store_milvus_incremental(
 ):
     from pymilvus import connections, utility, FieldSchema, CollectionSchema, DataType, Collection
     import json
+    import os
     from datetime import datetime
 
-    connections.connect("default", host=milvus_host, port=milvus_port)
+    milvus_user = os.environ.get("MILVUS_USER", "root")
+    milvus_password = os.environ.get("MILVUS_PASSWORD", "")
+    if not milvus_password:
+        raise RuntimeError("MILVUS_PASSWORD must be set via pipeline secret (not in source code)")
+
+    connections.connect(
+        "default",
+        host=milvus_host,
+        port=milvus_port,
+        user=milvus_user,
+        password=milvus_password,
+    )
 
     # Check if collection exists, if not create it
     if not utility.has_collection(collection_name):
@@ -397,7 +425,17 @@ def github_rag_incremental_pipeline(
         milvus_port=milvus_port,
         collection_name=collection_name
     )
-    
+
+    if k8s is not None:
+        k8s.use_secret_as_env(
+            delete_task,
+            secret_name="milvus-auth",
+            secret_key_to_env={
+                "MILVUS_USER": "MILVUS_USER",
+                "MILVUS_PASSWORD": "MILVUS_PASSWORD",
+            },
+        )
+
     # Step 2: Download only the changed files
     download_task = download_specific_files(
         repo_owner=repo_owner,
@@ -425,6 +463,16 @@ def github_rag_incremental_pipeline(
         collection_name=collection_name
     )
     
+    if k8s is not None:
+        k8s.use_secret_as_env(
+            store_task,
+            secret_name="milvus-auth",
+            secret_key_to_env={
+                "MILVUS_USER": "MILVUS_USER",
+                "MILVUS_PASSWORD": "MILVUS_PASSWORD",
+            },
+        )
+
     # Ensure deletion happens before insertion
     store_task.after(delete_task)
 
