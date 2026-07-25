@@ -10,7 +10,12 @@ from pathlib import Path
 PIPELINES_DIR = Path(__file__).parent.parent / "docs-agent-mcp" / "pipelines"
 sys.path.insert(0, str(PIPELINES_DIR))
 
-from issues_utils import parse_issue_metadata, build_metadata_prefix, split_issue_into_chunks
+from issues_utils import (
+    MAX_TEI_INPUT_CHARS,
+    parse_issue_metadata,
+    build_metadata_prefix,
+    split_issue_into_chunks,
+)
 
 
 # --- Sample content fixtures ---
@@ -106,6 +111,14 @@ class TestParseIssueMetadata:
         assert meta["repo_name"] == ""
         assert meta["citation_url"] == ""
 
+    def test_warns_when_all_fields_empty(self, capsys):
+        parse_issue_metadata("Just plain text")
+        assert "WARNING: Failed to parse GitHub issue metadata" in capsys.readouterr().err
+
+    def test_no_warning_when_fields_present(self, capsys):
+        parse_issue_metadata(SAMPLE_ISSUE_CONTENT)
+        assert capsys.readouterr().err == ""
+
 
 class TestBuildMetadataPrefix:
     """Tests for build_metadata_prefix."""
@@ -198,3 +211,15 @@ class TestSplitIssueIntoChunks:
     def test_handles_empty_content(self):
         chunks = split_issue_into_chunks("", "prefix\n\n", chunk_size=1000)
         assert len(chunks) == 1
+
+    def test_clamps_to_max_tei_input_chars_even_with_larger_chunk_size(self):
+        """Regression test: a chunk_size above MAX_TEI_INPUT_CHARS must not produce
+        chunks longer than what TEI actually embeds, or the tail of the chunk is
+        silently invisible to semantic search (see issues-pipeline.py chunk_and_embed_issues).
+        """
+        meta = parse_issue_metadata(SAMPLE_ISSUE_CONTENT)
+        prefix = build_metadata_prefix(meta)
+        long_body = SAMPLE_ISSUE_CONTENT + ("\n\nMore detail. " * 200)
+        chunks = split_issue_into_chunks(long_body, prefix, chunk_size=1500)
+        for chunk in chunks:
+            assert len(chunk) <= MAX_TEI_INPUT_CHARS + 100
