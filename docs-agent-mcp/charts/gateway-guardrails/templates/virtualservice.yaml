@@ -1,0 +1,23 @@
+{{- if .Values.gateway.enabled }}
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: kagent-ui-routing
+  namespace: {{ .Values.namespaces.docsAgent }}
+  labels:
+    {{- include "gateway-guardrails.labels" . | nindent 4 }}
+spec:
+  hosts:
+    - {{ .Values.domain | quote }}
+  gateways:
+    - {{ .Values.namespaces.istioSystem }}/kagent-gateway
+  http:
+    - name: kagent-ui
+      {{- include "gateway-guardrails.corsPolicy" . | nindent 6 }}
+      timeout: {{ .Values.routing.timeout }}
+      route:
+        - destination:
+            host: {{ .Values.routing.uiService }}.{{ .Values.namespaces.docsAgent }}.svc.cluster.local
+            port:
+              number: {{ .Values.routing.uiPort }}
+{{- end }}

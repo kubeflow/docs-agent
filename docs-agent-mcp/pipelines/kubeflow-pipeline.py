@@ -120,14 +120,17 @@ def download_github_issues(
     issues_data: dsl.Output[dsl.Dataset]
 ):
     """Fetch GitHub issues and comments from multiple repos for RAG indexing.
-    
+
+    Each JSONL record carries human-readable markdown (`content`) alongside
+    machine-readable fields (title, repo_name, issue_number, body, comments, …).
+
     Args:
         repos: Comma-separated list of repos (e.g., "kubeflow/kubeflow,kubeflow/pipelines")
         labels: Comma-separated labels to filter (e.g., "kind/bug,kind/question")
         state: Issue state - "open", "closed", or "all"
         max_issues_per_repo: Maximum issues to fetch per repository
         github_token: GitHub personal access token for API authentication
-        issues_data: Output dataset path
+        issues_data: Output dataset path (JSONL)
     """
     import requests
     import json
@@ -179,9 +182,9 @@ def download_github_issues(
         return None
 
     def fetch_comments(owner, name, issue_number):
-        """Fetch all comments for a single issue."""
+        """Fetch all comments for a single issue as structured dicts."""
         comments_url = f"https://api.github.com/repos/{owner}/{name}/issues/{issue_number}/comments"
-        comments_text = ""
+        comments_list = []
         page = 1
         
         while True:
@@ -190,16 +193,35 @@ def download_github_issues(
                 break
                 
             for comment in comments:
-                author = comment.get("user", {}).get("login", "unknown")
-                created = comment.get("created_at", "")[:10]
-                body = comment.get("body", "") or ""
-                comments_text += f"\n\n---\n**Comment by @{author}** ({created}):\n{body}"
+                comments_list.append({
+                    "author": comment.get("user", {}).get("login", "unknown"),
+                    "created_at": (comment.get("created_at", "") or "")[:10],
+                    "body": comment.get("body", "") or "",
+                })
             
             if len(comments) < 100:
                 break
             page += 1
         
-        return comments_text
+        return comments_list
+
+    def format_issue_markdown(title, repo_name, issue_number, url, labels_str, issue_state,
+                              created_at, updated_at, body, comments):
+        content = f"# {title}\n\n"
+        content += f"**Repository:** {repo_name}\n"
+        content += f"**Issue:** #{issue_number}\n"
+        content += f"**URL:** {url}\n"
+        content += f"**Labels:** {labels_str}\n"
+        content += f"**State:** {issue_state}\n"
+        content += f"**Created:** {created_at}\n"
+        content += f"**Updated:** {updated_at}\n\n"
+        content += body or ""
+        for comment in comments:
+            content += (
+                f"\n\n---\n**Comment by @{comment['author']}** "
+                f"({comment['created_at']}):\n{comment['body']}"
+            )
+        return content
 
     for repo in repos.split(","):
         repo = repo.strip()
@@ -234,28 +256,34 @@ def download_github_issues(
                 issue_url = issue.get("html_url", "")
                 created_at = issue.get("created_at", "")[:10]
                 updated_at = issue.get("updated_at", "")[:10]
+                title = issue.get("title", "") or ""
+                issue_number = int(issue["number"])
+                issue_state = issue.get("state", "") or ""
+                body = issue.get("body", "") or ""
 
-                # Build issue content with full metadata
-                content = f"# {issue['title']}\n\n"
-                content += f"**Repository:** {repo}\n"
-                content += f"**Issue:** #{issue['number']}\n"
-                content += f"**URL:** {issue_url}\n"
-                content += f"**Labels:** {labels_str}\n"
-                content += f"**State:** {issue['state']}\n"
-                content += f"**Created:** {created_at}\n"
-                content += f"**Updated:** {updated_at}\n\n"
-                content += issue.get("body", "") or ""
-
-                # Fetch and append comments
+                comments = []
                 if issue.get("comments", 0) > 0:
-                    comments = fetch_comments(owner, name, issue["number"])
-                    content += comments
+                    comments = fetch_comments(owner, name, issue_number)
+
+                content = format_issue_markdown(
+                    title, repo, issue_number, issue_url, labels_str, issue_state,
+                    created_at, updated_at, body, comments,
+                )
 
                 repo_issues.append({
-                    "path": f"issues/{name}/{issue['number']}",
+                    "path": f"issues/{name}/{issue_number}",
                     "content": content,
-                    "file_name": f"issue-{name}-{issue['number']}.md",
-                    "url": issue_url
+                    "file_name": f"issue-{name}-{issue_number}.md",
+                    "url": issue_url,
+                    "title": title,
+                    "repo_name": repo,
+                    "issue_number": issue_number,
+                    "issue_state": issue_state,
+                    "issue_labels": labels_str,
+                    "created_at": created_at,
+                    "updated_at": updated_at,
+                    "body": body,
+                    "comments": comments,
                 })
 
                 if len(repo_issues) >= max_issues_per_repo:

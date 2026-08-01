@@ -1,0 +1,64 @@
+# =============================================================================
+# Local rate limit on the chatbot HTTPS listener (Phase 0, demo-ready).
+#
+# Applies a single 60 requests / minute token bucket to the port-443 (HTTPS)
+# listener of the shared istio-ingressgateway. Port 443 on this gateway serves
+# only the chatbot (agent.santhoshtoorpu.com via kagent-gateway).
+#
+# IMPORTANT: the ingress pod is shared — knative-ingress-gateway and
+# knative-local-gateway also select `istio: ingressgateway` (agent->LLM rides
+# knative-local). The `portNumber: 443` match below keeps this cap OFF the
+# knative / internal LLM paths (which use port 80 / 8081).
+#
+# Note: local rate limit is per gateway pod. With >1 ingress replica the effective
+# cap is N * 60/min. The ingress currently runs 1 replica; per-IP fairness is
+# handled separately by the global rate limit service (see perip-*.yaml).
+# =============================================================================
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: a2a-global-ratelimit
+  namespace: istio-system
+spec:
+  workloadSelector:
+    labels:
+      istio: ingressgateway
+  configPatches:
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          portNumber: 443
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+              subFilter:
+                name: envoy.filters.http.router
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.local_ratelimit
+          typed_config:
+            "@type": type.googleapis.com/udpa.type.v1.TypedStruct
+            type_url: type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+            value:
+              stat_prefix: a2a_http_local_rate_limiter
+              token_bucket:
+                max_tokens: 60
+                tokens_per_fill: 60
+                fill_interval: 60s
+              filter_enabled:
+                runtime_key: local_rate_limit_enabled
+                default_value:
+                  numerator: 100
+                  denominator: HUNDRED
+              filter_enforced:
+                runtime_key: local_rate_limit_enforced
+                default_value:
+                  numerator: 100
+                  denominator: HUNDRED
+              response_headers_to_add:
+                - append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                  header:
+                    key: x-ratelimit-scope
+                    value: global

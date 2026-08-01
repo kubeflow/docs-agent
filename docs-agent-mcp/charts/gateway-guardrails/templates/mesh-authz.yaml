@@ -1,0 +1,189 @@
+{{- if .Values.meshPolicies.enabled }}
+# =============================================================================
+# RAG-stack AuthorizationPolicies (migrated from terraform istio_policies.tf).
+# Default mesh policy is deny-all where sidecars are present; these explicitly
+# allow the traffic flows the stack needs.
+# =============================================================================
+
+# --- Milvus internal traffic (ml-infra) ---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-milvus-standalone
+  namespace: {{ .Values.namespaces.mlInfra }}
+  labels:
+    {{- include "gateway-guardrails.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: milvus
+      component: standalone
+  action: ALLOW
+  rules:
+    - to:
+        - operation:
+            ports: ["19530", "9091"]
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-milvus-etcd
+  namespace: {{ .Values.namespaces.mlInfra }}
+  labels:
+    {{- include "gateway-guardrails.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: etcd
+  action: ALLOW
+  rules:
+    - to:
+        - operation:
+            ports: ["2379", "2380"]
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-milvus-minio
+  namespace: {{ .Values.namespaces.mlInfra }}
+  labels:
+    {{- include "gateway-guardrails.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app: minio
+  action: ALLOW
+  rules:
+    - to:
+        - operation:
+            ports: ["9000", "9001"]
+---
+# --- Cross-namespace traffic ---
+# docs-agent/mcp-server -> ml-infra/milvus (vector DB queries)
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-mcp-to-milvus
+  namespace: {{ .Values.namespaces.mlInfra }}
+  labels:
+    {{- include "gateway-guardrails.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: milvus
+      component: standalone
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            namespaces: ["{{ .Values.namespaces.docsAgent }}"]
+      to:
+        - operation:
+            ports: ["19530"]
+---
+# docs-agent/kagent -> ml-infra/qwen-llm (LLM inference)
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-kagent-to-llm
+  namespace: {{ .Values.namespaces.mlInfra }}
+  labels:
+    {{- include "gateway-guardrails.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      serving.kserve.io/inferenceservice: qwen-llm
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            namespaces: ["{{ .Values.namespaces.docsAgent }}", "{{ .Values.namespaces.istioSystem }}"]
+      to:
+        - operation:
+            ports: ["8080", "8012"]
+---
+# docs-agent/kagent -> docs-agent/mcp-server (MCP tool calls)
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-kagent-to-mcp
+  namespace: {{ .Values.namespaces.docsAgent }}
+  labels:
+    {{- include "gateway-guardrails.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app: mcp-kubeflow-docs
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            namespaces: ["{{ .Values.namespaces.docsAgent }}"]
+      to:
+        - operation:
+            ports: ["8000"]
+---
+# KFP pipeline pods (kubeflow ns) -> ml-infra/milvus (RAG ingestion)
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-kubeflow-to-milvus
+  namespace: {{ .Values.namespaces.mlInfra }}
+  labels:
+    {{- include "gateway-guardrails.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: milvus
+      component: standalone
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            namespaces: ["{{ .Values.namespaces.kubeflow }}"]
+      to:
+        - operation:
+            ports: ["19530"]
+---
+# docs-agent/mcp-server -> ml-infra/embeddings-service (query-time embeddings)
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-mcp-to-embeddings
+  namespace: {{ .Values.namespaces.mlInfra }}
+  labels:
+    {{- include "gateway-guardrails.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      serving.kserve.io/inferenceservice: embeddings-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            namespaces: ["{{ .Values.namespaces.docsAgent }}", "{{ .Values.namespaces.istioSystem }}"]
+      to:
+        - operation:
+            ports: ["8080", "80", "8012"]
+---
+# kubeflow/pipeline pods -> ml-infra/embeddings-service (index-time embeddings)
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-kubeflow-to-embeddings
+  namespace: {{ .Values.namespaces.mlInfra }}
+  labels:
+    {{- include "gateway-guardrails.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      serving.kserve.io/inferenceservice: embeddings-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            namespaces: ["{{ .Values.namespaces.kubeflow }}", "{{ .Values.namespaces.istioSystem }}"]
+      to:
+        - operation:
+            ports: ["8080", "80", "8012"]
+{{- end }}

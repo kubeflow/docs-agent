@@ -1,0 +1,81 @@
+# =============================================================================
+# Wires the Istio ingress gateway to the global ratelimit service for per-IP
+# limiting. Requires perip-ratelimit-service.yaml AND real client IP at the
+# gateway (see README prerequisites).
+#
+# - CLUSTER patch: defines the gRPC cluster pointing at the ratelimit service.
+# - HTTP_FILTER patch: inserts the ratelimit filter (domain "a2a").
+# - VIRTUAL_HOST patch: emits a masked_remote_address (/32) descriptor per request.
+#
+# failure_mode_deny: false → if the ratelimit service is down, requests are
+# allowed (fail-open). The global local rate limit still caps total volume.
+# =============================================================================
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: a2a-perip-ratelimit
+  namespace: istio-system
+spec:
+  workloadSelector:
+    labels:
+      istio: ingressgateway
+  configPatches:
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+              subFilter:
+                name: envoy.filters.http.router
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.ratelimit
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.ratelimit.v3.RateLimit
+            domain: a2a
+            failure_mode_deny: false
+            timeout: 0.1s
+            rate_limit_service:
+              transport_api_version: V3
+              grpc_service:
+                envoy_grpc:
+                  cluster_name: outbound_ratelimit_cluster
+
+    - applyTo: CLUSTER
+      match:
+        cluster:
+          service: ratelimit.istio-system.svc.cluster.local
+      patch:
+        operation: ADD
+        value:
+          name: outbound_ratelimit_cluster
+          type: STRICT_DNS
+          connect_timeout: 1s
+          lb_policy: ROUND_ROBIN
+          http2_protocol_options: {}
+          load_assignment:
+            cluster_name: outbound_ratelimit_cluster
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address:
+                          address: ratelimit.istio-system.svc.cluster.local
+                          port_value: 8081
+
+    - applyTo: VIRTUAL_HOST
+      match:
+        context: GATEWAY
+        routeConfiguration:
+          vhost:
+            name: "agent.santhoshtoorpu.com:443"
+      patch:
+        operation: MERGE
+        value:
+          rate_limits:
+            - actions:
+                - masked_remote_address:
+                    v4_prefix_mask_len: 32

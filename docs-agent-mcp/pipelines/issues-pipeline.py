@@ -1,11 +1,16 @@
 """KFP pipeline for ingesting GitHub issues into Milvus for RAG.
 
-Wires the existing download_github_issues component into a complete pipeline
-with issues-aware chunking and a dedicated issues_rag Milvus collection.
+Wires download_github_issues into a complete pipeline with issues-aware
+chunking and a dedicated issues_rag Milvus collection.
 
-Components are self-contained per KFP convention. The download_github_issues
-component is copied from kubeflow-pipeline.py (lines 67-213) since KFP
-@dsl.component functions must be self-contained with all imports inside.
+download_github_issues emits JSONL with both human-readable markdown
+(`content`) and machine-readable fields (title, repo_name, issue_number,
+body, comments, …). chunk_and_embed_issues prefers the structured fields
+and only regex-parses markdown as a legacy fallback.
+
+Components are self-contained per KFP convention (KFP @dsl.component
+functions cannot import sibling modules). Keep the mirrored helpers in
+issues_utils.py in sync for unit tests.
 """
 
 import kfp
@@ -34,13 +39,19 @@ def download_github_issues(
 ):
     """Fetch GitHub issues and comments from multiple repos for RAG indexing.
 
+    Each JSONL record carries:
+    - content: human-readable markdown (for RAG embedding text)
+    - structured fields (title, repo_name, issue_number, issue_state,
+      issue_labels, body, comments, …): machine-readable metadata so
+      downstream steps do not need to regex-parse markdown
+
     Args:
         repos: Comma-separated list of repos (e.g., "kubeflow/kubeflow,kubeflow/pipelines")
         labels: Comma-separated labels to filter (e.g., "kind/bug,kind/question")
         state: Issue state - "open", "closed", or "all"
         max_issues_per_repo: Maximum issues to fetch per repository
         github_token: GitHub personal access token for API authentication
-        issues_data: Output dataset path
+        issues_data: Output dataset path (JSONL)
     """
     import requests
     import json
@@ -92,9 +103,9 @@ def download_github_issues(
         return None
 
     def fetch_comments(owner, name, issue_number):
-        """Fetch all comments for a single issue."""
+        """Fetch all comments for a single issue as structured dicts."""
         comments_url = f"https://api.github.com/repos/{owner}/{name}/issues/{issue_number}/comments"
-        comments_text = ""
+        comments_list = []
         page = 1
 
         while True:
@@ -103,16 +114,36 @@ def download_github_issues(
                 break
 
             for comment in comments:
-                author = comment.get("user", {}).get("login", "unknown")
-                created = comment.get("created_at", "")[:10]
-                body = comment.get("body", "") or ""
-                comments_text += f"\n\n---\n**Comment by @{author}** ({created}):\n{body}"
+                comments_list.append({
+                    "author": comment.get("user", {}).get("login", "unknown"),
+                    "created_at": (comment.get("created_at", "") or "")[:10],
+                    "body": comment.get("body", "") or "",
+                })
 
             if len(comments) < 100:
                 break
             page += 1
 
-        return comments_text
+        return comments_list
+
+    def format_issue_markdown(title, repo_name, issue_number, url, labels_str, issue_state,
+                              created_at, updated_at, body, comments):
+        """Human-readable markdown kept alongside structured fields."""
+        content = f"# {title}\n\n"
+        content += f"**Repository:** {repo_name}\n"
+        content += f"**Issue:** #{issue_number}\n"
+        content += f"**URL:** {url}\n"
+        content += f"**Labels:** {labels_str}\n"
+        content += f"**State:** {issue_state}\n"
+        content += f"**Created:** {created_at}\n"
+        content += f"**Updated:** {updated_at}\n\n"
+        content += body or ""
+        for comment in comments:
+            content += (
+                f"\n\n---\n**Comment by @{comment['author']}** "
+                f"({comment['created_at']}):\n{comment['body']}"
+            )
+        return content
 
     for repo in repos.split(","):
         repo = repo.strip()
@@ -147,28 +178,35 @@ def download_github_issues(
                 issue_url = issue.get("html_url", "")
                 created_at = issue.get("created_at", "")[:10]
                 updated_at = issue.get("updated_at", "")[:10]
+                title = issue.get("title", "") or ""
+                issue_number = int(issue["number"])
+                issue_state = issue.get("state", "") or ""
+                body = issue.get("body", "") or ""
 
-                # Build issue content with full metadata
-                content = f"# {issue['title']}\n\n"
-                content += f"**Repository:** {repo}\n"
-                content += f"**Issue:** #{issue['number']}\n"
-                content += f"**URL:** {issue_url}\n"
-                content += f"**Labels:** {labels_str}\n"
-                content += f"**State:** {issue['state']}\n"
-                content += f"**Created:** {created_at}\n"
-                content += f"**Updated:** {updated_at}\n\n"
-                content += issue.get("body", "") or ""
-
-                # Fetch and append comments
+                comments = []
                 if issue.get("comments", 0) > 0:
-                    comments = fetch_comments(owner, name, issue["number"])
-                    content += comments
+                    comments = fetch_comments(owner, name, issue_number)
 
+                content = format_issue_markdown(
+                    title, repo, issue_number, issue_url, labels_str, issue_state,
+                    created_at, updated_at, body, comments,
+                )
+
+                # Machine-readable fields live alongside human-readable content
                 repo_issues.append({
-                    "path": f"issues/{name}/{issue['number']}",
+                    "path": f"issues/{name}/{issue_number}",
                     "content": content,
-                    "file_name": f"issue-{name}-{issue['number']}.md",
-                    "url": issue_url
+                    "file_name": f"issue-{name}-{issue_number}.md",
+                    "url": issue_url,
+                    "title": title,
+                    "repo_name": repo,
+                    "issue_number": issue_number,
+                    "issue_state": issue_state,
+                    "issue_labels": labels_str,
+                    "created_at": created_at,
+                    "updated_at": updated_at,
+                    "body": body,
+                    "comments": comments,
                 })
 
                 if len(repo_issues) >= max_issues_per_repo:
@@ -201,9 +239,10 @@ def chunk_and_embed_issues(
     """Chunk GitHub issues at comment boundaries and generate embeddings.
 
     Chunking strategy:
-    - Parse metadata (repo, issue number, state, labels, URL) from content
+    - Prefer machine-readable fields from download_github_issues JSONL
+      (title/repo/issue_number/…); fall back to regex on markdown content
     - Prepend a metadata prefix to every chunk for self-contained retrieval
-    - Split at comment boundaries (--- separators) first
+    - Split on structured body/comments when present, else --- separators
     - Subdivide oversized segments with RecursiveCharacterTextSplitter
     - Short issues (body + comments < chunk_size) become a single chunk
     """
@@ -215,8 +254,8 @@ def chunk_and_embed_issues(
     print(f"Using embeddings service: {embeddings_service_url}")
     embedding_batch_size = max(1, int(embedding_batch_size))
 
-    def parse_metadata(content):
-        """Extract structured metadata from issue content."""
+    def parse_metadata_from_markdown(content):
+        """Legacy fallback: regex-parse human-readable markdown content."""
         title_match = re.search(r'^#\s+(.+)', content, re.MULTILINE)
         repo_match = re.search(r'\*\*Repository:\*\*\s*(.+)', content)
         number_match = re.search(r'\*\*Issue:\*\*\s*#(\d+)', content)
@@ -232,6 +271,44 @@ def chunk_and_embed_issues(
             "citation_url": url_match.group(1).strip() if url_match else "",
         }
 
+    def has_structured_metadata(issue):
+        if "issue_number" in issue and issue.get("issue_number") not in (None, ""):
+            return True
+        return bool(issue.get("title") or issue.get("repo_name") or issue.get("issue_state"))
+
+    def resolve_metadata(issue):
+        """Prefer structured JSON fields; fall back to markdown regex."""
+        if has_structured_metadata(issue):
+            try:
+                issue_number = int(issue.get("issue_number") or 0)
+            except (TypeError, ValueError):
+                issue_number = 0
+            return {
+                "title": (issue.get("title") or "").strip(),
+                "repo_name": (issue.get("repo_name") or "").strip(),
+                "issue_number": issue_number,
+                "issue_state": (issue.get("issue_state") or "").strip(),
+                "issue_labels": (issue.get("issue_labels") or "").strip(),
+                "citation_url": (
+                    issue.get("url") or issue.get("citation_url") or ""
+                ).strip(),
+            }
+
+        metadata = parse_metadata_from_markdown(issue.get("content", "") or "")
+        if (
+            not metadata["title"]
+            and not metadata["repo_name"]
+            and not metadata["issue_state"]
+            and not metadata["issue_labels"]
+            and not metadata["citation_url"]
+            and metadata["issue_number"] == 0
+        ):
+            print(
+                "WARNING: Failed to parse GitHub issue metadata. "
+                "Upstream markdown format may have changed."
+            )
+        return metadata
+
     def build_prefix(meta):
         """Build metadata prefix for each chunk."""
         parts = [f"[Issue #{meta['issue_number']}] {meta['title']}"]
@@ -243,18 +320,64 @@ def chunk_and_embed_issues(
             parts.append(f"Labels: {meta['issue_labels']}")
         return " | ".join(parts) + "\n\n"
 
+    def content_segments(issue):
+        """Prefer structured body/comments; else split markdown on ---."""
+        if isinstance(issue.get("body"), str) and (
+            "comments" in issue or has_structured_metadata(issue)
+        ):
+            segments = []
+            title = (issue.get("title") or "").strip()
+            body = issue.get("body") or ""
+            header_bits = []
+            if title:
+                header_bits.append(f"# {title}")
+            if issue.get("repo_name"):
+                header_bits.append(f"**Repository:** {issue['repo_name']}")
+            if issue.get("issue_number"):
+                header_bits.append(f"**Issue:** #{issue['issue_number']}")
+            url = issue.get("url") or issue.get("citation_url") or ""
+            if url:
+                header_bits.append(f"**URL:** {url}")
+            if issue.get("issue_labels") is not None:
+                header_bits.append(f"**Labels:** {issue.get('issue_labels') or ''}")
+            if issue.get("issue_state"):
+                header_bits.append(f"**State:** {issue['issue_state']}")
+            if issue.get("created_at"):
+                header_bits.append(f"**Created:** {issue['created_at']}")
+            if issue.get("updated_at"):
+                header_bits.append(f"**Updated:** {issue['updated_at']}")
+
+            first = "\n".join(header_bits)
+            if first and body:
+                first = f"{first}\n\n{body}"
+            elif body:
+                first = body
+            if first.strip():
+                segments.append(first.strip())
+
+            for comment in issue.get("comments") or []:
+                author = comment.get("author", "unknown")
+                created = comment.get("created_at", "")
+                cbody = comment.get("body", "") or ""
+                seg = f"**Comment by @{author}** ({created}):\n{cbody}".strip()
+                if seg:
+                    segments.append(seg)
+            return segments if segments else [issue.get("content", "") or ""]
+
+        content = issue.get("content", "") or ""
+        return [s.strip() for s in re.split(r"\n\n---\n", content) if s.strip()] or [content]
+
     records = []
     with open(issues_data.path, 'r', encoding='utf-8') as f:
         for line in f:
             issue = json.loads(line)
-            content = issue["content"]
-            metadata = parse_metadata(content)
+            content = issue.get("content", "") or ""
+            metadata = resolve_metadata(issue)
             prefix = build_prefix(metadata)
             effective_size = chunk_size - len(prefix)
             if effective_size < 100:
                 effective_size = 100
 
-            # Split oversized segments with room left for metadata prefix (matches issues_utils)
             overlap = min(chunk_overlap, max(0, effective_size - 1))
             splitter = RecursiveCharacterTextSplitter(
                 chunk_size=effective_size,
@@ -263,14 +386,13 @@ def chunk_and_embed_issues(
                 separators=["\n\n", "\n", ". ", " ", ""],
             )
 
-            # Split at comment boundaries or keep as single chunk
-            if len(content) <= effective_size:
-                chunks = [prefix + content]
+            segments = content_segments(issue)
+            joined = "\n\n".join(segments)
+            if len(joined) <= effective_size:
+                chunks = [prefix + (joined or content)]
             else:
-                segments = re.split(r'\n\n---\n', content)
                 chunks = []
                 for segment in segments:
-                    segment = segment.strip()
                     if not segment:
                         continue
                     if len(segment) <= effective_size:

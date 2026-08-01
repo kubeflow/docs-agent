@@ -1,0 +1,71 @@
+# =============================================================================
+# gateway-guardrails values
+#
+# Everything the mentors may want to tune lives here:
+#   helm upgrade gateway-guardrails . --set rateLimit.global.requestsPerMinute=120
+# =============================================================================
+
+# Public FQDN of the chatbot (must resolve to the Istio ingress LB).
+domain: agent.santhoshtoorpu.com
+
+namespaces:
+  docsAgent: docs-agent
+  mlInfra: ml-infra
+  kubeflow: kubeflow
+  istioSystem: istio-system
+
+gateway:
+  enabled: true
+  # Label selector of the shared Istio ingress gateway workload.
+  selector:
+    istio: ingressgateway
+  tls:
+    enabled: true
+    credentialName: kagent-ui-tls
+    acme:
+      # Creates the Let's Encrypt ClusterIssuer + Certificate (cert-manager).
+      enabled: true
+      clusterIssuerName: letsencrypt-prod
+      server: https://acme-v02.api.letsencrypt.org/directory
+      email: toorpusanthosh@gmail.com
+
+routing:
+  # kagent UI service that fronts the A2A agent.
+  uiService: kagent-ui
+  uiPort: 8080
+  # Cap slow/stuck upstream (LLM) calls so a hung request can't pin a worker.
+  timeout: 30s
+  cors:
+    # Lock embedding to the published chatbot origin(s) — no wildcard.
+    allowOrigins:
+      - exact: "https://kubeflowdemochatbot.netlify.app"
+    allowMethods:
+      - POST
+      - GET
+      - OPTIONS
+    allowHeaders:
+      - content-type
+    maxAge: "24h"
+
+rateLimit:
+  # Layer 1: local (per-gateway-pod) token bucket on the chatbot HTTPS
+  # listener. Port-scoped so the knative/internal LLM listeners on the shared
+  # ingress pod are unaffected. NOTE: with >1 ingress replica the effective
+  # cap is replicas * requestsPerMinute.
+  global:
+    enabled: true
+    portNumber: 443
+    requestsPerMinute: 60
+  # Layer 2: per-client-IP limit via the Envoy global ratelimit service +
+  # Redis. PREREQUISITE: ingress must see real client IPs
+  # (externalTrafficPolicy: Local, or meshConfig.numTrustedProxies) — a no-op
+  # until then, so it ships disabled.
+  perIP:
+    enabled: false
+    requestsPerMinute: 10
+    ratelimitImage: envoyproxy/ratelimit:19f2079f
+    redisImage: redis:7-alpine
+
+# The RAG-stack AuthorizationPolicies previously defined in istio_policies.tf.
+meshPolicies:
+  enabled: true
