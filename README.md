@@ -641,7 +641,7 @@ if data.get('citations'):
 </tr>
 <tr>
 <td><code>milvus_host</code></td>
-<td><code>milvus-standalone-final.docs-agent.svc.cluster.local</code></td>
+<td><code>my-release-milvus.docs-agent.svc.cluster.local</code></td>
 <td>Milvus host (used by <code>kubeflow-pipeline.py</code> and <code>incremental-pipeline.py</code>)</td>
 </tr>
 </tbody>
