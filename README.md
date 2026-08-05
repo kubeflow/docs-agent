@@ -313,14 +313,6 @@ kubectl create rolebinding kfp-to-milvus-editor \
 
 **Note**: Without these permissions, you'll encounter RBAC errors during the embedding phase.
 
-#### Future Improvements
-
-A better improvement would be using the embedding model as a service where users could call the service instead of installing heavy sentence transformers package every time. This would:
-
-- Reduce pipeline execution time
-- Lower resource requirements
-- Enable better caching and optimization
-- Improve scalability
 
 ### API Server
 
