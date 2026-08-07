@@ -38,7 +38,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r docs-agent-mcp/mcp-server/requirements.txt
           pip install -r requirements-test.txt
-          pip install ruff kfp kfp-kubernetes
+          pip install ruff==0.15.9 kfp kfp-kubernetes
 
       - name: Compile docs RAG pipeline
         working-directory: docs-agent-mcp/pipelines
