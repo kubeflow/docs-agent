@@ -695,30 +695,105 @@ document.addEventListener('DOMContentLoaded', async function() {
         return new URL(SESSION_PATH, getAPIUrl()).toString();
     }
 
+    // Decode a JWT payload without verifying it. Safe here because we are not
+    // trusting the token, only reading the `exp` we were just handed in order
+    // to decide when to ask for the next one — the gateway does the verifying.
+    function decodeJwtPayload(token) {
+        const payload = String(token).split('.')[1];
+        if (!payload) {
+            return null;
+        }
+        // base64url -> base64, restoring the padding atob() insists on.
+        const base64 = payload.replace(/-/g, '+').replace(/_/g, '/');
+        const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+        try {
+            return JSON.parse(atob(padded));
+        } catch (error) {
+            return null;
+        }
+    }
+
+    // Work out, in *browser* time, when this token stops being usable.
+    //
+    // Istio validates the token's `exp`, which is stamped in server time,
+    // while the widget can only compare against Date.now(), which is browser
+    // time. Comparing the two directly is wrong: a laptop with a skewed clock
+    // (resumed from sleep, bad NTP) would disagree with the gateway about when
+    // the token dies, and if it believes it has longer than it really does,
+    // every request in that window fails.
+    //
+    // So never compare across clocks. Take the token's *lifetime* — exp minus
+    // iat, both server-clock, so the skew cancels out — and anchor it to the
+    // moment we asked for it. `expires_in` is kept as a second opinion, and we
+    // take whichever expires first: refreshing early costs one extra mint,
+    // while trusting a dead token costs a failed request in the user's face.
+    function computeSessionExpiry(data, requestedAt) {
+        const candidates = [];
+
+        const claims = decodeJwtPayload(data.access_token);
+        if (claims && typeof claims.exp === 'number' && typeof claims.iat === 'number'
+            && claims.exp > claims.iat) {
+            candidates.push(requestedAt + ((claims.exp - claims.iat) * 1000));
+        }
+
+        const ttlSeconds = Number(data.expires_in);
+        if (Number.isFinite(ttlSeconds) && ttlSeconds > 0) {
+            candidates.push(requestedAt + (ttlSeconds * 1000));
+        }
+
+        // Neither source usable: treat the token as already stale so the next
+        // send re-mints rather than confidently sending something dead.
+        return candidates.length ? Math.min.apply(null, candidates) : 0;
+    }
+
+    function isSessionTokenUsable(now = Date.now()) {
+        return Boolean(sessionToken) && now < sessionExpiresAt;
+    }
+
+    function isSessionTokenFresh(now = Date.now()) {
+        return Boolean(sessionToken) && now < sessionExpiresAt - SESSION_REFRESH_MARGIN_MS;
+    }
+
     async function fetchSessionToken() {
+        const requestedAt = Date.now();
         const response = await fetch(getSessionUrl(), { method: 'POST' });
         if (!response.ok) {
             throw new Error(`session request failed: ${response.status}`);
         }
         const data = await response.json();
         sessionToken = data.access_token;
-        sessionExpiresAt = Date.now() + (data.expires_in * 1000);
+        sessionExpiresAt = computeSessionExpiry(data, requestedAt);
         return sessionToken;
     }
 
-    // Returns a valid token, minting one if absent or near expiry. Concurrent
-    // callers share a single in-flight request.
+    // Returns a valid token, minting one if absent, near expiry, or already
+    // past it. Concurrent callers share a single in-flight request.
     async function getSessionToken({ forceRefresh = false } = {}) {
         if (forceRefresh) {
             sessionToken = null;
+            sessionExpiresAt = 0;
         }
-        if (sessionToken && Date.now() < sessionExpiresAt - SESSION_REFRESH_MARGIN_MS) {
+        if (isSessionTokenFresh()) {
             return sessionToken;
         }
+        // Remember the token we are replacing: a *proactive* refresh (we are
+        // inside the margin but not actually expired yet) must not throw away
+        // a working token just because the issuer blipped.
+        const previousToken = sessionToken;
+        const previouslyUsable = isSessionTokenUsable();
+
         if (!sessionFetch) {
             sessionFetch = fetchSessionToken().finally(() => { sessionFetch = null; });
         }
-        return sessionFetch;
+        try {
+            return await sessionFetch;
+        } catch (error) {
+            if (previouslyUsable) {
+                console.warn('Session refresh failed; reusing the current token until it expires:', error);
+                return previousToken;
+            }
+            throw error;
+        }
     }
 
     // POST to the agent with a session token attached. A 401/403 means the
