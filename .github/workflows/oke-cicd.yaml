@@ -38,7 +38,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r docs-agent-mcp/mcp-server/requirements.txt
           pip install -r requirements-test.txt
-          pip install ruff kfp kfp-kubernetes
+          pip install ruff==0.15.9 kfp kfp-kubernetes
 
       - name: Compile docs RAG pipeline
         working-directory: docs-agent-mcp/pipelines
@@ -48,10 +48,10 @@ jobs:
           python code-pipeline.py
 
       - name: Ruff lint
-        run: ruff check docs-agent-mcp/mcp-server tests docs-agent-mcp/pipelines
+        run: ruff check docs-agent-mcp/mcp-server docs-agent-mcp/session-issuer tests docs-agent-mcp/pipelines
 
       - name: Compile MCP server
-        run: python -m py_compile docs-agent-mcp/mcp-server/*.py
+        run: python -m py_compile docs-agent-mcp/mcp-server/*.py docs-agent-mcp/session-issuer/*.py
 
       - name: Run Unit Tests
         run: pytest -v --tb=short
@@ -230,7 +230,7 @@ jobs:
           fi
           kubectl exec -n ml-infra "${POD}" -c kserve-container -- python3 -c "
           import urllib.request, json
-          p=json.dumps({'model':'qwen2.5-14B','messages':[{'role':'user','content':'ping'}],'max_tokens':8}).encode()
+          p=json.dumps({'model':'qwen2.5-7B','messages':[{'role':'user','content':'ping'}],'max_tokens':8}).encode()
           r=urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8080/openai/v1/chat/completions',data=p,headers={'Content-Type':'application/json'}), timeout=60)
           print('kserve ok', r.status)
           "

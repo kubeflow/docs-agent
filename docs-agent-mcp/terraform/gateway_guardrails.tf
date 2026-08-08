@@ -41,6 +41,48 @@ variable "a2a_global_rate_limit_rpm" {
   default     = 60
 }
 
+variable "enable_session_auth" {
+  description = "Deploy the anonymous session-JWT issuer + Istio RequestAuthentication"
+  type        = bool
+  default     = true
+}
+
+variable "enforce_session_auth" {
+  description = "Hard-require a session JWT on the A2A paths (flip only after the widget attaches tokens)"
+  type        = bool
+  default     = false
+}
+
+variable "session_issuer_image" {
+  description = "Container image for the session-token issuer"
+  type        = string
+  default     = "ghcr.io/kubeflow/kubeflow-session-issuer:latest"
+}
+
+# RS256 signing key for session JWTs, generated in-state and delivered as the
+# Secret the issuer Deployment mounts. Rotation = taint this resource, which
+# also invalidates every outstanding session token.
+resource "tls_private_key" "session_issuer" {
+  count     = var.enable_session_auth ? 1 : 0
+  algorithm = "RSA"
+  rsa_bits  = 2048
+}
+
+resource "kubernetes_secret" "session_issuer_key" {
+  count = var.enable_session_auth ? 1 : 0
+
+  metadata {
+    name      = "session-issuer-key"
+    namespace = var.namespace_docs_agent
+  }
+
+  data = {
+    "private.pem" = tls_private_key.session_issuer[0].private_key_pem
+  }
+
+  depends_on = [kubernetes_namespace.docs_agent]
+}
+
 resource "helm_release" "gateway_guardrails" {
   name      = "gateway-guardrails"
   chart     = "${path.module}/../charts/gateway-guardrails"
@@ -73,6 +115,11 @@ resource "helm_release" "gateway_guardrails" {
           requestsPerMinute = var.a2a_global_rate_limit_rpm
         }
       }
+      sessionAuth = {
+        enabled = var.enable_session_auth
+        enforce = var.enforce_session_auth
+        image   = var.session_issuer_image
+      }
     })
   ]
 
@@ -82,5 +129,6 @@ resource "helm_release" "gateway_guardrails" {
     helm_release.kagent,
     kubernetes_namespace.docs_agent,
     kubernetes_namespace.ml_infra,
+    kubernetes_secret.session_issuer_key,
   ]
 }

@@ -4,6 +4,12 @@ line-length = 120
 exclude = ["legacy"]
 
 [tool.ruff.lint]
+# Pinned explicitly rather than relying on ruff's defaults: ruff 0.16 widened
+# the default rule set (import sorting, flake8-datetimez, flake8-blind-except,
+# ...) and turned a green main red on the next CI run. These four groups are
+# the set this repo has always linted against; the per-file-ignores below are
+# expressed in terms of them.
+select = ["E4", "E7", "E9", "F"]
 
 [tool.ruff.lint.per-file-ignores]
 "docs-agent-mcp/pipelines/*.py" = ["F403", "F405", "F841", "E741"]

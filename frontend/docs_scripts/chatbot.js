@@ -677,6 +677,156 @@ document.addEventListener('DOMContentLoaded', async function() {
             }
         }
     }
+    // --- Anonymous session tokens ------------------------------------------
+    // The gateway can require a short-lived session JWT on the agent paths.
+    // There are no user accounts: the widget silently fetches an anonymous
+    // token on first use and re-fetches it when the gateway rejects one.
+    // Harmless when the gateway does not enforce sessions — the header is
+    // simply ignored.
+    const SESSION_PATH = '/api/session';
+    // Refresh this many ms before expiry so a request never races the clock.
+    const SESSION_REFRESH_MARGIN_MS = 60 * 1000;
+
+    let sessionToken = null;
+    let sessionExpiresAt = 0;
+    let sessionFetch = null;
+
+    function getSessionUrl() {
+        return new URL(SESSION_PATH, getAPIUrl()).toString();
+    }
+
+    // Decode a JWT payload without verifying it. Safe here because we are not
+    // trusting the token, only reading the `exp` we were just handed in order
+    // to decide when to ask for the next one — the gateway does the verifying.
+    function decodeJwtPayload(token) {
+        const payload = String(token).split('.')[1];
+        if (!payload) {
+            return null;
+        }
+        // base64url -> base64, restoring the padding atob() insists on.
+        const base64 = payload.replace(/-/g, '+').replace(/_/g, '/');
+        const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+        try {
+            return JSON.parse(atob(padded));
+        } catch (error) {
+            return null;
+        }
+    }
+
+    // Work out, in *browser* time, when this token stops being usable.
+    //
+    // Istio validates the token's `exp`, which is stamped in server time,
+    // while the widget can only compare against Date.now(), which is browser
+    // time. Comparing the two directly is wrong: a laptop with a skewed clock
+    // (resumed from sleep, bad NTP) would disagree with the gateway about when
+    // the token dies, and if it believes it has longer than it really does,
+    // every request in that window fails.
+    //
+    // So never compare across clocks. Take the token's *lifetime* — exp minus
+    // iat, both server-clock, so the skew cancels out — and anchor it to the
+    // moment we asked for it. `expires_in` is kept as a second opinion, and we
+    // take whichever expires first: refreshing early costs one extra mint,
+    // while trusting a dead token costs a failed request in the user's face.
+    function computeSessionExpiry(data, requestedAt) {
+        const candidates = [];
+
+        const claims = decodeJwtPayload(data.access_token);
+        if (claims && typeof claims.exp === 'number' && typeof claims.iat === 'number'
+            && claims.exp > claims.iat) {
+            candidates.push(requestedAt + ((claims.exp - claims.iat) * 1000));
+        }
+
+        const ttlSeconds = Number(data.expires_in);
+        if (Number.isFinite(ttlSeconds) && ttlSeconds > 0) {
+            candidates.push(requestedAt + (ttlSeconds * 1000));
+        }
+
+        // Neither source usable: treat the token as already stale so the next
+        // send re-mints rather than confidently sending something dead.
+        return candidates.length ? Math.min.apply(null, candidates) : 0;
+    }
+
+    function isSessionTokenUsable(now = Date.now()) {
+        return Boolean(sessionToken) && now < sessionExpiresAt;
+    }
+
+    function isSessionTokenFresh(now = Date.now()) {
+        return Boolean(sessionToken) && now < sessionExpiresAt - SESSION_REFRESH_MARGIN_MS;
+    }
+
+    async function fetchSessionToken() {
+        const requestedAt = Date.now();
+        const response = await fetch(getSessionUrl(), { method: 'POST' });
+        if (!response.ok) {
+            throw new Error(`session request failed: ${response.status}`);
+        }
+        const data = await response.json();
+        sessionToken = data.access_token;
+        sessionExpiresAt = computeSessionExpiry(data, requestedAt);
+        return sessionToken;
+    }
+
+    // Returns a valid token, minting one if absent, near expiry, or already
+    // past it. Concurrent callers share a single in-flight request.
+    async function getSessionToken({ forceRefresh = false } = {}) {
+        if (forceRefresh) {
+            sessionToken = null;
+            sessionExpiresAt = 0;
+        }
+        if (isSessionTokenFresh()) {
+            return sessionToken;
+        }
+        // Remember the token we are replacing: a *proactive* refresh (we are
+        // inside the margin but not actually expired yet) must not throw away
+        // a working token just because the issuer blipped.
+        const previousToken = sessionToken;
+        const previouslyUsable = isSessionTokenUsable();
+
+        if (!sessionFetch) {
+            sessionFetch = fetchSessionToken().finally(() => { sessionFetch = null; });
+        }
+        try {
+            return await sessionFetch;
+        } catch (error) {
+            if (previouslyUsable) {
+                console.warn('Session refresh failed; reusing the current token until it expires:', error);
+                return previousToken;
+            }
+            throw error;
+        }
+    }
+
+    // POST to the agent with a session token attached. A 401/403 means the
+    // token was rejected (expired, or the signing key rotated), so mint a
+    // fresh one and retry exactly once.
+    async function postToAgent(payload) {
+        const send = async (token) => fetch(getAPIUrl(), {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'text/event-stream',
+                ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+            },
+            body: JSON.stringify(payload)
+        });
+
+        let token = null;
+        try {
+            token = await getSessionToken();
+        } catch (error) {
+            // Session endpoint unavailable (e.g. gateway without session auth).
+            // Fall through unauthenticated rather than blocking the chat.
+            console.warn('Could not obtain a session token:', error);
+        }
+
+        let response = await send(token);
+        if (token && (response.status === 401 || response.status === 403)) {
+            console.log('Session token rejected — refreshing and retrying');
+            response = await send(await getSessionToken({ forceRefresh: true }));
+        }
+        return response;
+    }
+
     // API connection status
     let isConnected = false;
 
@@ -713,15 +863,11 @@ document.addEventListener('DOMContentLoaded', async function() {
                 id: rpcId
             };
             
-            const response = await fetch(getAPIUrl(), {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Accept': 'text/event-stream'
-                },
-                body: JSON.stringify(payload)
-            });
-            
+            const response = await postToAgent(payload);
+
+            if (response.status === 429) {
+                throw new Error('Rate limit reached — please wait a moment and try again.');
+            }
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }

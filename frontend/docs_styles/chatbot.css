@@ -158,6 +158,27 @@
     font-size: 14px;
     line-height: 1.5;
     word-wrap: break-word;
+    /* .message is a flex row, so this is a flex item and its default
+       min-width:auto refuses to shrink below the intrinsic width of its
+       content. A code block holding one long unbreakable line therefore
+       overrode max-width above and stretched the bubble. Allow it to shrink
+       so max-width actually binds. */
+    min-width: 0;
+}
+
+/* Code blocks.
+   Messages render fenced code as <pre><code class="language-x">, so the
+   language class sits on the <code>. Prism's theme scopes its block styling —
+   including overflow — to pre[class*="language-"], which never matches here,
+   and nothing else constrained the <pre>. A single long line (an unwrappable
+   URL inside a kubectl command) stretched the <pre> to its content width and
+   was then clipped by the container's overflow:hidden, dragging right-aligned
+   user bubbles out of view with it. Own the containment here rather than
+   depending on the CDN theme having loaded. */
+.message-content pre {
+    max-width: 100%;
+    overflow-x: auto;
+    box-sizing: border-box;
 }
 
 /* Adobe style bubbles */
@@ -334,6 +355,10 @@
 /* Expanded state styles */
 .chatbot-container.expanded {
     width: 950px;
+    /* Centred via left:50% + translate(-50%), so a fixed 950px overflows both
+       edges on any viewport narrower than that — and the container clips
+       rather than scrolls. Cap it to the viewport. */
+    max-width: calc(100vw - 32px);
     height: 80vh;
     max-height: 800px;
     top: 50%;
