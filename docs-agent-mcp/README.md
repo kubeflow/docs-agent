@@ -6,7 +6,7 @@ Deploy the Kubeflow documentation assistant using kagent, MCP, and Milvus on Kub
 
 * **KAgent UI / Runner:** Chat interface that orchestrates interactions.
 * **MCP Server:** Fetches context from Milvus.
-* **LLM Service:** Qwen-2.5-14B running on KServe/vLLM.
+* **LLM Service:** Qwen2.5-7B-Instruct-AWQ running on KServe/vLLM.
 * **Embeddings Service:** Sentence-Transformers MPNet via Hugging Face TEI.
 * **Milvus:** Direct vector database storage (no Feast dependency).
 

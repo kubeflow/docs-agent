@@ -22,7 +22,10 @@ spec:
   provider: OpenAI
   apiKeySecret: kagent-kserve
   apiKeySecretKey: OPENAI_API_KEY
-  model: qwen2.5-14B
+  # Must match --model_name in manifests/vllm/kserve-qwen.yaml. vLLM's
+  # OpenAI-compatible endpoint rejects an unknown model name with a 404, so a
+  # mismatch here silently breaks every agent request.
+  model: qwen2.5-7B
   openAI:
     baseUrl: "http://qwen-llm-stable.ml-infra.svc.cluster.local/openai/v1"
 

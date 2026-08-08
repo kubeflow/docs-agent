@@ -230,7 +230,7 @@ jobs:
           fi
           kubectl exec -n ml-infra "${POD}" -c kserve-container -- python3 -c "
           import urllib.request, json
-          p=json.dumps({'model':'qwen2.5-14B','messages':[{'role':'user','content':'ping'}],'max_tokens':8}).encode()
+          p=json.dumps({'model':'qwen2.5-7B','messages':[{'role':'user','content':'ping'}],'max_tokens':8}).encode()
           r=urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8080/openai/v1/chat/completions',data=p,headers={'Content-Type':'application/json'}), timeout=60)
           print('kserve ok', r.status)
           "
