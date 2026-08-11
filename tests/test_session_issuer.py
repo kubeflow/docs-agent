@@ -1,4 +1,4 @@
-"""Tests for the session issuer core (docs-agent-mcp/session-issuer/issuer_core.py).
+"""Tests for the session issuer core (kagent-feast-mcp/session-issuer/issuer_core.py).
 
 Pure-unit: no FastAPI/uvicorn imports, no network. Verifies the JWT
 mint -> JWKS -> verify roundtrip that Istio RequestAuthentication performs
@@ -13,7 +13,7 @@ from pathlib import Path
 import jwt
 import pytest
 
-ISSUER_DIR = Path(__file__).parent.parent / "docs-agent-mcp" / "session-issuer"
+ISSUER_DIR = Path(__file__).parent.parent / "kagent-feast-mcp" / "session-issuer"
 ISSUER_CORE_PATH = ISSUER_DIR / "issuer_core.py"
 
 spec = importlib.util.spec_from_file_location("issuer_core", ISSUER_CORE_PATH)

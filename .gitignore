@@ -219,8 +219,8 @@ feast_repo/data/
 feast_repo/registry.db
 
 # Compiled pipeline YAML
-docs-agent-mcp/pipelines/*.yaml
-!docs-agent-mcp/pipelines/README.md
+kagent-feast-mcp/pipelines/*.yaml
+!kagent-feast-mcp/pipelines/README.md
 
 # Local cluster / kubectl notes (optional; keep untracked)
 Arch.md
