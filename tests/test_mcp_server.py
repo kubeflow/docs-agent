@@ -1,4 +1,4 @@
-"""Tests for the MCP server (docs-agent-mcp/mcp-server/server.py).
+"""Tests for the MCP server (kagent-feast-mcp/mcp-server/server.py).
 
 Mocks pymilvus and embeddings HTTP calls — no in-process sentence-transformers.
 """
@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-MCP_SERVER_DIR = Path(__file__).parent.parent / "docs-agent-mcp" / "mcp-server"
+MCP_SERVER_DIR = Path(__file__).parent.parent / "kagent-feast-mcp" / "mcp-server"
 MCP_SERVER_PATH = MCP_SERVER_DIR / "server.py"
 
 sys.modules.setdefault("pymilvus", MagicMock())

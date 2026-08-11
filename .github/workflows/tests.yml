@@ -28,7 +28,7 @@ jobs:
         run: ruff check .
 
       - name: Check formatting
-        run: ruff format --check docs-agent-mcp/mcp-server tests
+        run: ruff format --check kagent-feast-mcp/mcp-server tests
 
   compile:
     name: Python compile check
@@ -44,8 +44,8 @@ jobs:
       - name: Compile Python sources
         run: |
           python -m compileall \
-            docs-agent-mcp/pipelines \
-            docs-agent-mcp/mcp-server \
+            kagent-feast-mcp/pipelines \
+            kagent-feast-mcp/mcp-server \
             legacy/server \
             legacy/server-https \
             scripts \

@@ -38,7 +38,7 @@ Or base URL only (path is appended automatically):
 Host `docs_scripts/` and `docs_styles/` on Vercel and set `KUBEFLOW_DOCS_AGENT_URL` to your cluster endpoint:
 
 - **LoadBalancer (current OKE setup):** `kagent-ui-lb` external IP + `/a2a/docs-agent/kubeflow-docs-agent` (use HTTPS ingress if the Vercel site is `https://` to avoid mixed-content blocking).
-- **Istio ingress (optional Terraform):** set `enable_kagent_ingress = true` and `kagent_domain_name` in `docs-agent-mcp/terraform/`, then point DNS and use `https://your-domain/...`.
+- **Istio ingress (optional Terraform):** set `enable_kagent_ingress = true` and `kagent_domain_name` in `kagent-feast-mcp/terraform/`, then point DNS and use `https://your-domain/...`.
 
 CORS: browser calls require the agent host to allow your site's origin. The Istio ingress only allows the exact origins listed in `kagent_cors_allow_origins` (terraform) / `routing.cors.allowOrigins` (gateway-guardrails Helm chart) — add your deployment's origin there; the LB path depends on Kagent's own CORS settings.
 

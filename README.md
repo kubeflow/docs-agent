@@ -25,7 +25,7 @@ The official LLM implementation of the Kubeflow Documentation Assistant powered 
 
 | Path | Purpose |
 |------|---------|
-| `docs-agent-mcp/` | MCP server, Kagent manifests, RAG pipelines, and Terraform platform stack |
+| `kagent-feast-mcp/` | MCP server, Kagent manifests, RAG pipelines, and Terraform platform stack |
 | `legacy/` | Historical FastAPI servers, older manifests, and Feast-era pipeline copies |
 | `frontend/` | Docs site chatbot assets (`docs_scripts/`, `docs_styles/`) |
 | `.github/workflows/` | CI/CD (`oke-cicd.yaml` builds MCP, runs tests, deploys to OKE) |
@@ -424,7 +424,7 @@ data: {"type": "done"}
 
 2. **Run the Pipeline**:
    ```bash
-   python docs-agent-mcp/pipelines/kubeflow-pipeline.py
+   python kagent-feast-mcp/pipelines/kubeflow-pipeline.py
    ```
 
 3. **Start the API Server**:
@@ -726,7 +726,7 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 
 The project has evolved to utilize the Model Context Protocol (MCP) and **kagent** to route queries intelligently. The infrastructure is heavily automated using Terraform and GitHub Actions.
 
-### Terraform (`docs-agent-mcp/terraform/`)
+### Terraform (`kagent-feast-mcp/terraform/`)
 We use Terraform for declarative, reproducible cluster infrastructure on OKE.
 *   **`variables.tf`**: Single source of truth for component versions (Knative, Istio, KServe, etc.) and namespace names.
 *   **`namespaces.tf`**: Manages the `ml-infra` and `docs-agent` namespaces.
@@ -736,13 +736,13 @@ We use Terraform for declarative, reproducible cluster infrastructure on OKE.
 *   **`kagent.tf`**: Installs official `kagent-crds` and the `kagent` controller via OCI Helm charts, with bundled agents cleanly disabled.
 *   **`gateway_guardrails.tf`**: Installs the local `charts/gateway-guardrails` Helm chart — the single source of truth for the public edge: Istio Gateway + TLS, CORS-locked VirtualService, rate limits, and the zero-trust AuthorizationPolicies that explicitly allow internal cluster traffic where needed (e.g., KFP Pipeline to Milvus, Kagent to Milvus). Replaces the former inline `istio_policies.tf` / `kagent_ingress.tf`.
 
-### Gateway Guardrails Helm Chart (`docs-agent-mcp/charts/gateway-guardrails/`)
+### Gateway Guardrails Helm Chart (`kagent-feast-mcp/charts/gateway-guardrails/`)
 Guardrails protecting the publicly shared chatbot, all tunable via `values.yaml`:
 *   **Rate limiting**: 60 req/min global token bucket on the chatbot HTTPS listener (EnvoyFilter), plus an optional per-client-IP layer (Envoy ratelimit service + Redis, off until the ingress preserves client IPs).
 *   **CORS lockdown**: only the published widget origin may embed the chatbot; a 30s route timeout caps hung LLM calls.
 *   **Mesh policies**: the RAG-stack AuthorizationPolicies (Milvus, LLM, MCP, embeddings), previously raw YAML heredocs inside Terraform.
 
-### Pipeline Optimizations (`docs-agent-mcp/pipelines/`)
+### Pipeline Optimizations (`kagent-feast-mcp/pipelines/`)
 The ingestion pipeline was rewritten to maximize efficiency and avoid Kubernetes ephemeral storage eviction:
 *   **Feast Removal**: The pipeline now writes embeddings directly to Milvus using `pymilvus`, dramatically lowering complexity.
 *   **Custom Base Image (`Dockerfile.pipeline`)**: We bake the massive PyTorch library and the Hugging Face `all-mpnet-base-v2` model directly into a custom Docker image. This reduces runtime disk usage from 5.5GB to zero, fixing OKE pod eviction errors, and preventing Hugging Face API rate limits.

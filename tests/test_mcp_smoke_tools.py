@@ -4,7 +4,7 @@ import json
 import sys
 from pathlib import Path
 
-MCP_DIR = Path(__file__).parent.parent / "docs-agent-mcp" / "mcp-server"
+MCP_DIR = Path(__file__).parent.parent / "kagent-feast-mcp" / "mcp-server"
 sys.path.insert(0, str(MCP_DIR))
 
 import smoke_tools  # noqa: E402
