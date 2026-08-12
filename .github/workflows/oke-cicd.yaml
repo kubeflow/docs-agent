@@ -1,5 +1,7 @@
 # Test + optional OKE CD. PRs and main always run compile/test/lint.
 # Deploy job runs only when repository variable ENABLE_OKE_DEPLOY=true (set on operator forks).
+# GHCR push uses secrets.GITHUB_TOKEN + packages:write (no custom GHCR_TOKEN required).
+# Optional GHCR_TOKEN / GHCR_USERNAME: only for private package imagePullSecrets on OKE.
 name: Build, Test, and Deploy to OKE
 
 on:
@@ -82,7 +84,6 @@ jobs:
 
       - name: Validate deploy secrets
         env:
-          GHCR_PULL_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GHCR_PULL_TOKEN || secrets.Github_Pat }}
           OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
           OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
           OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
@@ -97,31 +98,27 @@ jobs:
               missing+=("$name")
             fi
           done
-          if [ -z "${GHCR_PULL_TOKEN:-}" ]; then
-            missing+=("GHCR_TOKEN or GHCR_PULL_TOKEN or Github_Pat (needs read:packages for cluster image pull)")
-          fi
           if [ "${#missing[@]}" -gt 0 ]; then
             echo "::error::Missing required GitHub Actions secrets in environment 'kubeflow':"
             printf '  - %s\n' "${missing[@]}"
             echo "Add them under Settings → Environments → kubeflow → Environment secrets."
             exit 1
           fi
+          # GHCR push uses built-in GITHUB_TOKEN (packages: write). No GHCR_TOKEN/USERNAME needed.
+          # Optional GHCR_TOKEN / GHCR_PULL_TOKEN / Github_Pat: only if the package is private
+          # and OKE needs an imagePullSecret. Public packages pull without credentials.
 
       - name: Set image coordinates
-        env:
-          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
         run: |
           owner_lc="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
-          ghcr_user="${GHCR_USERNAME:-$owner_lc}"
           echo "IMAGE_REPO=ghcr.io/${owner_lc}/${{ env.IMAGE_NAME }}" >> "$GITHUB_ENV"
-          echo "GHCR_USERNAME=${ghcr_user}" >> "$GITHUB_ENV"
           echo "tag=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.repository_owner }}
+          username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and Push MCP Image
@@ -142,28 +139,37 @@ jobs:
         env:
           FULL_IMAGE: ${{ env.IMAGE_REPO }}:${{ env.tag }}
           GHCR_PULL_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GHCR_PULL_TOKEN || secrets.Github_Pat }}
-          GHCR_USERNAME: ${{ env.GHCR_USERNAME }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME || github.repository_owner }}
         run: |
           set -euo pipefail
 
           kubectl create namespace "${{ env.K8S_NAMESPACE }}" --dry-run=client -o yaml | kubectl apply -f -
 
-          kubectl create secret docker-registry ghcrsecret \
-            --namespace "${{ env.K8S_NAMESPACE }}" \
-            --docker-server="${{ env.REGISTRY }}" \
-            --docker-username="${GHCR_USERNAME}" \
-            --docker-password="${GHCR_PULL_TOKEN}" \
-            --docker-email="${GHCR_USERNAME}@users.noreply.github.com" \
-            --dry-run=client -o yaml | kubectl apply -f -
-
           # Replace pinned manifest image with the commit-scoped tag built above.
           sed "s|ghcr.io/kubeflow/mcp-kubeflow-docs:v0.1.0|${FULL_IMAGE}|g" \
             docs-agent-mcp/manifests/mcp-server/mcp-server.yaml | kubectl apply -f -
+
+          if [ -n "${GHCR_PULL_TOKEN:-}" ]; then
+            echo "Optional GHCR pull token present — creating imagePullSecret for private package pulls"
+            kubectl create secret docker-registry ghcrsecret \
+              --namespace "${{ env.K8S_NAMESPACE }}" \
+              --docker-server="${{ env.REGISTRY }}" \
+              --docker-username="${GHCR_USERNAME}" \
+              --docker-password="${GHCR_PULL_TOKEN}" \
+              --docker-email="${GHCR_USERNAME}@users.noreply.github.com" \
+              --dry-run=client -o yaml | kubectl apply -f -
+            kubectl patch deployment/mcp-kubeflow-docs -n "${{ env.K8S_NAMESPACE }}" --type=merge \
+              -p '{"spec":{"template":{"spec":{"imagePullSecrets":[{"name":"ghcrsecret"}]}}}}'
+          else
+            echo "No GHCR pull token — relying on public package visibility (no imagePullSecret)"
+            kubectl patch deployment/mcp-kubeflow-docs -n "${{ env.K8S_NAMESPACE }}" --type=json \
+              -p '[{"op":"remove","path":"/spec/template/spec/imagePullSecrets"}]' \
+              2>/dev/null || true
+          fi
+
           kubectl set image deployment/mcp-kubeflow-docs \
             mcp-server="${FULL_IMAGE}" \
             -n "${{ env.K8S_NAMESPACE }}" || true
-          kubectl patch deployment/mcp-kubeflow-docs -n "${{ env.K8S_NAMESPACE }}" --type=merge \
-            -p '{"spec":{"template":{"spec":{"imagePullSecrets":[{"name":"ghcrsecret"}]}}}}'
           kubectl rollout status deployment/mcp-kubeflow-docs \
             -n "${{ env.K8S_NAMESPACE }}" --timeout=600s
 
