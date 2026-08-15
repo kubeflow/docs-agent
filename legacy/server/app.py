@@ -1,6 +1,7 @@
 import os
 import json
 import asyncio
+import atexit
 import httpx
 import websockets
 from websockets.server import serve
@@ -64,17 +65,37 @@ Style
 """
 
 
+# --- Module-level, initialized once at import time ---
+_MILVUS_CONNECTED = False
+_ENCODER = None
+_COLLECTION = None
+
+
+def _get_milvus_collection() -> Collection:
+    """Lazily connect to Milvus once and reuse the connection + loaded collection."""
+    global _MILVUS_CONNECTED, _COLLECTION
+    if not _MILVUS_CONNECTED:
+        connections.connect(alias="default", host=MILVUS_HOST, port=MILVUS_PORT)
+        _MILVUS_CONNECTED = True
+    if _COLLECTION is None:
+        _COLLECTION = Collection(MILVUS_COLLECTION)
+        _COLLECTION.load()
+    return _COLLECTION
+
+
+def _get_encoder() -> SentenceTransformer:
+    """Lazily load the SentenceTransformer once and reuse it across calls."""
+    global _ENCODER
+    if _ENCODER is None:
+        _ENCODER = SentenceTransformer(EMBEDDING_MODEL)
+    return _ENCODER
+
 
 def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
     """Execute a semantic search in Milvus and return structured JSON serializable results."""
     try:
-        # Connect to Milvus
-        connections.connect(alias="default", host=MILVUS_HOST, port=MILVUS_PORT)
-        collection = Collection(MILVUS_COLLECTION)
-        collection.load()
-
-        # Encoder (same model as pipeline)
-        encoder = SentenceTransformer(EMBEDDING_MODEL)
+        collection = _get_milvus_collection()
+        encoder = _get_encoder()
         query_vec = encoder.encode(query).tolist()
 
         search_params = {"metric_type": "COSINE", "params": {"nprobe": 32}}
@@ -88,7 +109,6 @@ def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
 
         hits = []
         for hit in results[0]:
-            # similarity = 1 - distance for COSINE in Milvus
             similarity = 1.0 - float(hit.distance)
             entity = hit.entity
             content_text = entity.get("content_text") or ""
@@ -104,7 +124,15 @@ def milvus_search(query: str, top_k: int = 5) -> Dict[str, Any]:
     except Exception as e:
         print(f"[ERROR] Milvus search failed: {e}")
         return {"results": []}
-    finally:
+    # NOTE: no more disconnect here — the connection is intentionally kept
+    # alive for reuse across calls, and torn down at process exit instead.
+
+
+@atexit.register
+def _cleanup_milvus_connection():
+    """Ensure the Milvus connection is cleanly closed when the process exits."""
+    global _MILVUS_CONNECTED
+    if _MILVUS_CONNECTED:
         try:
             connections.disconnect(alias="default")
         except Exception:
