@@ -74,11 +74,7 @@ def _safe_filter_value(name: str, value: str) -> str:
 
 def _search_stems(value: str) -> set[str]:
     """Return lightweight stems for lexical metadata reranking."""
-    return {
-        token[:6].lower()
-        for token in _SEARCH_TOKEN_RE.findall(value)
-        if len(token) >= 4
-    }
+    return {token[:6].lower() for token in _SEARCH_TOKEN_RE.findall(value) if len(token) >= 4}
 
 
 def _top_document_hit(query: str, hits: list[dict]) -> dict:
@@ -146,9 +142,7 @@ def _expand_top_document(query: str, hits: list[dict]) -> list[dict]:
         return hits
     expanded_entity = dict(selected_entity)
     expanded_entity["content_text"] = "\n\n".join(context_chunks)
-    expanded_entity["citation_url"] = rows[0].get(
-        "citation_url", selected_entity.get("citation_url", "")
-    )
+    expanded_entity["citation_url"] = rows[0].get("citation_url", selected_entity.get("citation_url", ""))
     expanded_entity["file_path"] = rows[0].get("file_path", file_path)
     return [{**selected, "entity": expanded_entity}]
 

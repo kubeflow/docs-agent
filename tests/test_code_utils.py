@@ -39,33 +39,31 @@ class FakeResponse:
 def test_code_pipeline_preserves_github_canonical_citation_url(monkeypatch, tmp_path):
     """Katib's master branch URL must survive download and chunking unchanged."""
     module = load_code_pipeline_module()
-    source_url = (
-        "https://github.com/kubeflow/katib/blob/master/"
-        "examples/v1beta1/hp-tuning/random.yaml"
-    )
-    contents_url = (
-        "https://api.github.com/repos/kubeflow/katib/contents/"
-        "examples/v1beta1/hp-tuning"
-    )
+    source_url = "https://github.com/kubeflow/katib/blob/master/examples/v1beta1/hp-tuning/random.yaml"
+    contents_url = "https://api.github.com/repos/kubeflow/katib/contents/examples/v1beta1/hp-tuning"
     file_api_url = "https://api.github.com/repos/kubeflow/katib/contents/random.yaml"
     yaml_text = "apiVersion: kubeflow.org/v1beta1\nkind: Experiment\nmetadata:\n  name: random\n"
 
     def fake_get(url, params=None, headers=None):
         if url == contents_url:
-            return FakeResponse([
+            return FakeResponse(
+                [
+                    {
+                        "type": "file",
+                        "name": "random.yaml",
+                        "path": "examples/v1beta1/hp-tuning/random.yaml",
+                        "url": file_api_url,
+                        "html_url": source_url,
+                    }
+                ]
+            )
+        if url == file_api_url:
+            return FakeResponse(
                 {
-                    "type": "file",
-                    "name": "random.yaml",
-                    "path": "examples/v1beta1/hp-tuning/random.yaml",
-                    "url": file_api_url,
+                    "content": base64.b64encode(yaml_text.encode()).decode(),
                     "html_url": source_url,
                 }
-            ])
-        if url == file_api_url:
-            return FakeResponse({
-                "content": base64.b64encode(yaml_text.encode()).decode(),
-                "html_url": source_url,
-            })
+            )
         raise AssertionError(f"Unexpected GitHub URL: {url}")
 
     monkeypatch.setattr("requests.get", fake_get)

@@ -80,7 +80,7 @@ def run_mcp_search(row: dict[str, Any], namespace: str, deployment: str, top_k: 
     # Gate 1 evaluates the focused query the agent should send to the tool, not
     # necessarily the conversational wording the user sent to the agent.
     retrieval_query = row.get("retrieval_query", row["query"])
-    snippet = "import server; " f"print(server.{tool}({retrieval_query!r}, top_k={top_k}))"
+    snippet = f"import server; print(server.{tool}({retrieval_query!r}, top_k={top_k}))"
     command = [
         "kubectl",
         "exec",
@@ -237,9 +237,7 @@ def run_agent(
         "Origin": origin,
         "Authorization": f"Bearer {token}",
     }
-    request = urllib.request.Request(
-        agent_url, data=json.dumps(payload).encode(), headers=headers, method="POST"
-    )
+    request = urllib.request.Request(agent_url, data=json.dumps(payload).encode(), headers=headers, method="POST")
 
     streamed: list[str] = []
     final_text = ""
@@ -257,11 +255,7 @@ def run_agent(
             message = message_from_event(event)
             if not message or message.get("role") == "user":
                 continue
-            text = "".join(
-                part.get("text", "")
-                for part in message.get("parts", [])
-                if part.get("kind") == "text"
-            )
+            text = "".join(part.get("text", "") for part in message.get("parts", []) if part.get("kind") == "text")
             if not text:
                 continue
             is_partial = (message.get("metadata") or {}).get("kagent_adk_partial")

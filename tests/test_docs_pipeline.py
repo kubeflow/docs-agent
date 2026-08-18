@@ -4,13 +4,41 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
-from types import SimpleNamespace
-
-from pymilvus import CollectionSchema, DataType, FieldSchema
+from types import ModuleType, SimpleNamespace
 
 
 PIPELINES_DIR = Path(__file__).parent.parent / "docs-agent-mcp" / "pipelines"
 sys.path.insert(0, str(PIPELINES_DIR))
+
+
+class DataType:
+    INT64 = "INT64"
+    VARCHAR = "VARCHAR"
+    FLOAT_VECTOR = "FLOAT_VECTOR"
+
+
+class FieldSchema:
+    def __init__(self, name, dtype, **params):
+        self.name = name
+        self.dtype = dtype
+        self.params = params
+
+
+class CollectionSchema:
+    def __init__(self, fields, description=""):
+        self.fields = fields
+        self.description = description
+
+
+def fake_pymilvus_module():
+    module = ModuleType("pymilvus")
+    module.CollectionSchema = CollectionSchema
+    module.DataType = DataType
+    module.FieldSchema = FieldSchema
+    module.Collection = lambda *args, **kwargs: None
+    module.connections = SimpleNamespace(connect=lambda *args, **kwargs: None)
+    module.utility = SimpleNamespace(has_collection=lambda *args, **kwargs: False)
+    return module
 
 
 def load_docs_pipeline_module():
@@ -23,22 +51,26 @@ def load_docs_pipeline_module():
 
 def legacy_docs_schema():
     """Match the compatible pre-versioned schema currently used in Milvus."""
-    return CollectionSchema([
-        FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
-        FieldSchema(name="file_unique_id", dtype=DataType.VARCHAR, max_length=512),
-        FieldSchema(name="repo_name", dtype=DataType.VARCHAR, max_length=256),
-        FieldSchema(name="file_path", dtype=DataType.VARCHAR, max_length=512),
-        FieldSchema(name="file_name", dtype=DataType.VARCHAR, max_length=256),
-        FieldSchema(name="citation_url", dtype=DataType.VARCHAR, max_length=512),
-        FieldSchema(name="chunk_index", dtype=DataType.INT64),
-        FieldSchema(name="content_text", dtype=DataType.VARCHAR, max_length=4096),
-        FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=768),
-    ], description="")
+    return CollectionSchema(
+        [
+            FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
+            FieldSchema(name="file_unique_id", dtype=DataType.VARCHAR, max_length=512),
+            FieldSchema(name="repo_name", dtype=DataType.VARCHAR, max_length=256),
+            FieldSchema(name="file_path", dtype=DataType.VARCHAR, max_length=512),
+            FieldSchema(name="file_name", dtype=DataType.VARCHAR, max_length=256),
+            FieldSchema(name="citation_url", dtype=DataType.VARCHAR, max_length=512),
+            FieldSchema(name="chunk_index", dtype=DataType.INT64),
+            FieldSchema(name="content_text", dtype=DataType.VARCHAR, max_length=4096),
+            FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=768),
+        ],
+        description="",
+    )
 
 
 def test_store_accepts_compatible_legacy_schema_without_last_updated(monkeypatch, tmp_path):
     module = load_docs_pipeline_module()
     inserted = []
+    pymilvus = fake_pymilvus_module()
 
     class FakeCollection:
         description = ""
@@ -64,9 +96,10 @@ def test_store_accepts_compatible_legacy_schema_without_last_updated(monkeypatch
         def has_index(self):
             return True
 
-    monkeypatch.setattr("pymilvus.connections.connect", lambda *args, **kwargs: None)
-    monkeypatch.setattr("pymilvus.utility.has_collection", lambda name: True)
-    monkeypatch.setattr("pymilvus.Collection", lambda name: FakeCollection())
+    monkeypatch.setitem(sys.modules, "pymilvus", pymilvus)
+    monkeypatch.setattr(pymilvus.connections, "connect", lambda *args, **kwargs: None)
+    monkeypatch.setattr(pymilvus.utility, "has_collection", lambda name: True)
+    monkeypatch.setattr(pymilvus, "Collection", lambda name: FakeCollection())
     monkeypatch.setenv("MILVUS_PASSWORD", "test-password")
 
     input_path = tmp_path / "embedded.jsonl"
@@ -106,10 +139,12 @@ def test_docs_cleaner_preserves_markdown_link_adjacent_yaml(monkeypatch, tmp_pat
 
     monkeypatch.setattr("requests.post", lambda *args, **kwargs: FakeEmbeddingResponse())
     source_path = tmp_path / "docs.jsonl"
-    source_path.write_text(json.dumps({
-        "path": "content/en/docs/components/katib/configure-experiment.md",
-        "file_name": "configure-experiment.md",
-        "content": """---
+    source_path.write_text(
+        json.dumps(
+            {
+                "path": "content/en/docs/components/katib/configure-experiment.md",
+                "file_name": "configure-experiment.md",
+                "content": """---
 title: Configure an Experiment
 ---
 ### Running Katib Experiment with Istio
@@ -124,7 +159,10 @@ metadata:
     \"sidecar.istio.io/inject\": \"false\"
 ```
 """,
-    }) + "\n")
+            }
+        )
+        + "\n"
+    )
     output_path = tmp_path / "embedded.jsonl"
 
     module.chunk_and_embed.python_func(
@@ -149,6 +187,7 @@ def test_store_replaces_legacy_chunk_ids_by_repo_and_file_path(monkeypatch, tmp_
     module = load_docs_pipeline_module()
     queried = []
     deleted = []
+    pymilvus = fake_pymilvus_module()
 
     class FakeCollection:
         description = ""
@@ -175,9 +214,10 @@ def test_store_replaces_legacy_chunk_ids_by_repo_and_file_path(monkeypatch, tmp_
         def has_index(self):
             return True
 
-    monkeypatch.setattr("pymilvus.connections.connect", lambda *args, **kwargs: None)
-    monkeypatch.setattr("pymilvus.utility.has_collection", lambda name: True)
-    monkeypatch.setattr("pymilvus.Collection", lambda name: FakeCollection())
+    monkeypatch.setitem(sys.modules, "pymilvus", pymilvus)
+    monkeypatch.setattr(pymilvus.connections, "connect", lambda *args, **kwargs: None)
+    monkeypatch.setattr(pymilvus.utility, "has_collection", lambda name: True)
+    monkeypatch.setattr(pymilvus, "Collection", lambda name: FakeCollection())
     monkeypatch.setenv("MILVUS_PASSWORD", "test-password")
 
     input_path = tmp_path / "embedded.jsonl"
@@ -200,8 +240,5 @@ def test_store_replaces_legacy_chunk_ids_by_repo_and_file_path(monkeypatch, tmp_
         collection_name="kubeflow_docs",
     )
 
-    assert queried == [
-        'repo_name == "website" and file_path in '
-        '["content/en/docs/components/katib/example.md"]'
-    ]
+    assert queried == ['repo_name == "website" and file_path in ["content/en/docs/components/katib/example.md"]']
     assert deleted == queried

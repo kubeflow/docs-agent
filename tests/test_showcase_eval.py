@@ -86,11 +86,13 @@ def test_tool_calls_in_event_extracts_named_tool_args_once_per_event_shape():
     event = {
         "result": {
             "message": {
-                "parts": [{
-                    "kind": "function_call",
-                    "name": "search_github_issues",
-                    "args": {"query": "deploymentMode Serverless", "repo": "kserve/kserve"},
-                }]
+                "parts": [
+                    {
+                        "kind": "function_call",
+                        "name": "search_github_issues",
+                        "args": {"query": "deploymentMode Serverless", "repo": "kserve/kserve"},
+                    }
+                ]
             }
         }
     }
@@ -101,17 +103,10 @@ def test_tool_calls_in_event_extracts_named_tool_args_once_per_event_shape():
 
 
 def test_final_message_wins_over_partial_stream_fragments():
-    assert EVAL.select_answer("authoritative final", ["partial ", "draft"]) == (
-        "authoritative final"
-    )
+    assert EVAL.select_answer("authoritative final", ["partial ", "draft"]) == ("authoritative final")
     assert EVAL.select_answer("", ["partial ", "fallback"]) == "partial fallback"
 
 
 def test_sse_parser_joins_multiline_data_and_skips_comments():
-    stream = io.BytesIO(
-        b': keepalive\n\n'
-        b'data: {"result":\n'
-        b'data: {"final": true}}\n\n'
-        b'data: [DONE]\n\n'
-    )
+    stream = io.BytesIO(b': keepalive\n\ndata: {"result":\ndata: {"final": true}}\n\ndata: [DONE]\n\n')
     assert list(EVAL.iter_sse_events(stream)) == [{"result": {"final": True}}]
