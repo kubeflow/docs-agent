@@ -1,12 +1,8 @@
 import kfp
+import kfp.kubernetes as k8s
 from kfp import dsl
 from kfp.dsl import *
 from typing import *
-
-try:
-    import kfp.kubernetes as k8s
-except ImportError:  # pragma: no cover
-    k8s = None
 
 from utils import CODE_COLLECTION, DEFAULT_EMBEDDING_BATCH_SIZE
 
@@ -108,6 +104,11 @@ def download_github_code(
                                 "content": content,
                                 "file_name": item["name"],
                                 "repo": f"{owner}/{name}",
+                                # Preserve GitHub's canonical page URL. Repositories do
+                                # not all use `main` (kubeflow/katib uses `master`), and
+                                # reconstructing this URL downstream creates dead or
+                                # non-canonical citations even when retrieval is correct.
+                                "citation_url": file_resp.get("html_url") or item.get("html_url", ""),
                             })
                     except Exception as e:
                         print(f"Error decoding {item['path']}: {e}")
@@ -348,8 +349,10 @@ def chunk_and_embed_code(
                 continue
 
             file_unique_id = f"{repo}:{file_path}"
-            # Citation URL: link to GitHub blob
-            citation_url = f"https://github.com/{repo}/blob/main/{file_path}"
+            # Prefer the canonical URL supplied by the GitHub Contents API so the
+            # repository's real default branch is retained. Keep the fallback for
+            # legacy JSONL artifacts created before citation_url was recorded.
+            citation_url = file_data.get("citation_url") or f"https://github.com/{repo}/blob/main/{file_path}"
 
             chunks = chunk_code_file(content, file_path, chunk_size, chunk_overlap)
 

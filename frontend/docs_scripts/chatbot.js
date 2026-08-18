@@ -330,6 +330,88 @@ function createChatbotElements() {
     }
 }
 
+function escapeMarkdownHtml(text) {
+    return String(text).replace(/[&<>"']/g, function(character) {
+        const entities = {
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;'
+        };
+        return entities[character];
+    });
+}
+
+// Small, dependency-free Markdown subset used by streamed and completed chat
+// messages. Code is protected before other formatting so YAML and shell
+// snippets are never interpreted as links or replacement-string tokens.
+function formatChatMarkdown(text, isStreaming = false) {
+    if (!text) return '';
+
+    let formatted = text;
+    const codeBlockPlaceholders = [];
+    const inlineCodePlaceholders = [];
+
+    function preserveCodeBlock(language, code, trimCode) {
+        const placeholder = `__CODE_BLOCK_${codeBlockPlaceholders.length}__`;
+        const safeLanguage = language || 'text';
+        const codeText = trimCode ? code.trim() : code;
+        codeBlockPlaceholders.push(
+            `<pre><code class="language-${safeLanguage}">${escapeMarkdownHtml(codeText)}</code></pre>`
+        );
+        return placeholder;
+    }
+
+    const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
+    formatted = formatted.replace(codeBlockRegex, function(match, language, code) {
+        return preserveCodeBlock(language, code, !isStreaming);
+    });
+
+    if (isStreaming) {
+        const incompleteCodeRegex = /```(\w+)?\n([\s\S]*)$/;
+        if (incompleteCodeRegex.test(formatted) && !formatted.endsWith('```')) {
+            formatted = formatted.replace(incompleteCodeRegex, function(match, language, code) {
+                return preserveCodeBlock(language, code, false);
+            });
+        }
+    }
+
+    formatted = formatted.replace(/`([^`\n]+)`/g, function(match, code) {
+        const placeholder = `__INLINE_CODE_${inlineCodePlaceholders.length}__`;
+        inlineCodePlaceholders.push(`<code>${escapeMarkdownHtml(code)}</code>`);
+        return placeholder;
+    });
+
+    // Linkify only explicit http(s) Markdown links. Other schemes remain
+    // visible as text instead of becoming executable browser destinations.
+    formatted = formatted.replace(
+        /\[([^\]\n]+)\]\((https?:\/\/[^\s<>"')]+)\)/gi,
+        function(match, label, url) {
+            return `<a href="${escapeMarkdownHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeMarkdownHtml(label)}</a>`;
+        }
+    );
+
+    formatted = formatted.replace(/\n/g, '<br>');
+    formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+
+    inlineCodePlaceholders.forEach(function(inlineCode, index) {
+        formatted = formatted.replace(`__INLINE_CODE_${index}__`, function() {
+            return inlineCode;
+        });
+    });
+
+    codeBlockPlaceholders.forEach(function(codeBlock, index) {
+        // A function replacement is required: replacement strings interpret
+        // sequences such as $&, $1, and $' that commonly occur in code/YAML.
+        formatted = formatted.replace(`__CODE_BLOCK_${index}__`, function() {
+            return codeBlock;
+        });
+    });
+
+    return formatted;
+}
+
 document.addEventListener('DOMContentLoaded', async function() {
     console.log('Docs Bot Initialized (v1.1.0 - Kagent A2A, configurable URL)');
     
@@ -1016,7 +1098,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             const paragraph = currentMessageDiv.querySelector('p');
             
             // Format streaming content
-            const formattedText = formatMarkdown(currentMessageContent, true);
+            const formattedText = formatChatMarkdown(currentMessageContent, true);
             paragraph.innerHTML = formattedText;
             
             // Apply syntax highlighting to any new code blocks
@@ -1320,66 +1402,6 @@ document.addEventListener('DOMContentLoaded', async function() {
     // Auto-save every 30 seconds
     setInterval(autoSaveCurrentChat, 30000);
 
-    // Utility function to format text
-    function formatMarkdown(text, isStreaming = false) {
-        if (!text) return '';
-        
-        let formatted = text;
-        const codeBlockPlaceholders = [];
-        let placeholderIndex = 0;
-        
-        // Handle code blocks first (triple backticks) and replace with placeholders
-        if (isStreaming) {
-            // For streaming, be more careful with incomplete code blocks
-            const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
-            formatted = formatted.replace(codeBlockRegex, function(match, lang, code) {
-                const language = lang || 'text';
-                const placeholder = `__CODE_BLOCK_${placeholderIndex}__`;
-                codeBlockPlaceholders[placeholderIndex] = `<pre><code class="language-${language}">${escapeHtml(code.trim())}</code></pre>`;
-                placeholderIndex++;
-                return placeholder;
-            });
-            
-            // Handle incomplete code blocks at the end
-            const incompleteCodeRegex = /```(\w+)?\n([\s\S]*)$/;
-            if (incompleteCodeRegex.test(formatted) && !formatted.endsWith('```')) {
-                formatted = formatted.replace(incompleteCodeRegex, function(match, lang, code) {
-                    const language = lang || 'text';
-                    const placeholder = `__CODE_BLOCK_${placeholderIndex}__`;
-                    codeBlockPlaceholders[placeholderIndex] = `<pre><code class="language-${language}">${escapeHtml(code)}</code></pre>`;
-                    placeholderIndex++;
-                    return placeholder;
-                });
-            }
-        } else {
-            // For complete text, handle normally
-            const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
-            formatted = formatted.replace(codeBlockRegex, function(match, lang, code) {
-                const language = lang || 'text';
-                const placeholder = `__CODE_BLOCK_${placeholderIndex}__`;
-                codeBlockPlaceholders[placeholderIndex] = `<pre><code class="language-${language}">${escapeHtml(code.trim())}</code></pre>`;
-                placeholderIndex++;
-                return placeholder;
-            });
-        }
-        
-        // Handle inline code (single backticks) - avoid already processed code blocks
-        formatted = formatted.replace(/`([^`\n]+)`/g, '<code>$1</code>');
-        
-        // Handle line breaks (only outside code blocks)
-        formatted = formatted.replace(/\n/g, '<br>');
-        
-        // Handle bold text
-        formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-        
-        // Restore code blocks from placeholders
-        codeBlockPlaceholders.forEach((codeBlock, index) => {
-            formatted = formatted.replace(`__CODE_BLOCK_${index}__`, codeBlock);
-        });
-        
-        return formatted;
-    }
-
     function handleSendMessage() {
         const message = userInput.value.trim();
         if (!message || isTyping) return;
@@ -1434,7 +1456,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         
         // Format the text based on sender
         if (sender === 'bot') {
-            paragraph.innerHTML = formatMarkdown(text);
+            paragraph.innerHTML = formatChatMarkdown(text);
             
             // Apply syntax highlighting after DOM insertion
             setTimeout(() => {
@@ -1582,12 +1604,6 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (chatMessages) {
             chatMessages.scrollTop = chatMessages.scrollHeight;
         }
-    }
-
-    function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
     }
 
     console.log('Chatbot initialized with chat stack system');

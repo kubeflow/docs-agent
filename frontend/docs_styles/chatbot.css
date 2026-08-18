@@ -245,6 +245,29 @@
 .message-content p { margin: 0 0 10px 0; }
 .message-content p:last-child { margin-bottom: 0; }
 
+/* Source citations should read like part of the answer while remaining
+   unmistakably interactive. Long repository paths may wrap inside the bubble. */
+.message-content a {
+    color: #0b57d0;
+    font-weight: 600;
+    text-decoration-line: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
+    overflow-wrap: anywhere;
+    transition: color 0.16s ease, text-decoration-thickness 0.16s ease;
+}
+
+.message-content a:hover {
+    color: #063b91;
+    text-decoration-thickness: 2px;
+}
+
+.message-content a:focus-visible {
+    outline: 2px solid #0b57d0;
+    outline-offset: 3px;
+    border-radius: 2px;
+}
+
 /* Keep Flo avatar for now, just smaller */
 .flo-avatar-container {
     width: 44px; height: 44px;
@@ -739,6 +762,18 @@
     box-shadow: 0 2px 6px rgba(0,0,0,0.2);
 }
 
+.chatbot-container.dark-theme .message-content a {
+    color: #8ab4f8;
+}
+
+.chatbot-container.dark-theme .message-content a:hover {
+    color: #aecbfa;
+}
+
+.chatbot-container.dark-theme .message-content a:focus-visible {
+    outline-color: #8ab4f8;
+}
+
 .chatbot-container.dark-theme .user-message .message-content {
     background: #1d4ed8 !important; /* Premium dark blue */
     color: #ffffff !important;
@@ -924,4 +959,3 @@
 .chatbot-container.dark-theme .citations-list a {
     color: #60a5fa !important;
 }
-

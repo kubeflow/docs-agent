@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "notes": "Golden set from the 2026 showcase demos. Gate 1 is MCP retrieval (Source URLs). Gate 2 is the live agent (tool used + citations subset of gate 1 + no invented URLs). Ingest the listed sources BEFORE evaluating — default pipeline repos do not cover all three.",
+  "collections": {
+    "docs": "kubeflow_docs",
+    "issues": "issues_rag",
+    "code": "code_rag"
+  },
+  "queries": [
+    {
+      "id": "docs-katib-configure-experiment",
+      "query": "How do I configure Katib hyperparameter tuning?",
+      "retrieval_query": "Katib Experiment configuration parallelTrialCount sidecar.istio.io/inject",
+      "tool": "search_kubeflow_docs",
+      "collection": "kubeflow_docs",
+      "ingest": {
+        "pipeline": "docs-agent-mcp/pipelines/kubeflow-pipeline.py",
+        "compiled": "github_rag_pipeline.yaml",
+        "why": "Page lives on kubeflow/website. Default docs pipeline (content/en/docs) should include it; confirm the citation URL is in Milvus before scoring the agent.",
+        "arguments": {
+          "repo_owner": "kubeflow",
+          "repo_name": "website",
+          "directory_path": "content/en/docs/components/katib",
+          "base_url": "https://www.kubeflow.org/docs",
+          "chunk_size": 600,
+          "chunk_overlap": 60,
+          "collection_name": "kubeflow_docs"
+        }
+      },
+      "expected_source_urls": [
+        "https://www.kubeflow.org/docs/components/katib/user-guides/hp-tuning/configure-experiment"
+      ],
+      "must_appear_in_answer": [
+        "parallelTrialCount",
+        "sidecar.istio.io/inject"
+      ],
+      "forbidden_in_answer": [
+        "katib.mlr-org"
+      ]
+    },
+    {
+      "id": "issues-kserve-deploymentmode",
+      "query": "InferenceService update rejected: deploymentMode cannot be changed from Knative to Serverless",
+      "tool": "search_github_issues",
+      "collection": "issues_rag",
+      "ingest": {
+        "pipeline": "docs-agent-mcp/pipelines/issues-pipeline.py",
+        "compiled": "github_issues_rag_pipeline.yaml",
+        "why": "Default issues repos are kubeflow/kubeflow, kubeflow/pipelines, kubeflow/manifests. kserve/kserve#5885 is NOT in that list — ingest kserve/kserve or this eval is a guaranteed miss.",
+        "arguments": {
+          "repos": "kserve/kserve",
+          "state": "all",
+          "max_issues_per_repo": 200,
+          "collection_name": "issues_rag"
+        }
+      },
+      "expected_source_urls": [
+        "https://github.com/kserve/kserve/issues/5885"
+      ],
+      "must_appear_in_answer": [
+        "5885",
+        "Serverless"
+      ],
+      "forbidden_in_answer": [
+        "github.com/kubeflow/kserve"
+      ]
+    },
+    {
+      "id": "code-katib-random-yaml",
+      "query": "Show me a Katib Experiment YAML example",
+      "retrieval_query": "kubeflow katib examples v1beta1 hp-tuning random yaml",
+      "tool": "search_kubeflow_code",
+      "collection": "code_rag",
+      "ingest": {
+        "pipeline": "docs-agent-mcp/pipelines/code-pipeline.py",
+        "compiled": "code_rag_pipeline.yaml",
+        "why": "Default code pipeline is kubeflow/manifests apps/katib (install manifests/CRDs), not kubeflow/katib examples/. random.yaml will not be in the index until that repo/path is ingested.",
+        "arguments": {
+          "repos": "kubeflow/katib",
+          "directory_paths": "examples/v1beta1/hp-tuning",
+          "file_extensions": "yaml,yml",
+          "collection_name": "code_rag"
+        }
+      },
+      "expected_source_urls": [
+        "https://github.com/kubeflow/katib/blob/master/examples/v1beta1/hp-tuning/random.yaml"
+      ],
+      "must_appear_in_answer": [
+        "kubeflow.org/v1beta1",
+        "kind: Experiment"
+      ],
+      "forbidden_in_answer": [
+        "katib.mlr-org",
+        "apiVersion: v1\nkind: Experiment"
+      ]
+    }
+  ]
+}

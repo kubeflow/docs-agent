@@ -150,6 +150,70 @@ class TestSearchKubeflowDocs:
         assert "content_text" in output_fields
         assert "citation_url" in output_fields
         assert "file_path" in output_fields
+        assert "chunk_index" in output_fields
+
+    def test_reranks_and_expands_the_best_document(self, inject_mocks):
+        mock_client, _ = inject_mocks
+        mock_client.search.return_value = [[
+            {
+                "distance": 0.90,
+                "entity": {
+                    "content_text": "Katib introduction",
+                    "citation_url": "https://www.kubeflow.org/docs/components/katib/getting-started",
+                    "file_path": "content/en/docs/components/katib/getting-started.md",
+                    "chunk_index": 0,
+                },
+            },
+            {
+                "distance": 0.82,
+                "entity": {
+                    "content_text": "Experiment overview",
+                    "citation_url": (
+                        "https://www.kubeflow.org/docs/components/katib/"
+                        "user-guides/hp-tuning/configure-experiment"
+                    ),
+                    "file_path": (
+                        "content/en/docs/components/katib/user-guides/"
+                        "hp-tuning/configure-experiment.md"
+                    ),
+                    "chunk_index": 0,
+                },
+            },
+        ]]
+        mock_client.query.return_value = [
+            {
+                "chunk_index": 11,
+                "content_text": '"sidecar.istio.io/inject": "false"',
+                "citation_url": (
+                    "https://www.kubeflow.org/docs/components/katib/"
+                    "user-guides/hp-tuning/configure-experiment"
+                ),
+                "file_path": (
+                    "content/en/docs/components/katib/user-guides/"
+                    "hp-tuning/configure-experiment.md"
+                ),
+            },
+            {
+                "chunk_index": 6,
+                "content_text": "parallelTrialCount controls concurrent Trials.",
+                "citation_url": (
+                    "https://www.kubeflow.org/docs/components/katib/"
+                    "user-guides/hp-tuning/configure-experiment"
+                ),
+                "file_path": (
+                    "content/en/docs/components/katib/user-guides/"
+                    "hp-tuning/configure-experiment.md"
+                ),
+            },
+        ]
+
+        result = server.search_kubeflow_docs("Katib hyperparameter tuning configuration", top_k=10)
+
+        assert "parallelTrialCount controls" in result
+        assert '"sidecar.istio.io/inject": "false"' in result
+        assert "getting-started" not in result
+        assert result.count("**Source:**") == 1
+        assert "configure-experiment" in mock_client.query.call_args.kwargs["filter"]
 
     def test_searches_correct_collection(self, inject_mocks):
         """Should search the configured COLLECTION_NAME."""

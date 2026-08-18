@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import threading
@@ -23,6 +24,9 @@ client: MilvusClient | None = None
 _init_lock = threading.Lock()
 
 _FILTER_VALUE_RE = re.compile(r"^[A-Za-z0-9_/.\-]+$")
+_SEARCH_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
+DOCS_CONTEXT_MAX_CHUNKS = 20
+DOCS_CONTEXT_MAX_CHARS = 24_000
 
 
 def _init():
@@ -68,6 +72,87 @@ def _safe_filter_value(name: str, value: str) -> str:
     return value
 
 
+def _search_stems(value: str) -> set[str]:
+    """Return lightweight stems for lexical metadata reranking."""
+    return {
+        token[:6].lower()
+        for token in _SEARCH_TOKEN_RE.findall(value)
+        if len(token) >= 4
+    }
+
+
+def _top_document_hit(query: str, hits: list[dict]) -> dict:
+    """Choose one document using dense score plus path/URL lexical overlap."""
+    query_stems = _search_stems(query)
+    candidates = {}
+    for rank, hit in enumerate(hits):
+        entity = hit.get("entity", {})
+        source_key = (entity.get("citation_url", ""), entity.get("file_path", ""))
+        if not any(source_key):
+            continue
+        metadata_stems = _search_stems(" ".join(source_key))
+        score = (
+            len(query_stems & metadata_stems),
+            float(hit.get("distance", 0.0)),
+            -rank,
+        )
+        previous = candidates.get(source_key)
+        if previous is None or score > previous[0]:
+            candidates[source_key] = (score, hit)
+    if not candidates:
+        return hits[0]
+    return max(candidates.values(), key=lambda candidate: candidate[0])[1]
+
+
+def _expand_top_document(query: str, hits: list[dict]) -> list[dict]:
+    """Replace chunk hits with bounded, ordered context from the best page."""
+    if not hits:
+        return hits
+    selected = _top_document_hit(query, hits)
+    selected_entity = selected.get("entity", {})
+    file_path = selected_entity.get("file_path", "")
+    if not file_path:
+        return hits
+
+    try:
+        rows = client.query(
+            collection_name=COLLECTION_NAME,
+            filter=f"file_path == {json.dumps(file_path)}",
+            output_fields=["content_text", "citation_url", "file_path", "chunk_index"],
+            limit=DOCS_CONTEXT_MAX_CHUNKS,
+        )
+    except Exception:
+        return hits
+    if not isinstance(rows, list) or not rows:
+        return hits
+
+    unique_rows = {}
+    for row in rows:
+        content = row.get("content_text", "").strip()
+        if content:
+            unique_rows.setdefault((int(row.get("chunk_index", 0)), content), row)
+
+    context_chunks = []
+    context_chars = 0
+    for (_, content), _row in sorted(unique_rows.items(), key=lambda item: item[0][0]):
+        separator_chars = 2 if context_chunks else 0
+        remaining = DOCS_CONTEXT_MAX_CHARS - context_chars - separator_chars
+        if remaining <= 0:
+            break
+        context_chunks.append(content[:remaining])
+        context_chars += min(len(content), remaining) + separator_chars
+
+    if not context_chunks:
+        return hits
+    expanded_entity = dict(selected_entity)
+    expanded_entity["content_text"] = "\n\n".join(context_chunks)
+    expanded_entity["citation_url"] = rows[0].get(
+        "citation_url", selected_entity.get("citation_url", "")
+    )
+    expanded_entity["file_path"] = rows[0].get("file_path", file_path)
+    return [{**selected, "entity": expanded_entity}]
+
+
 @mcp.tool()
 def search_kubeflow_docs(query: str, top_k: int = 5) -> str:
     """Search Kubeflow documentation using semantic similarity."""
@@ -76,13 +161,18 @@ def search_kubeflow_docs(query: str, top_k: int = 5) -> str:
             COLLECTION_NAME,
             query,
             top_k,
-            ["content_text", "citation_url", "file_path"],
+            ["content_text", "citation_url", "file_path", "chunk_index"],
         )
     except RuntimeError as e:
         return f"Search failed: {e}"
 
     if not hits:
         return "No results found for your query."
+
+    # Dense chunk search often finds the correct page but not the exact section
+    # needed for a broad question. Rerank pages using URL/path terms, then give
+    # the model bounded, ordered context from that one canonical document.
+    hits = _expand_top_document(query, hits)
 
     results = []
     for i, hit in enumerate(hits, 1):
