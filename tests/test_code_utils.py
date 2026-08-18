@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 
 PIPELINES_DIR = Path(__file__).parent.parent / "docs-agent-mcp" / "pipelines"
 sys.path.insert(0, str(PIPELINES_DIR))
@@ -16,6 +18,7 @@ from code_utils import chunk_code_file, parse_json_file, parse_python_ast, parse
 
 def load_code_pipeline_module():
     """Load the hyphenated pipeline module so component python funcs are testable."""
+    pytest.importorskip("kfp", reason="pipeline component tests require the KFP SDK")
     pipeline_path = PIPELINES_DIR / "code-pipeline.py"
     spec = importlib.util.spec_from_file_location("code_pipeline", pipeline_path)
     module = importlib.util.module_from_spec(spec)

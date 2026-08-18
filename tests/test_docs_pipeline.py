@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
+import pytest
+
 
 PIPELINES_DIR = Path(__file__).parent.parent / "docs-agent-mcp" / "pipelines"
 sys.path.insert(0, str(PIPELINES_DIR))
@@ -42,6 +44,7 @@ def fake_pymilvus_module():
 
 
 def load_docs_pipeline_module():
+    pytest.importorskip("kfp", reason="pipeline component tests require the KFP SDK")
     pipeline_path = PIPELINES_DIR / "kubeflow-pipeline.py"
     spec = importlib.util.spec_from_file_location("kubeflow_pipeline", pipeline_path)
     module = importlib.util.module_from_spec(spec)
