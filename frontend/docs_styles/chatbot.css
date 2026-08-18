@@ -66,6 +66,12 @@
     flex-direction: column;
     height: 100%;
     min-height: 0;
+    /* flex:1 leaves min-width at auto, so this column refused to shrink below
+       the intrinsic width of its widest content. A long unwrappable line in a
+       code block therefore pushed it wider than the panel, which squeezed the
+       persona sidebar next to it down to a sliver and pushed the rest past the
+       container's overflow:hidden edge. */
+    min-width: 0;
 }
 
 /* Hide the old sidebars */
@@ -137,11 +143,14 @@
     flex-direction: column;
     gap: 16px;
     background: #ffffff;
+    min-width: 0;
 }
 
 .message {
     display: flex;
     animation: fadeIn 0.3s ease;
+    min-width: 0;
+    max-width: 100%;
 }
 
 @keyframes fadeIn {
@@ -179,6 +188,38 @@
     max-width: 100%;
     overflow-x: auto;
     box-sizing: border-box;
+}
+
+/* Prism's autoloader may not have run yet (or at all) when a block renders,
+   so don't rely on its theme to lay the code out. */
+.message-content pre code {
+    display: block;
+    white-space: pre;
+    min-width: 0;
+}
+
+/* Keep the horizontal scrollbar visible on macOS, where overlay scrollbars
+   are hidden until scrolled and a clipped code sample looks simply cut off. */
+.message-content pre::-webkit-scrollbar {
+    height: 8px;
+}
+.message-content pre::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.04);
+    border-radius: 4px;
+}
+.message-content pre::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.22);
+    border-radius: 4px;
+}
+.message-content pre::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.35);
+}
+
+.chatbot-container.dark-theme .message-content pre::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.06);
+}
+.chatbot-container.dark-theme .message-content pre::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.26);
 }
 
 /* Adobe style bubbles */
@@ -378,6 +419,7 @@
 .persona-sidebar {
     display: none; /* Hidden in normal/widget view */
     width: 320px;
+    flex-shrink: 0;
     background: #fcfcfc;
     border-right: 1px solid #eaeaea;
     flex-direction: column;
