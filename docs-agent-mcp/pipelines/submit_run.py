@@ -4,7 +4,13 @@ Port-forward must be active: kubectl port-forward svc/ml-pipeline 8888:8888 -n k
 """
 import kfp
 
-from utils import DOCS_COLLECTION
+from utils import (
+    DEFAULT_DOCS_CHUNK_OVERLAP,
+    DEFAULT_DOCS_CHUNK_SIZE,
+    DEFAULT_DOCS_MAX_TEI_CHARS,
+    DEFAULT_EMBEDDING_DIM,
+    DOCS_COLLECTION,
+)
 
 KFP_HOST = "http://localhost:8888"
 PIPELINE_YAML = "github_rag_pipeline.yaml"
@@ -19,9 +25,12 @@ run = client.create_run_from_pipeline_package(
         "directory_path":   "content/en/docs",
         "github_token":     "",          # pass a token if you hit rate limits
         "base_url":         "https://www.kubeflow.org/docs",
-        "chunk_size":       1000,
-        "chunk_overlap":    100,
-        "milvus_uri":       "http://milvus-milvus.ml-infra.svc.cluster.local:19530",
+        "chunk_size":       DEFAULT_DOCS_CHUNK_SIZE,
+        "chunk_overlap":    DEFAULT_DOCS_CHUNK_OVERLAP,
+        "max_tei_chars":    DEFAULT_DOCS_MAX_TEI_CHARS,
+        "embedding_dim":    DEFAULT_EMBEDDING_DIM,
+        "milvus_host":      "milvus-milvus.ml-infra.svc.cluster.local",
+        "milvus_port":      "19530",
         "collection_name":  DOCS_COLLECTION,
     },
     run_name="kubeflow-docs-rag-run-1",

@@ -123,6 +123,7 @@ def test_store_accepts_compatible_legacy_schema_without_last_updated(monkeypatch
         milvus_host="milvus.test",
         milvus_port="19530",
         collection_name="kubeflow_docs",
+        embedding_dim=768,
     )
 
     assert len(inserted) == 1
@@ -176,6 +177,7 @@ metadata:
         chunk_overlap=60,
         embeddings_service_url="http://embeddings.test/embed",
         embedding_batch_size=8,
+        max_tei_chars=600,
         embedded_data=SimpleNamespace(path=str(output_path)),
     )
 
@@ -241,7 +243,41 @@ def test_store_replaces_legacy_chunk_ids_by_repo_and_file_path(monkeypatch, tmp_
         milvus_host="milvus.test",
         milvus_port="19530",
         collection_name="kubeflow_docs",
+        embedding_dim=768,
     )
 
     assert queried == ['repo_name == "website" and file_path in ["content/en/docs/components/katib/example.md"]']
     assert deleted == queried
+
+
+def test_store_rejects_embedding_dim_mismatch(monkeypatch, tmp_path):
+    module = load_docs_pipeline_module()
+    pymilvus = fake_pymilvus_module()
+
+    class FakeCollection:
+        description = ""
+        schema = legacy_docs_schema()
+        indexes = [object()]
+        num_entities = 0
+
+        def load(self):
+            raise AssertionError("must fail before load on dim mismatch")
+
+    monkeypatch.setitem(sys.modules, "pymilvus", pymilvus)
+    monkeypatch.setattr(pymilvus.connections, "connect", lambda *args, **kwargs: None)
+    monkeypatch.setattr(pymilvus.utility, "has_collection", lambda name: True)
+    monkeypatch.setattr(pymilvus, "Collection", lambda name: FakeCollection())
+    monkeypatch.setenv("MILVUS_PASSWORD", "test-password")
+
+    input_path = tmp_path / "embedded.jsonl"
+    input_path.write_text("{}" + "\n")
+
+    with pytest.raises(RuntimeError, match="vector_dim=768"):
+        module.store_milvus.python_func(
+            embedded_data=SimpleNamespace(path=str(input_path)),
+            milvus_host="milvus.test",
+            milvus_port="19530",
+            collection_name="kubeflow_docs",
+            embedding_dim=1024,
+        )
+
