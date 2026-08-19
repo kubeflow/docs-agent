@@ -3,6 +3,18 @@ kind: Namespace
 metadata:
   name: ml-infra
 ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: qwen-hf-cache
+  namespace: ml-infra
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi
+---
 apiVersion: serving.kserve.io/v1alpha1
 kind: ServingRuntime
 metadata:
@@ -15,7 +27,9 @@ spec:
       autoSelect: true
   containers:
     - name: kserve-container
-      image: docker.io/kserve/huggingfaceserver:v0.18.0-gpu
+      # Keep cluster recovery separate from a serving-runtime upgrade. Upgrade
+      # this image only after the persistent-cache rollout is verified.
+      image: docker.io/kserve/huggingfaceserver:v0.15.2-gpu
       command: ["python", "-m", "huggingfaceserver"]
       resources:
         requests:
@@ -30,18 +44,43 @@ spec:
 apiVersion: serving.kserve.io/v1beta1
 kind: InferenceService
 metadata:
-  name: qwen-llm
+  name: qwen-llm-standard
   namespace: ml-infra
   annotations:
+    # Standard mode is recommended for GPU/generative workloads and supports a
+    # writable model-cache PVC without enabling cluster-wide Knative features.
+    serving.kserve.io/deploymentMode: "Standard"
     serving.kserve.io/storage-initializer-env: '{"HF_HUB_ENABLE_HF_TRANSFER": "0"}'
     serving.kserve.io/minReplicas: "1"
     serving.kserve.io/deploymentTimeout: "3600"
 spec:
   predictor:
+    # Start conservatively on the single A10 node. Increase only after load and
+    # GPU-memory testing confirms that parallel requests are safe.
+    containerConcurrency: 1
+    # A rolling update cannot place old and new replicas on the single-GPU
+    # node simultaneously. Recreate makes the expected downtime explicit.
+    deploymentStrategy:
+      type: Recreate
+    securityContext:
+      # The KServe image runs as uid/gid 1000. OCI block volumes are initially
+      # root-owned, so fsGroup makes the persistent Hugging Face cache writable.
+      fsGroup: 1000
+      fsGroupChangePolicy: OnRootMismatch
     model:
       modelFormat:
         name: huggingface
       runtime: llm-runtime
+      env:
+        - name: HF_HOME
+          value: /tmp/huggingface
+        - name: HF_HUB_CACHE
+          value: /tmp/huggingface/hub
+        - name: HF_XET_CACHE
+          value: /tmp/huggingface/xet
+      volumeMounts:
+        - name: huggingface-cache
+          mountPath: /tmp/huggingface
       args:
         - --model_name=qwen2.5-7B
         - --model_id=Qwen/Qwen2.5-7B-Instruct-AWQ
@@ -55,11 +94,17 @@ spec:
         requests:
           cpu: "4"
           memory: "16Gi"
+          ephemeral-storage: "16Gi"
           nvidia.com/gpu: "1"
         limits:
           cpu: "16"
           memory: "64Gi"
+          ephemeral-storage: "24Gi"
           nvidia.com/gpu: "1"
+    volumes:
+      - name: huggingface-cache
+        persistentVolumeClaim:
+          claimName: qwen-hf-cache
     nodeSelector:
       nvidia.com/gpu: "true"
       disk: 150gb
@@ -73,7 +118,7 @@ metadata:
   namespace: ml-infra
 spec:
   selector:
-    serving.kserve.io/inferenceservice: qwen-llm
+    serving.kserve.io/inferenceservice: qwen-llm-standard
   ports:
     - protocol: TCP
       port: 80

@@ -189,9 +189,23 @@ jobs:
             echo "Removing legacy docs-agent GPU InferenceService (frees GPU for ml-infra/qwen-llm)"
             kubectl delete inferenceservice/qwen -n "${{ env.K8S_NAMESPACE }}" --ignore-not-found=true
             kubectl delete svc/qwen-llm -n "${{ env.K8S_NAMESPACE }}" --ignore-not-found=true
-            echo "Applying ml-infra Qwen KServe manifests"
+
+            # Standard mode supports the writable cache PVC without enabling
+            # cluster-wide Knative PVC feature flags. Stop the old Knative
+            # service first so it releases the single GPU while retaining a
+            # reversible rollback definition.
+            if kubectl get inferenceservice/qwen-llm -n ml-infra >/dev/null 2>&1; then
+              echo "Stopping legacy ml-infra/qwen-llm before Standard-mode rollout"
+              kubectl annotate inferenceservice/qwen-llm -n ml-infra \
+                serving.kserve.io/stop=true --overwrite
+              kubectl wait --for=condition=Stopped=True \
+                inferenceservice/qwen-llm -n ml-infra --timeout=600s
+            fi
+
+            echo "Applying ml-infra Standard-mode Qwen KServe manifests"
             kubectl apply -f docs-agent-mcp/manifests/vllm/kserve-qwen.yaml
-            kubectl rollout status deployment -n ml-infra -l serving.kserve.io/inferenceservice=qwen-llm --timeout=600s 2>/dev/null || true
+            kubectl rollout status deployment/qwen-llm-standard-predictor \
+              -n ml-infra --timeout=1800s
           else
             echo "Skipping Qwen GPU deploy (no vllm manifest change; use workflow_dispatch to force)"
           fi
@@ -223,16 +237,15 @@ jobs:
             python3 /app/smoke_tools.py
           kubectl get agent,modelconfig -n "${{ env.K8S_NAMESPACE }}"
 
-      - name: Smoke test Qwen (non-blocking)
-        continue-on-error: true
+      - name: Smoke test Qwen
         run: |
           set -euo pipefail
-          POD="$(kubectl get pods -n ml-infra -l serving.kserve.io/inferenceservice=qwen-llm \
+          POD="$(kubectl get pods -n ml-infra -l serving.kserve.io/inferenceservice=qwen-llm-standard \
             --field-selector=status.phase=Running \
             -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
           if [ -z "${POD}" ]; then
-            echo "No running qwen-llm pod in ml-infra — skipping LLM smoke test"
-            exit 0
+            echo "No running qwen-llm-standard pod in ml-infra"
+            exit 1
           fi
           kubectl exec -n ml-infra "${POD}" -c kserve-container -- python3 -c "
           import urllib.request, json
