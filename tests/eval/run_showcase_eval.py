@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import ssl
 import subprocess
 import sys
 import urllib.error
@@ -31,6 +33,24 @@ BARE_URL_RE = re.compile(r"https?://[^\s<>\"'\]]+")
 DEFAULT_AGENT_URL = "https://agent.santhoshtoorpu.com/a2a/docs-agent/kubeflow-docs-agent"
 DEFAULT_SESSION_URL = "https://agent.santhoshtoorpu.com/api/session"
 DEFAULT_ORIGIN = "https://kubeflowdemochatbot.netlify.app"
+
+
+def tls_context() -> ssl.SSLContext:
+    """Build a verified TLS context, including common macOS Python CA paths."""
+    configured = os.getenv("SSL_CERT_FILE", "").strip()
+    candidates = [
+        configured,
+        ssl.get_default_verify_paths().cafile or "",
+        "/etc/ssl/cert.pem",
+        "/etc/ssl/certs/ca-certificates.crt",
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            return ssl.create_default_context(cafile=candidate)
+    return ssl.create_default_context()
+
+
+TLS_CONTEXT = tls_context()
 
 
 @dataclass
@@ -119,7 +139,7 @@ def request_json(
     if token:
         headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with urllib.request.urlopen(request, timeout=timeout, context=TLS_CONTEXT) as response:
         return json.loads(response.read())
 
 
@@ -244,7 +264,7 @@ def run_agent(
     tool_fired = False
     tool_calls: list[str] = []
     tool_source_urls: set[str] = set()
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with urllib.request.urlopen(request, timeout=timeout, context=TLS_CONTEXT) as response:
         for event in iter_sse_events(response):
             tool_fired = tool_fired or event_names_tool(event, row["tool"])
             for call in tool_calls_in_event(event, row["tool"]):
