@@ -1,0 +1,11 @@
+apiVersion: v2
+name: qwen-runtime
+description: Single-GPU KServe runtime for the Kubeflow Docs Agent
+type: application
+version: 0.1.0
+appVersion: "Qwen2.5-7B-Instruct-AWQ"
+keywords:
+  - kserve
+  - qwen
+  - gpu
+  - vllm

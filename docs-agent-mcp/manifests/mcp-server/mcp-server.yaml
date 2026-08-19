@@ -1,3 +1,4 @@
+# Legacy direct-apply manifest. The docs-agent Helm chart is the CD source of truth.
 apiVersion: v1
 kind: ConfigMap
 metadata:

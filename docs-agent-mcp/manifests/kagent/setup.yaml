@@ -1,3 +1,4 @@
+# Legacy direct-apply manifest. The docs-agent Helm chart is the CD source of truth.
 # Kagent + MCP setup for docs-agent namespace.
 # LLM: in-cluster KServe Qwen (OpenAI-compatible). MCP: GHCR image from CD pipeline.
 

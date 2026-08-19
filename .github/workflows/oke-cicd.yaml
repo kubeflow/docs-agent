@@ -11,8 +11,12 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      release_version:
+        description: Optional SemVer MCP image tag (for example 0.2.1); blank uses the commit SHA
+        type: string
+        required: false
       deploy_kserve:
-        description: Deploy/update KServe Qwen (single GPU — recycles revision)
+        description: Helm-upgrade qwen-runtime (single GPU — intentional downtime)
         type: boolean
         default: false
 
@@ -35,6 +39,11 @@ jobs:
         with:
           python-version: "3.10"
 
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.21.0
+
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
@@ -48,6 +57,18 @@ jobs:
           python kubeflow-pipeline.py
           python issues-pipeline.py
           python code-pipeline.py
+
+      - name: Lint and render Helm charts
+        run: |
+          helm lint docs-agent-mcp/charts/docs-agent
+          helm lint docs-agent-mcp/charts/qwen-runtime
+          helm lint docs-agent-mcp/charts/gateway-guardrails
+          helm template docs-agent docs-agent-mcp/charts/docs-agent \
+            --namespace docs-agent --set-string mcp.image.tag=ci-test >/dev/null
+          helm template qwen-runtime docs-agent-mcp/charts/qwen-runtime \
+            --namespace ml-infra >/dev/null
+          helm template gateway-guardrails docs-agent-mcp/charts/gateway-guardrails \
+            --namespace docs-agent >/dev/null
 
       - name: Ruff lint
         run: ruff check docs-agent-mcp/mcp-server docs-agent-mcp/session-issuer tests docs-agent-mcp/pipelines
@@ -82,6 +103,11 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.21.0
+
       - name: Validate deploy secrets
         env:
           OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
@@ -109,10 +135,23 @@ jobs:
           # and OKE needs an imagePullSecret. Public packages pull without credentials.
 
       - name: Set image coordinates
+        env:
+          REQUESTED_RELEASE_VERSION: ${{ inputs.release_version }}
         run: |
           owner_lc="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
+          requested_version="${REQUESTED_RELEASE_VERSION:-}"
+          if [ -n "${requested_version}" ]; then
+            requested_version="${requested_version#v}"
+            if ! [[ "${requested_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error::release_version must be a Docker-compatible SemVer tag (for example 0.2.1 or 0.2.1-rc.1; build metadata is not supported)"
+              exit 1
+            fi
+            image_tag="${requested_version}"
+          else
+            image_tag="${GITHUB_SHA::7}"
+          fi
           echo "IMAGE_REPO=ghcr.io/${owner_lc}/${{ env.IMAGE_NAME }}" >> "$GITHUB_ENV"
-          echo "tag=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "tag=${image_tag}" >> "$GITHUB_ENV"
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -145,9 +184,7 @@ jobs:
 
           kubectl create namespace "${{ env.K8S_NAMESPACE }}" --dry-run=client -o yaml | kubectl apply -f -
 
-          # Replace pinned manifest image with the commit-scoped tag built above.
-          sed "s|ghcr.io/kubeflow/mcp-kubeflow-docs:v0.1.0|${FULL_IMAGE}|g" \
-            docs-agent-mcp/manifests/mcp-server/mcp-server.yaml | kubectl apply -f -
+          HELM_PULL_ARGS=()
 
           if [ -n "${GHCR_PULL_TOKEN:-}" ]; then
             echo "Optional GHCR pull token present — creating imagePullSecret for private package pulls"
@@ -158,31 +195,48 @@ jobs:
               --docker-password="${GHCR_PULL_TOKEN}" \
               --docker-email="${GHCR_USERNAME}@users.noreply.github.com" \
               --dry-run=client -o yaml | kubectl apply -f -
-            kubectl patch deployment/mcp-kubeflow-docs -n "${{ env.K8S_NAMESPACE }}" --type=merge \
-              -p '{"spec":{"template":{"spec":{"imagePullSecrets":[{"name":"ghcrsecret"}]}}}}'
+            HELM_PULL_ARGS=(--set-string 'mcp.imagePullSecrets[0].name=ghcrsecret')
           else
             echo "No GHCR pull token — relying on public package visibility (no imagePullSecret)"
-            kubectl patch deployment/mcp-kubeflow-docs -n "${{ env.K8S_NAMESPACE }}" --type=json \
-              -p '[{"op":"remove","path":"/spec/template/spec/imagePullSecrets"}]' \
-              2>/dev/null || true
           fi
 
-          kubectl set image deployment/mcp-kubeflow-docs \
-            mcp-server="${FULL_IMAGE}" \
-            -n "${{ env.K8S_NAMESPACE }}" || true
+          DOCS_OWNERSHIP_ARGS=()
+          DOCS_ATOMIC_ARGS=(--atomic --cleanup-on-fail)
+          if ! helm status docs-agent -n "${{ env.K8S_NAMESPACE }}" >/dev/null 2>&1; then
+            echo "First Helm adoption: server-dry-run, then take ownership without uninstall-on-failure"
+            helm template docs-agent docs-agent-mcp/charts/docs-agent \
+              --namespace "${{ env.K8S_NAMESPACE }}" \
+              --set-string "mcp.image.repository=${IMAGE_REPO}" \
+              --set-string "mcp.image.tag=${tag}" \
+              "${HELM_PULL_ARGS[@]}" \
+              | kubectl apply -n "${{ env.K8S_NAMESPACE }}" --dry-run=server -f -
+            DOCS_OWNERSHIP_ARGS=(--take-ownership)
+            DOCS_ATOMIC_ARGS=()
+          fi
+
+          echo "Helm-upgrading docs-agent application release to ${FULL_IMAGE}"
+          helm upgrade --install docs-agent docs-agent-mcp/charts/docs-agent \
+            --namespace "${{ env.K8S_NAMESPACE }}" --create-namespace \
+            --wait --timeout 10m --history-max 10 \
+            --set-string "mcp.image.repository=${IMAGE_REPO}" \
+            --set-string "mcp.image.tag=${tag}" \
+            "${DOCS_OWNERSHIP_ARGS[@]}" \
+            "${DOCS_ATOMIC_ARGS[@]}" \
+            "${HELM_PULL_ARGS[@]}"
+
           kubectl rollout status deployment/mcp-kubeflow-docs \
             -n "${{ env.K8S_NAMESPACE }}" --timeout=600s
+          helm test docs-agent -n "${{ env.K8S_NAMESPACE }}" --timeout 2m
 
-          kubectl apply -f docs-agent-mcp/manifests/kagent/setup.yaml
+          # One-time cleanup of the live pre-Helm canary after the real image and
+          # RemoteMCPServer have been successfully promoted by the chart.
+          kubectl delete deployment/mcp-kubeflow-docs-canary \
+            service/mcp-kubeflow-docs-canary configmap/mcp-server-canary-code-v7 \
+            -n "${{ env.K8S_NAMESPACE }}" --ignore-not-found
 
           DEPLOY_KSERVE=false
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.deploy_kserve }}" = "true" ]; then
             DEPLOY_KSERVE=true
-          elif [ "${{ github.event_name }}" = "push" ]; then
-            if git diff --name-only --diff-filter=M "${{ github.event.before }}" "${{ github.sha }}" \
-              | grep -qE '^docs-agent-mcp/manifests/vllm/kserve-qwen\.yaml$'; then
-              DEPLOY_KSERVE=true
-            fi
           fi
 
           if [ "${DEPLOY_KSERVE}" = "true" ]; then
@@ -202,12 +256,30 @@ jobs:
                 inferenceservice/qwen-llm -n ml-infra --timeout=600s
             fi
 
-            echo "Applying ml-infra Standard-mode Qwen KServe manifests"
-            kubectl apply -f docs-agent-mcp/manifests/vllm/kserve-qwen.yaml
+            QWEN_OWNERSHIP_ARGS=()
+            QWEN_ATOMIC_ARGS=(--atomic --cleanup-on-fail)
+            if ! helm status qwen-runtime -n ml-infra >/dev/null 2>&1; then
+              echo "First qwen-runtime adoption: validating before non-destructive ownership transfer"
+              helm template qwen-runtime docs-agent-mcp/charts/qwen-runtime \
+                --namespace ml-infra --skip-tests \
+                | kubectl apply -n ml-infra --dry-run=server -f -
+              helm template qwen-runtime docs-agent-mcp/charts/qwen-runtime \
+                --namespace ml-infra --show-only templates/tests/model-endpoint.yaml \
+                | kubectl apply -n docs-agent --dry-run=server -f -
+              QWEN_OWNERSHIP_ARGS=(--take-ownership)
+              QWEN_ATOMIC_ARGS=()
+            fi
+
+            echo "Helm-upgrading the separately versioned qwen-runtime release"
+            helm upgrade --install qwen-runtime docs-agent-mcp/charts/qwen-runtime \
+              --namespace ml-infra --create-namespace --timeout 10m --history-max 5 \
+              "${QWEN_OWNERSHIP_ARGS[@]}" \
+              "${QWEN_ATOMIC_ARGS[@]}"
             kubectl rollout status deployment/qwen-llm-standard-predictor \
               -n ml-infra --timeout=1800s
+            helm test qwen-runtime -n ml-infra --timeout 3m
           else
-            echo "Skipping Qwen GPU deploy (no vllm manifest change; use workflow_dispatch to force)"
+            echo "Skipping qwen-runtime Helm upgrade; normal app upgrades do not restart the GPU service"
           fi
 
       - name: Wait for ml-infra dependencies

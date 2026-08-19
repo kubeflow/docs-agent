@@ -1,0 +1,5 @@
+MCP service: {{ include "docs-agent.mcpName" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.mcp.service.port }}
+
+Verify the release:
+  helm test {{ .Release.Name }} -n {{ .Release.Namespace }}
+  kubectl rollout status deployment/{{ include "docs-agent.mcpName" . }} -n {{ .Release.Namespace }}

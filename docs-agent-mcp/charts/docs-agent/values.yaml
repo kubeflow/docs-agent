@@ -1,0 +1,83 @@
+# MCP and Kagent application values. GPU serving and edge guardrails are
+# deliberately separate Helm releases so an ordinary app upgrade cannot
+# recycle the single-GPU InferenceService or change public routing.
+
+mcp:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/kubeflow/mcp-kubeflow-docs
+    tag: v0.1.0
+    pullPolicy: IfNotPresent
+  imagePullSecrets: []
+  service:
+    port: 8000
+  config:
+    docsCollection: kubeflow_docs
+    issuesCollection: issues_rag
+    codeCollection: code_rag
+    embeddingsUrl: http://embeddings-service-predictor.ml-infra.svc.cluster.local/embed
+    milvusUri: http://milvus-milvus.ml-infra.svc.cluster.local:19530
+    milvusUser: root
+    maxQueryChars: 512
+    maxTopK: 10
+    maxCandidateHits: 40
+  milvusAuth:
+    existingSecret: mcp-server-secret
+    passwordKey: MILVUS_PASSWORD
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+  readinessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 5
+  livenessProbe:
+    initialDelaySeconds: 30
+    periodSeconds: 30
+  podDisruptionBudget:
+    enabled: false
+    minAvailable: 1
+
+kagent:
+  enabled: true
+  model:
+    name: kserve-qwen
+    provider: OpenAI
+    model: qwen2.5-7B
+    baseUrl: http://qwen-llm-stable.ml-infra.svc.cluster.local/openai/v1
+    temperature: "0.1"
+    topP: "0.9"
+    maxTokens: 1024
+    timeout: 300
+    apiKeySecret:
+      name: kagent-kserve
+      key: OPENAI_API_KEY
+      create: true
+      # The in-cluster KServe endpoint does not authenticate this dummy value.
+      value: local-kserve
+  remoteMcp:
+    name: kubeflow-docs-mcp
+    timeout: 30s
+  agents:
+    docs:
+      name: kubeflow-docs-agent
+      enabled: true
+    debug:
+      name: kubeflow-debug-agent
+      enabled: true
+
+tests:
+  enabled: true
+  image: busybox:1.37

@@ -1,0 +1,94 @@
+{{- if .Values.kagent.enabled }}
+{{- if .Values.kagent.model.apiKeySecret.create }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.kagent.model.apiKeySecret.name }}
+  labels:
+    {{- include "docs-agent.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  {{ .Values.kagent.model.apiKeySecret.key }}: {{ .Values.kagent.model.apiKeySecret.value | quote }}
+---
+{{- end }}
+apiVersion: kagent.dev/v1alpha2
+kind: ModelConfig
+metadata:
+  name: {{ .Values.kagent.model.name }}
+  labels:
+    {{- include "docs-agent.labels" . | nindent 4 }}
+spec:
+  provider: {{ .Values.kagent.model.provider }}
+  apiKeySecret: {{ .Values.kagent.model.apiKeySecret.name }}
+  apiKeySecretKey: {{ .Values.kagent.model.apiKeySecret.key }}
+  model: {{ .Values.kagent.model.model }}
+  openAI:
+    baseUrl: {{ .Values.kagent.model.baseUrl | quote }}
+    temperature: {{ .Values.kagent.model.temperature | quote }}
+    topP: {{ .Values.kagent.model.topP | quote }}
+    maxTokens: {{ .Values.kagent.model.maxTokens }}
+    timeout: {{ .Values.kagent.model.timeout }}
+---
+apiVersion: kagent.dev/v1alpha2
+kind: RemoteMCPServer
+metadata:
+  name: {{ .Values.kagent.remoteMcp.name }}
+  labels:
+    {{- include "docs-agent.labels" . | nindent 4 }}
+spec:
+  description: MCP server for grounded Kubeflow documentation, issue, and code search
+  url: http://{{ include "docs-agent.mcpName" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.mcp.service.port }}/mcp
+  timeout: {{ .Values.kagent.remoteMcp.timeout }}
+---
+{{- if .Values.kagent.agents.docs.enabled }}
+apiVersion: kagent.dev/v1alpha2
+kind: Agent
+metadata:
+  name: {{ .Values.kagent.agents.docs.name }}
+  labels:
+    {{- include "docs-agent.labels" . | nindent 4 }}
+spec:
+  description: Kubeflow documentation assistant
+  type: Declarative
+  declarative:
+    modelConfig: {{ .Values.kagent.model.name }}
+    stream: true
+    tools:
+      - type: McpServer
+        mcpServer:
+          name: {{ .Values.kagent.remoteMcp.name }}
+          kind: RemoteMCPServer
+          toolNames:
+            - search_kubeflow_docs
+            - search_github_issues
+            - search_kubeflow_code
+    systemMessage: |-
+{{ .Files.Get "files/docs-system-message.txt" | nindent 6 }}
+---
+{{- end }}
+{{- if .Values.kagent.agents.debug.enabled }}
+apiVersion: kagent.dev/v1alpha2
+kind: Agent
+metadata:
+  name: {{ .Values.kagent.agents.debug.name }}
+  labels:
+    {{- include "docs-agent.labels" . | nindent 4 }}
+spec:
+  description: Kubeflow debugging and code assistant
+  type: Declarative
+  declarative:
+    modelConfig: {{ .Values.kagent.model.name }}
+    stream: true
+    tools:
+      - type: McpServer
+        mcpServer:
+          name: {{ .Values.kagent.remoteMcp.name }}
+          kind: RemoteMCPServer
+          toolNames:
+            - search_kubeflow_code
+            - search_github_issues
+            - search_kubeflow_docs
+    systemMessage: |-
+{{ .Files.Get "files/debug-system-message.txt" | nindent 6 }}
+{{- end }}
+{{- end }}
