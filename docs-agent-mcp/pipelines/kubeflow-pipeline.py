@@ -1,14 +1,17 @@
 import kfp
+import kfp.kubernetes as k8s
 from kfp import dsl
 from kfp.dsl import *
 from typing import *
 
-try:
-    import kfp.kubernetes as k8s
-except ImportError:  # pragma: no cover - optional at compile time
-    k8s = None
-
-from utils import DEFAULT_EMBEDDING_BATCH_SIZE, DOCS_COLLECTION
+from utils import (
+    DEFAULT_DOCS_CHUNK_OVERLAP,
+    DEFAULT_DOCS_CHUNK_SIZE,
+    DEFAULT_DOCS_MAX_TEI_CHARS,
+    DEFAULT_EMBEDDING_BATCH_SIZE,
+    DEFAULT_EMBEDDING_DIM,
+    DOCS_COLLECTION,
+)
 
 @dsl.component(
     base_image="docker.io/library/python:3.9",
@@ -313,6 +316,7 @@ def chunk_and_embed(
     chunk_overlap: int,
     embeddings_service_url: str,
     embedding_batch_size: int,
+    max_tei_chars: int,
     embedded_data: dsl.Output[dsl.Dataset],
 ):
     import json
@@ -331,10 +335,17 @@ def chunk_and_embed(
             file_data = json.loads(line)
             content = file_data['content']
 
-            # AGGRESSIVE CLEANING FOR BETTER EMBEDDINGS
+            # Clean presentation-only markup while preserving the technical
+            # content and line structure that make code/YAML retrievable.
 
             # Remove Hugo frontmatter (both --- and +++ styles)
-            content = re.sub(r'^\s*[+\-]{3,}.*?[+\-]{3,}\s*', '', content, flags=re.DOTALL | re.MULTILINE)
+            content = re.sub(
+                r'\A[ \t]*(?P<delimiter>---|\+\+\+)[ \t]*\r?\n.*?'
+                r'^[ \t]*(?P=delimiter)[ \t]*(?:\r?\n|\Z)',
+                '',
+                content,
+                flags=re.DOTALL | re.MULTILINE,
+            )
 
             # Remove Hugo template syntax
             content = re.sub(r'\{\{.*?\}\}', '', content, flags=re.DOTALL)
@@ -346,13 +357,21 @@ def chunk_and_embed(
             # Remove navigation/menu artifacts
             content = re.sub(r'\b(Get Started|Contribute|GenAI|Home|Menu|Navigation)\b', '', content, flags=re.IGNORECASE)
 
-            # Clean up URLs and links
+            # Convert Markdown links before removing bare URLs. Doing this in
+            # the reverse order leaves dangling `](` tokens; the link regex can
+            # then span multiple paragraphs and delete intervening YAML.
+            content = re.sub(
+                r'\[([^\]]+)\]\((?:[^()]|\([^()]*\))*\)',
+                r'\1',
+                content,
+            )
             content = re.sub(r'https?://[^\s]+', '', content)
-            content = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', content)  # Convert [text](url) to text
 
-            # Remove excessive whitespace and normalize
-            content = re.sub(r'\s+', ' ', content)  # Multiple spaces to single
-            content = re.sub(r'\n\s*\n\s*\n+', '\n\n', content)  # Multiple newlines to double
+            # Keep newlines and indentation so split boundaries and YAML
+            # structure survive cleaning; only collapse horizontal whitespace
+            # and runs of blank lines.
+            content = re.sub(r'[ \t]+', ' ', content)
+            content = re.sub(r'\n[ \t]*\n(?:[ \t]*\n)+', '\n\n', content)
             content = content.strip()
 
             # Skip files that are too short after cleaning
@@ -398,8 +417,9 @@ def chunk_and_embed(
 
     print(f"Created {len(records)} chunks; requesting embeddings from TEI service...")
 
-    # TEI all-mpnet-base-v2 rejects any input >=384 tokens (~1000 chars).
-    max_tei_chars = 1000
+    # TEI all-mpnet-base-v2 rejects any input >=384 tokens. YAML-heavy docs
+    # tokenize denser than prose; keep max_tei_chars configurable per model.
+    max_tei_chars = max(1, int(max_tei_chars))
     for i in range(0, len(records), embedding_batch_size):
         batch = records[i:i + embedding_batch_size]
         texts = [r["content_text"][:max_tei_chars] for r in batch]
@@ -429,7 +449,8 @@ def store_milvus(
     embedded_data: dsl.Input[dsl.Dataset],
     milvus_host: str,
     milvus_port: str,
-    collection_name: str
+    collection_name: str,
+    embedding_dim: int,
 ):
     from pymilvus import connections, utility, FieldSchema, CollectionSchema, DataType, Collection
     import json
@@ -439,6 +460,7 @@ def store_milvus(
     SCHEMA_VERSION = 1
     SCHEMA_DESCRIPTION = f"RAG collection for documentation (v={SCHEMA_VERSION})"
     DELETE_BATCH_SIZE = 100
+    embedding_dim = int(embedding_dim)
 
     milvus_user = os.environ.get("MILVUS_USER", "root")
     milvus_password = os.environ.get("MILVUS_PASSWORD", "")
@@ -462,7 +484,7 @@ def store_milvus(
         FieldSchema(name="citation_url", dtype=DataType.VARCHAR, max_length=1024),
         FieldSchema(name="chunk_index", dtype=DataType.INT64),
         FieldSchema(name="content_text", dtype=DataType.VARCHAR, max_length=2000),
-        FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=768),
+        FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=embedding_dim),
         FieldSchema(name="last_updated", dtype=DataType.INT64)
     ]
 
@@ -472,15 +494,43 @@ def store_milvus(
     if collection_existed:
         collection = Collection(collection_name)
         existing_desc = collection.description or ""
-        if f"v={SCHEMA_VERSION}" not in existing_desc:
+        existing_fields = {field.name: field for field in collection.schema.fields}
+        required_types = {
+            "id": DataType.INT64,
+            "file_unique_id": DataType.VARCHAR,
+            "repo_name": DataType.VARCHAR,
+            "file_path": DataType.VARCHAR,
+            "file_name": DataType.VARCHAR,
+            "citation_url": DataType.VARCHAR,
+            "chunk_index": DataType.INT64,
+            "content_text": DataType.VARCHAR,
+            "vector": DataType.FLOAT_VECTOR,
+        }
+        missing_fields = sorted(set(required_types) - set(existing_fields))
+        wrong_types = sorted(
+            name
+            for name, expected_type in required_types.items()
+            if name in existing_fields and existing_fields[name].dtype != expected_type
+        )
+        vector_dim = int(existing_fields.get("vector").params.get("dim", 0)) if "vector" in existing_fields else 0
+        version_conflict = "v=" in existing_desc and f"v={SCHEMA_VERSION}" not in existing_desc
+        if missing_fields or wrong_types or vector_dim != embedding_dim or version_conflict:
             raise RuntimeError(
                 f"Schema version mismatch for {collection_name}. "
-                f"Expected v={SCHEMA_VERSION}, found description: '{existing_desc}'. "
+                f"Expected compatible v={SCHEMA_VERSION}; description='{existing_desc}', "
+                f"missing={missing_fields}, wrong_types={wrong_types}, vector_dim={vector_dim}. "
                 f"Run a migration job to drop+recreate before re-indexing."
             )
-        print(f"Using existing collection: {collection_name} (schema v={SCHEMA_VERSION})")
+        has_last_updated = "last_updated" in existing_fields
+        citation_url_limit = int(existing_fields["citation_url"].params.get("max_length", 512))
+        content_text_limit = int(existing_fields["content_text"].params.get("max_length", 2000))
+        schema_label = f"v={SCHEMA_VERSION}" if f"v={SCHEMA_VERSION}" in existing_desc else "compatible legacy"
+        print(f"Using existing collection: {collection_name} ({schema_label})")
     else:
         collection = Collection(collection_name, schema)
+        has_last_updated = True
+        citation_url_limit = 1024
+        content_text_limit = 2000
         print(f"Created new collection: {collection_name} (schema v={SCHEMA_VERSION})")
 
     # Rest of your existing code remains the same...
@@ -490,39 +540,49 @@ def store_milvus(
     with open(embedded_data.path, 'r', encoding='utf-8') as f:
         for line in f:
             record = json.loads(line)
-            records.append({
+            stored_record = {
                 "file_unique_id": record["file_unique_id"],
                 "repo_name": record["repo_name"],
                 "file_path": record["file_path"],
                 "file_name": record["file_name"],
-                "citation_url": record["citation_url"],
+                "citation_url": record["citation_url"][:citation_url_limit],
                 "chunk_index": record["chunk_index"],
-                "content_text": record["content_text"],
+                "content_text": record["content_text"][:content_text_limit],
                 "vector": record["embedding"],
-                "last_updated": timestamp
-            })
+            }
+            if has_last_updated:
+                stored_record["last_updated"] = timestamp
+            records.append(stored_record)
 
     if records:
         # load() before delete requires an existing index; new collections have none yet
         if collection_existed and len(collection.indexes) > 0:
             collection.load()
-            unique_ids = sorted(set(r["file_unique_id"] for r in records))
+            files_by_repo = {}
+            for record in records:
+                files_by_repo.setdefault(record["repo_name"], set()).add(record["file_path"])
             deleted = 0
             try:
-                for i in range(0, len(unique_ids), DELETE_BATCH_SIZE):
-                    batch_ids = unique_ids[i:i + DELETE_BATCH_SIZE]
-                    quoted = ", ".join(f'"{uid}"' for uid in batch_ids)
-                    expr = f"file_unique_id in [{quoted}]"
-                    old = collection.query(expr=expr, output_fields=["id"], limit=16384)
-                    if old:
-                        collection.delete(expr)
-                        deleted += len(old)
+                for repo_name, file_paths in sorted(files_by_repo.items()):
+                    sorted_paths = sorted(file_paths)
+                    for i in range(0, len(sorted_paths), DELETE_BATCH_SIZE):
+                        batch_paths = sorted_paths[i:i + DELETE_BATCH_SIZE]
+                        quoted_paths = ", ".join(json.dumps(path) for path in batch_paths)
+                        expr = (
+                            f"repo_name == {json.dumps(repo_name)} and "
+                            f"file_path in [{quoted_paths}]"
+                        )
+                        old = collection.query(expr=expr, output_fields=["id"], limit=16384)
+                        if old:
+                            collection.delete(expr)
+                            deleted += len(old)
                 if deleted:
                     collection.flush()
-                    print(f"Deleted {deleted} old chunks for {len(unique_ids)} files")
+                    file_count = sum(len(paths) for paths in files_by_repo.values())
+                    print(f"Deleted {deleted} old chunks for {file_count} files")
             except Exception as e:
                 print(f"ERROR during delete phase: {e}")
-                print(f"Failed batch unique_ids: {unique_ids[i:i + DELETE_BATCH_SIZE]}")
+                print(f"Failed repo/file batch: {repo_name}/{batch_paths}")
                 raise
 
         # Insert new chunks (failure-aware)
@@ -562,12 +622,14 @@ def github_rag_pipeline(
     directory_path: str = "content/en/docs",
     github_token: str = "",
     base_url: str = "https://www.kubeflow.org/docs",
-    chunk_size: int = 1000,
-    chunk_overlap: int = 100,
+    chunk_size: int = DEFAULT_DOCS_CHUNK_SIZE,
+    chunk_overlap: int = DEFAULT_DOCS_CHUNK_OVERLAP,
+    max_tei_chars: int = DEFAULT_DOCS_MAX_TEI_CHARS,
     embeddings_service_url: str = (
         "http://embeddings-service-predictor.ml-infra.svc.cluster.local/embed"
     ),
     embedding_batch_size: int = DEFAULT_EMBEDDING_BATCH_SIZE,
+    embedding_dim: int = DEFAULT_EMBEDDING_DIM,
     milvus_host: str = "milvus-milvus.ml-infra.svc.cluster.local",
     milvus_port: str = "19530",
     collection_name: str = DOCS_COLLECTION,
@@ -596,6 +658,7 @@ def github_rag_pipeline(
         chunk_overlap=chunk_overlap,
         embeddings_service_url=embeddings_service_url,
         embedding_batch_size=embedding_batch_size,
+        max_tei_chars=max_tei_chars,
     )
     
     # Store in Milvus
@@ -604,6 +667,7 @@ def github_rag_pipeline(
         milvus_host=milvus_host,
         milvus_port=milvus_port,
         collection_name=collection_name,
+        embedding_dim=embedding_dim,
     )
 
     if k8s is not None:

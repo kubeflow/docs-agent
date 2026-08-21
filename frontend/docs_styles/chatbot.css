@@ -66,6 +66,12 @@
     flex-direction: column;
     height: 100%;
     min-height: 0;
+    /* flex:1 leaves min-width at auto, so this column refused to shrink below
+       the intrinsic width of its widest content. A long unwrappable line in a
+       code block therefore pushed it wider than the panel, which squeezed the
+       persona sidebar next to it down to a sliver and pushed the rest past the
+       container's overflow:hidden edge. */
+    min-width: 0;
 }
 
 /* Hide the old sidebars */
@@ -137,11 +143,14 @@
     flex-direction: column;
     gap: 16px;
     background: #ffffff;
+    min-width: 0;
 }
 
 .message {
     display: flex;
     animation: fadeIn 0.3s ease;
+    min-width: 0;
+    max-width: 100%;
 }
 
 @keyframes fadeIn {
@@ -181,6 +190,38 @@
     box-sizing: border-box;
 }
 
+/* Prism's autoloader may not have run yet (or at all) when a block renders,
+   so don't rely on its theme to lay the code out. */
+.message-content pre code {
+    display: block;
+    white-space: pre;
+    min-width: 0;
+}
+
+/* Keep the horizontal scrollbar visible on macOS, where overlay scrollbars
+   are hidden until scrolled and a clipped code sample looks simply cut off. */
+.message-content pre::-webkit-scrollbar {
+    height: 8px;
+}
+.message-content pre::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.04);
+    border-radius: 4px;
+}
+.message-content pre::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.22);
+    border-radius: 4px;
+}
+.message-content pre::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.35);
+}
+
+.chatbot-container.dark-theme .message-content pre::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.06);
+}
+.chatbot-container.dark-theme .message-content pre::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.26);
+}
+
 /* Adobe style bubbles */
 .user-message .message-content {
     background: #e8f0fe;
@@ -203,6 +244,29 @@
 
 .message-content p { margin: 0 0 10px 0; }
 .message-content p:last-child { margin-bottom: 0; }
+
+/* Source citations should read like part of the answer while remaining
+   unmistakably interactive. Long repository paths may wrap inside the bubble. */
+.message-content a {
+    color: #0b57d0;
+    font-weight: 600;
+    text-decoration-line: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
+    overflow-wrap: anywhere;
+    transition: color 0.16s ease, text-decoration-thickness 0.16s ease;
+}
+
+.message-content a:hover {
+    color: #063b91;
+    text-decoration-thickness: 2px;
+}
+
+.message-content a:focus-visible {
+    outline: 2px solid #0b57d0;
+    outline-offset: 3px;
+    border-radius: 2px;
+}
 
 /* Keep Flo avatar for now, just smaller */
 .flo-avatar-container {
@@ -378,6 +442,7 @@
 .persona-sidebar {
     display: none; /* Hidden in normal/widget view */
     width: 320px;
+    flex-shrink: 0;
     background: #fcfcfc;
     border-right: 1px solid #eaeaea;
     flex-direction: column;
@@ -697,6 +762,18 @@
     box-shadow: 0 2px 6px rgba(0,0,0,0.2);
 }
 
+.chatbot-container.dark-theme .message-content a {
+    color: #8ab4f8;
+}
+
+.chatbot-container.dark-theme .message-content a:hover {
+    color: #aecbfa;
+}
+
+.chatbot-container.dark-theme .message-content a:focus-visible {
+    outline-color: #8ab4f8;
+}
+
 .chatbot-container.dark-theme .user-message .message-content {
     background: #1d4ed8 !important; /* Premium dark blue */
     color: #ffffff !important;
@@ -882,4 +959,3 @@
 .chatbot-container.dark-theme .citations-list a {
     color: #60a5fa !important;
 }
-

@@ -14,14 +14,10 @@ issues_utils.py in sync for unit tests.
 """
 
 import kfp
+import kfp.kubernetes as k8s
 from kfp import dsl
 from kfp.dsl import *
 from typing import *
-
-try:
-    import kfp.kubernetes as k8s
-except ImportError:  # pragma: no cover
-    k8s = None
 
 from utils import DEFAULT_EMBEDDING_BATCH_SIZE, ISSUES_COLLECTION
 

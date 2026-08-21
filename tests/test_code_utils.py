@@ -1,13 +1,116 @@
 """Tests for code and manifest chunking utilities."""
 
+import base64
+import importlib.util
+import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 
 PIPELINES_DIR = Path(__file__).parent.parent / "docs-agent-mcp" / "pipelines"
 sys.path.insert(0, str(PIPELINES_DIR))
 
 from code_utils import chunk_code_file, parse_json_file, parse_python_ast, parse_yaml_documents
+
+
+def load_code_pipeline_module():
+    """Load the hyphenated pipeline module so component python funcs are testable."""
+    pytest.importorskip("kfp", reason="pipeline component tests require the KFP SDK")
+    pipeline_path = PIPELINES_DIR / "code-pipeline.py"
+    spec = importlib.util.spec_from_file_location("code_pipeline", pipeline_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class FakeResponse:
+    def __init__(self, payload):
+        self.payload = payload
+        self.status_code = 200
+        self.headers = {}
+
+    def json(self):
+        return self.payload
+
+    def raise_for_status(self):
+        return None
+
+
+def test_code_pipeline_preserves_github_canonical_citation_url(monkeypatch, tmp_path):
+    """Katib's master branch URL must survive download and chunking unchanged."""
+    module = load_code_pipeline_module()
+    source_url = "https://github.com/kubeflow/katib/blob/master/examples/v1beta1/hp-tuning/random.yaml"
+    contents_url = "https://api.github.com/repos/kubeflow/katib/contents/examples/v1beta1/hp-tuning"
+    file_api_url = "https://api.github.com/repos/kubeflow/katib/contents/random.yaml"
+    yaml_text = "apiVersion: kubeflow.org/v1beta1\nkind: Experiment\nmetadata:\n  name: random\n"
+
+    def fake_get(url, params=None, headers=None):
+        if url == contents_url:
+            return FakeResponse(
+                [
+                    {
+                        "type": "file",
+                        "name": "random.yaml",
+                        "path": "examples/v1beta1/hp-tuning/random.yaml",
+                        "url": file_api_url,
+                        "html_url": source_url,
+                    }
+                ]
+            )
+        if url == file_api_url:
+            return FakeResponse(
+                {
+                    "content": base64.b64encode(yaml_text.encode()).decode(),
+                    "html_url": source_url,
+                }
+            )
+        raise AssertionError(f"Unexpected GitHub URL: {url}")
+
+    monkeypatch.setattr("requests.get", fake_get)
+    downloaded_path = tmp_path / "downloaded.jsonl"
+    module.download_github_code.python_func(
+        repos="kubeflow/katib",
+        directory_paths="examples/v1beta1/hp-tuning",
+        file_extensions="yaml,yml",
+        github_token="test-token",
+        code_data=SimpleNamespace(path=str(downloaded_path)),
+    )
+
+    downloaded = json.loads(downloaded_path.read_text())
+    assert downloaded["citation_url"] == source_url
+
+    monkeypatch.setattr("requests.post", lambda *args, **kwargs: FakeResponse([[0.1, 0.2]]))
+    embedded_path = tmp_path / "embedded.jsonl"
+    module.chunk_and_embed_code.python_func(
+        code_data=SimpleNamespace(path=str(downloaded_path)),
+        chunk_size=1000,
+        chunk_overlap=100,
+        embeddings_service_url="http://embeddings.test/embed",
+        embedding_batch_size=8,
+        embedded_data=SimpleNamespace(path=str(embedded_path)),
+    )
+
+    embedded = json.loads(embedded_path.read_text())
+    assert embedded["citation_url"] == source_url
+
+
+def test_compiled_code_pipeline_injects_required_secrets(tmp_path):
+    """Compilation must fail closed rather than silently omit Milvus auth."""
+    module = load_code_pipeline_module()
+    compiled_path = tmp_path / "code_rag_pipeline.yaml"
+
+    module.kfp.compiler.Compiler().compile(
+        pipeline_func=module.code_rag_pipeline,
+        package_path=str(compiled_path),
+    )
+
+    compiled = compiled_path.read_text()
+    assert "milvus-auth" in compiled
+    assert "MILVUS_PASSWORD" in compiled
+    assert "github-pat" in compiled
 
 
 class TestParseYamlDocuments:

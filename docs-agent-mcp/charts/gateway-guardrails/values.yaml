@@ -35,6 +35,10 @@ routing:
   uiPort: 8080
   # Cap slow/stuck upstream (LLM) calls so a hung request can't pin a worker.
   timeout: 30s
+  # The A2A path streams tokens for as long as generation takes, so it can't
+  # live under the cap above: a 7B answer routinely runs past 30s and Envoy was
+  # cutting the SSE stream mid-token, which reads as the model truncating.
+  streamTimeout: 300s
   cors:
     # Lock embedding to the published chatbot origin(s) — no wildcard.
     allowOrigins:
