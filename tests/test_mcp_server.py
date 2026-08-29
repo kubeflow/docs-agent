@@ -209,11 +209,12 @@ class TestSearchKubeflowDocs:
         ]
 
         result = server.search_kubeflow_docs("Katib hyperparameter tuning configuration", top_k=10)
+        summary = _tool_payload(result)["markdown_summary"]
 
-        assert "parallelTrialCount controls" in result
-        assert '"sidecar.istio.io/inject": "false"' in result
-        assert "getting-started" not in result
-        assert result.count("**Source:**") == 1
+        assert "parallelTrialCount controls" in summary
+        assert '"sidecar.istio.io/inject": "false"' in summary
+        assert "getting-started" not in summary
+        assert summary.count("**Source:**") == 1
         assert "configure-experiment" in mock_client.query.call_args.kwargs["filter"]
 
     def test_searches_correct_collection(self, inject_mocks):
