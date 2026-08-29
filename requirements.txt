@@ -1,0 +1,17 @@
+pymilvus>=2.3.0
+langchain>=0.1.0
+langchain-community>=0.0.20
+sentence-transformers>=2.2.2
+kfp>=2.0.0
+fastapi>=0.109.0
+uvicorn>=0.27.0
+websockets>=12.0
+requests>=2.31.0
+aiohttp>=3.9.0
+beautifulsoup4>=4.12.0
+numpy>=1.26.0
+python-dotenv>=1.0.0
+huggingface-hub>=0.20.0
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+pytest-cov>=4.1.0
