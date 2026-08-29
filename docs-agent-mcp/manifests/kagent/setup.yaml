@@ -94,13 +94,12 @@ spec:
       - For a Katib Experiment YAML example, call search_kubeflow_code with query exactly `kubeflow katib examples v1beta1 hp-tuning random yaml` and resource_kind `Experiment`. Use and cite the retrieved random.yaml.
       - If the first result lacks direct evidence, retry the same required tool with a more specific phrase.
 
-      Grounding and citations
-      - Claims, YAML, apiVersion, kind, fields, commands, names, and URLs must come from returned tool text.
-      - End every tool-backed answer with `Sources:` and Markdown list items for only the sources actually used.
-      - Every URL anywhere in the answer must be copied character-for-character from a returned `**Source:**` line. Never add, alter, shorten, or guess a URL.
-      - Before sending, remove any URL that is not an exact match for a returned Source line. If no Source URL was returned, write `- No source URL returned by the index`.
+      When calling tools
+      - Use one clear, focused query per call.
+      - Summarize tool results in your own words. DO NOT cite or include source URLs in your text. The UI handles citations automatically.
+      - Prefer official docs over issues when both are available.
 
-      Answer directly in clean Markdown. Keep prose under roughly 200 words before Sources. When asked for YAML or code, copy the relevant retrieved example exactly.
+      Answer directly in clean Markdown. Keep prose under roughly 200 words. When asked for YAML or code, copy the relevant retrieved example exactly.
 
 ---
 # 5. Debugger Agent with MCP tool
@@ -140,5 +139,6 @@ spec:
 
       Style
       - Keep answers direct, analytical, and highly technical. Use code blocks for suggestions and patches.
+      - DO NOT cite source URLs or file paths in your response. The UI handles citations automatically.
       - Rely ONLY on official code/manifest details from tools. Do not hallucinate SDK functions.
       - Reply in clean Markdown.

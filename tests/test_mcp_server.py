@@ -3,12 +3,18 @@
 Mocks pymilvus and embeddings HTTP calls — no in-process sentence-transformers.
 """
 
+import json
 import sys
 import importlib.util
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+
+def _tool_payload(result: str) -> dict:
+    """Parse JSON returned by search_* MCP tools."""
+    return json.loads(result)
 
 MCP_SERVER_DIR = Path(__file__).parent.parent / "docs-agent-mcp" / "mcp-server"
 MCP_SERVER_PATH = MCP_SERVER_DIR / "server.py"
@@ -95,12 +101,17 @@ class TestSearchKubeflowDocs:
         mock_client.search.return_value = sample_milvus_hits
 
         result = server.search_kubeflow_docs("KServe")
+        payload = _tool_payload(result)
+        summary = payload["markdown_summary"]
 
-        assert "Result 1" in result
-        assert "Result 2" in result
-        assert "0.9234" in result
-        assert "https://www.kubeflow.org/docs/kserve/" in result
-        assert "KServe provides serverless inference" in result
+        assert "Result 1" in summary
+        assert "Result 2" in summary
+        assert "0.9234" in summary
+        assert "https://www.kubeflow.org/docs/kserve/" in summary
+        assert "KServe provides serverless inference" in summary
+        assert len(payload["citations"]) == 2
+        assert payload["citations"][0]["url"] == "https://www.kubeflow.org/docs/kserve/"
+        assert payload["citations"][0]["file"] == "content/en/docs/kserve/overview.md"
 
     def test_includes_file_path_in_results(self, inject_mocks, sample_milvus_hits):
         """Result should include the file path from Milvus."""
@@ -109,7 +120,7 @@ class TestSearchKubeflowDocs:
 
         result = server.search_kubeflow_docs("KServe")
 
-        assert "content/en/docs/kserve/overview.md" in result
+        assert "content/en/docs/kserve/overview.md" in _tool_payload(result)["markdown_summary"]
 
     def test_respects_top_k_parameter(self, inject_mocks):
         """top_k should be passed through to Milvus client.search limit."""
@@ -228,9 +239,10 @@ class TestSearchKubeflowDocs:
         ]
 
         result = server.search_kubeflow_docs("test")
+        summary = _tool_payload(result)["markdown_summary"]
 
-        assert "Result 1" in result
-        assert "0.5000" in result
+        assert "Result 1" in summary
+        assert "0.5000" in summary
 
     def test_results_separated_by_divider(self, inject_mocks, sample_milvus_hits):
         """Multiple results should be separated by --- dividers."""
@@ -239,7 +251,7 @@ class TestSearchKubeflowDocs:
 
         result = server.search_kubeflow_docs("test")
 
-        assert "\n---\n" in result
+        assert "\n---\n" in _tool_payload(result)["markdown_summary"]
 
     def test_default_top_k_is_five(self, inject_mocks):
         """Default top_k should be 5 when not specified."""
@@ -344,11 +356,15 @@ class TestSearchGithubIssues:
         mock_client.search.return_value = sample_issues_milvus_hits
 
         result = server.search_github_issues("KServe model loading")
+        payload = _tool_payload(result)
+        summary = payload["markdown_summary"]
 
-        assert "Result 1" in result
-        assert "0.8912" in result
-        assert "github.com/kubeflow/kubeflow/issues/42" in result
-        assert "KServe model not loading" in result
+        assert "Result 1" in summary
+        assert "0.8912" in summary
+        assert "github.com/kubeflow/kubeflow/issues/42" in summary
+        assert "KServe model not loading" in summary
+        assert payload["citations"][0]["issue"] == 42
+        assert payload["citations"][0]["repo"] == "kubeflow/kubeflow"
 
     def test_includes_issue_number(self, inject_mocks, sample_issues_milvus_hits):
         """Should include issue number in formatted output."""
@@ -356,7 +372,7 @@ class TestSearchGithubIssues:
         mock_client.search.return_value = sample_issues_milvus_hits
 
         result = server.search_github_issues("test")
-        assert "**Issue:** #42" in result
+        assert "**Issue:** #42" in _tool_payload(result)["markdown_summary"]
 
     def test_includes_issue_labels(self, inject_mocks, sample_issues_milvus_hits):
         """Should include issue_labels in formatted output."""
@@ -364,7 +380,7 @@ class TestSearchGithubIssues:
         mock_client.search.return_value = sample_issues_milvus_hits
 
         result = server.search_github_issues("test")
-        assert "kind/bug, area/kserve" in result
+        assert "kind/bug, area/kserve" in _tool_payload(result)["markdown_summary"]
 
     def test_filters_by_repo(self, inject_mocks):
         """Should construct repo filter expression."""
@@ -460,13 +476,16 @@ class TestSearchKubeflowCode:
         mock_client.search.return_value = sample_code_milvus_hits
 
         result = server.search_kubeflow_code("pipeline deployment")
+        payload = _tool_payload(result)
+        summary = payload["markdown_summary"]
 
-        assert "### Result 1 (score: 0.8123)" in result
-        assert "https://github.com/kubeflow/manifests/blob/main/apps/pipeline/deployment.yaml" in result
-        assert "**File:** apps/pipeline/deployment.yaml" in result
-        assert "**Resource:** Deployment `ml-pipeline` (namespace: kubeflow)" in result
-        assert "**Type:** yaml" in result
-        assert "```\napiVersion: apps/v1\nkind: Deployment" in result
+        assert "### Result 1 (score: 0.8123)" in summary
+        assert "https://github.com/kubeflow/manifests/blob/main/apps/pipeline/deployment.yaml" in summary
+        assert "**File:** apps/pipeline/deployment.yaml" in summary
+        assert "**Resource:** Deployment `ml-pipeline` (namespace: kubeflow)" in summary
+        assert "**Type:** yaml" in summary
+        assert "```\napiVersion: apps/v1\nkind: Deployment" in summary
+        assert payload["citations"][0]["kind"] == "Deployment"
 
     def test_results_separated_by_divider(self, inject_mocks, sample_code_milvus_hits):
         """Multiple code results should be separated by markdown dividers."""
@@ -475,7 +494,7 @@ class TestSearchKubeflowCode:
 
         result = server.search_kubeflow_code("test")
 
-        assert "\n---\n" in result
+        assert "\n---\n" in _tool_payload(result)["markdown_summary"]
 
     def test_searches_code_collection(self, inject_mocks):
         """Should search the CODE_COLLECTION_NAME."""

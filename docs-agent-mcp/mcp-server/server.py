@@ -2,6 +2,7 @@ import json
 import os
 import re
 import threading
+import json
 
 from fastmcp import FastMCP
 from pymilvus import MilvusClient
@@ -177,7 +178,13 @@ def search_kubeflow_docs(query: str, top_k: int = 5) -> str:
         entry += f"\n\n{entity.get('content_text', '')}\n"
         results.append(entry)
 
-    return "\n---\n".join(results)
+    return json.dumps({
+        "markdown_summary": "\n---\n".join(results),
+        "citations": [
+            {"url": hit["entity"].get("citation_url", ""), "file": hit["entity"].get("file_path", "")}
+            for hit in hits
+        ]
+    })
 
 
 @mcp.tool()
@@ -226,7 +233,13 @@ def search_github_issues(query: str, top_k: int = 5, repo: str = "", state: str 
         entry += f"\n\n{entity.get('content_text', '')}\n"
         results.append(entry)
 
-    return "\n---\n".join(results)
+    return json.dumps({
+        "markdown_summary": "\n---\n".join(results),
+        "citations": [
+            {"url": hit["entity"].get("citation_url", ""), "repo": hit["entity"].get("repo_name", ""), "issue": hit["entity"].get("issue_number", "")}
+            for hit in hits
+        ]
+    })
 
 
 @mcp.tool()
@@ -281,7 +294,13 @@ def search_kubeflow_code(query: str, top_k: int = 5, resource_kind: str = "") ->
         entry += f"\n\n```\n{entity.get('content_text', '')}\n```\n"
         results.append(entry)
 
-    return "\n---\n".join(results)
+    return json.dumps({
+        "markdown_summary": "\n---\n".join(results),
+        "citations": [
+            {"url": hit["entity"].get("citation_url", ""), "file": hit["entity"].get("file_path", ""), "kind": hit["entity"].get("resource_kind", "")}
+            for hit in hits
+        ]
+    })
 
 
 if __name__ == "__main__":
