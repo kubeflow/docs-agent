@@ -1,5 +1,7 @@
 runtime:
   name: llm-runtime
+  # Intentionally pinned. Runtime-image changes are validated and released only
+  # through an approved deploy_kserve maintenance window; do not track latest.
   image: docker.io/kserve/huggingfaceserver:v0.15.2-gpu
   resources:
     requests:

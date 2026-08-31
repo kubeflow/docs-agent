@@ -123,9 +123,7 @@ def _search_args(query: str, top_k: int) -> tuple[str, int]:
 def _focus_docs_query(query: str) -> str:
     """Deterministically enrich broad component queries with known doc anchors."""
     lowered = query.lower()
-    is_katib_tuning = "katib" in lowered and (
-        "hyperparameter" in lowered or "tuning" in lowered
-    )
+    is_katib_tuning = "katib" in lowered and ("hyperparameter" in lowered or "tuning" in lowered)
     asks_configuration = "configur" in lowered or "experiment" in lowered
     if is_katib_tuning and asks_configuration:
         anchors = ["parallelTrialCount", "sidecar.istio.io/inject"]
@@ -175,12 +173,7 @@ def _rerank_hits(query: str, hits: list[dict], limit: int, max_per_source: int =
         metadata_overlap = len(query_tokens & metadata_tokens) / denominator
         filename_overlap = len(query_tokens & filename_tokens) / max(1, len(filename_tokens))
         dense_score = float(hit.get("distance", 0.0))
-        combined = (
-            dense_score
-            + (0.18 * content_overlap)
-            + (0.22 * metadata_overlap)
-            + (0.45 * filename_overlap)
-        )
+        combined = dense_score + (0.18 * content_overlap) + (0.22 * metadata_overlap) + (0.45 * filename_overlap)
         scored.append((combined, -dense_rank, hit))
 
     source_counts: dict[str, int] = {}
@@ -232,7 +225,11 @@ def _merge_ordered_content(rows: list[dict], max_chars: int) -> str:
     for row in rows:
         content = str(row.get("content_text", "")).strip()
         if content:
-            unique_rows.setdefault((int(row.get("chunk_index", 0)), content), row)
+            index = _chunk_index(row)
+            # Missing or malformed indexes sort after indexed chunks without
+            # making otherwise usable evidence crash context expansion.
+            sort_index = index if index is not None else float("inf")
+            unique_rows.setdefault((sort_index, content), row)
 
     merged = ""
     for (_, content), _row in sorted(unique_rows.items(), key=lambda item: item[0][0]):
@@ -252,6 +249,70 @@ def _merge_ordered_content(rows: list[dict], max_chars: int) -> str:
             break
         merged += separator + addition[:remaining]
     return merged
+
+
+def _chunk_index(row: dict) -> int | None:
+    """Return a usable chunk index without trusting stored metadata types."""
+    try:
+        value = int(row.get("chunk_index"))
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
+
+
+def _bounded_rows_around_selected(rows: list[dict], selected_entity: dict, max_chunks: int) -> list[dict]:
+    """Keep a deterministic local window that always contains the selected hit."""
+    selected_row = dict(selected_entity)
+    selected_content = str(selected_row.get("content_text", "")).strip()
+    selected_index = _chunk_index(selected_row)
+    selected_key = (selected_index, selected_content)
+
+    # Seed with the vector-search hit. A bounded Milvus query can legally omit
+    # that row (for example when the document has more chunks than its limit),
+    # but expansion must never replace the strongest evidence with unrelated
+    # beginning-of-file chunks.
+    unique_rows: dict[tuple[int | None, str], dict] = {}
+    if selected_content:
+        unique_rows[selected_key] = selected_row
+    for row in rows:
+        content = str(row.get("content_text", "")).strip()
+        if content:
+            unique_rows.setdefault((_chunk_index(row), content), row)
+
+    def proximity(item: tuple[tuple[int | None, str], dict]) -> tuple:
+        (index, content), _row = item
+        is_selected = (index, content) == selected_key
+        if selected_index is None or index is None:
+            distance = 0 if is_selected else float("inf")
+        else:
+            distance = abs(index - selected_index)
+        return (not is_selected, distance, index is None, index or 0, content)
+
+    nearest = sorted(unique_rows.items(), key=proximity)[:max_chunks]
+    return [
+        row
+        for (_key, row) in sorted(
+            nearest,
+            key=lambda item: (
+                item[0][0] is None,
+                item[0][0] if item[0][0] is not None else 0,
+                item[0][1],
+            ),
+        )
+    ]
+
+
+def _merge_context_around_selected(rows: list[dict], selected_entity: dict, max_chunks: int, max_chars: int) -> str:
+    """Merge a local source window without allowing it to replace the hit."""
+    context_rows = _bounded_rows_around_selected(rows, selected_entity, max_chunks)
+    context = _merge_ordered_content(context_rows, max_chars)
+    selected_content = str(selected_entity.get("content_text", "")).strip()
+    selected_evidence = selected_content[:max_chars]
+    if selected_evidence and selected_evidence not in context:
+        # Earlier chunks may consume the character budget. Retaining the hit is
+        # safer than returning a large context that omits the matching evidence.
+        return selected_evidence
+    return context
 
 
 def _search_stems(value: str) -> set[str]:
@@ -289,28 +350,38 @@ def _expand_top_document(query: str, hits: list[dict]) -> list[dict]:
     selected = _top_document_hit(query, hits)
     selected_entity = selected.get("entity", {})
     file_path = selected_entity.get("file_path", "")
+
+    def selected_first() -> list[dict]:
+        return [selected, *(hit for hit in hits if hit is not selected)]
+
     if not file_path:
-        return hits
+        return selected_first()
+
+    selected_index = _chunk_index(selected_entity)
+    filter_expr = f"file_path == {json.dumps(file_path)}"
+    if selected_index is not None:
+        chunks_before = (DOCS_CONTEXT_MAX_CHUNKS - 1) // 2
+        lower_bound = max(0, selected_index - chunks_before)
+        upper_bound = lower_bound + DOCS_CONTEXT_MAX_CHUNKS - 1
+        filter_expr += f" and chunk_index >= {lower_bound} and chunk_index <= {upper_bound}"
 
     try:
         rows = client.query(
             collection_name=COLLECTION_NAME,
-            filter=f"file_path == {json.dumps(file_path)}",
+            filter=filter_expr,
             output_fields=["content_text", "citation_url", "file_path", "chunk_index"],
             limit=DOCS_CONTEXT_MAX_CHUNKS,
         )
     except Exception:
-        return hits
+        return selected_first()
     if not isinstance(rows, list) or not rows:
-        return hits
+        return selected_first()
 
-    context = _merge_ordered_content(rows, DOCS_CONTEXT_MAX_CHARS)
+    context = _merge_context_around_selected(rows, selected_entity, DOCS_CONTEXT_MAX_CHUNKS, DOCS_CONTEXT_MAX_CHARS)
     if not context:
-        return hits
+        return selected_first()
     expanded_entity = dict(selected_entity)
     expanded_entity["content_text"] = context
-    expanded_entity["citation_url"] = rows[0].get("citation_url", selected_entity.get("citation_url", ""))
-    expanded_entity["file_path"] = rows[0].get("file_path", file_path)
     return [{**selected, "entity": expanded_entity}]
 
 
@@ -325,13 +396,18 @@ def _expand_top_issue(hits: list[dict]) -> list[dict]:
     if not repo_name or not isinstance(issue_number, int) or issue_number <= 0:
         return [selected]
 
+    selected_index = _chunk_index(selected_entity)
+    filter_expr = f"repo_name == {json.dumps(repo_name)} and issue_number == {issue_number}"
+    if selected_index is not None:
+        chunks_before = (ISSUES_CONTEXT_MAX_CHUNKS - 1) // 2
+        lower_bound = max(0, selected_index - chunks_before)
+        upper_bound = lower_bound + ISSUES_CONTEXT_MAX_CHUNKS - 1
+        filter_expr += f" and chunk_index >= {lower_bound} and chunk_index <= {upper_bound}"
+
     try:
         rows = client.query(
             collection_name=ISSUES_COLLECTION_NAME,
-            filter=(
-                f"repo_name == {json.dumps(repo_name)} and "
-                f"issue_number == {issue_number}"
-            ),
+            filter=filter_expr,
             output_fields=[
                 "content_text",
                 "citation_url",
@@ -348,23 +424,11 @@ def _expand_top_issue(hits: list[dict]) -> list[dict]:
     if not isinstance(rows, list) or not rows:
         return [selected]
 
-    context = _merge_ordered_content(rows, ISSUES_CONTEXT_MAX_CHARS)
+    context = _merge_context_around_selected(rows, selected_entity, ISSUES_CONTEXT_MAX_CHUNKS, ISSUES_CONTEXT_MAX_CHARS)
     if not context:
         return [selected]
 
     expanded_entity = dict(selected_entity)
-    expanded_entity.update(
-        {
-            field: rows[0].get(field, selected_entity.get(field, ""))
-            for field in (
-                "citation_url",
-                "repo_name",
-                "issue_number",
-                "issue_state",
-                "issue_labels",
-            )
-        }
-    )
     expanded_entity["content_text"] = context
     return [{**selected, "entity": expanded_entity}]
 
@@ -380,13 +444,26 @@ def _expand_top_code_file(hits: list[dict]) -> list[dict]:
     if not repo_name or not file_path:
         return [selected]
 
+    # YAML ingestion stores each `---` document as a separate resource row.
+    # Joining every row from the same file removes document boundaries and can
+    # turn several valid resources into one invalid manifest. The selected row
+    # is already the coherent YAML resource, so return it as-is.
+    file_type = str(selected_entity.get("file_type", "")).lower()
+    if file_type in {"yaml", "yml", "kustomize"} or file_path.lower().endswith((".yaml", ".yml")):
+        return [selected]
+
+    selected_index = _chunk_index(selected_entity)
+    filter_expr = f"repo_name == {json.dumps(repo_name)} and file_path == {json.dumps(file_path)}"
+    if selected_index is not None:
+        chunks_before = (CODE_CONTEXT_MAX_CHUNKS - 1) // 2
+        lower_bound = max(0, selected_index - chunks_before)
+        upper_bound = lower_bound + CODE_CONTEXT_MAX_CHUNKS - 1
+        filter_expr += f" and chunk_index >= {lower_bound} and chunk_index <= {upper_bound}"
+
     try:
         rows = client.query(
             collection_name=CODE_COLLECTION_NAME,
-            filter=(
-                f"repo_name == {json.dumps(repo_name)} and "
-                f"file_path == {json.dumps(file_path)}"
-            ),
+            filter=filter_expr,
             output_fields=[
                 "content_text",
                 "citation_url",
@@ -405,24 +482,10 @@ def _expand_top_code_file(hits: list[dict]) -> list[dict]:
     if not isinstance(rows, list) or not rows:
         return [selected]
 
-    context = _merge_ordered_content(rows, CODE_CONTEXT_MAX_CHARS)
+    context = _merge_context_around_selected(rows, selected_entity, CODE_CONTEXT_MAX_CHUNKS, CODE_CONTEXT_MAX_CHARS)
     if not context:
         return [selected]
     expanded_entity = dict(selected_entity)
-    expanded_entity.update(
-        {
-            field: rows[0].get(field, selected_entity.get(field, ""))
-            for field in (
-                "citation_url",
-                "repo_name",
-                "file_path",
-                "resource_kind",
-                "resource_name",
-                "resource_namespace",
-                "file_type",
-            )
-        }
-    )
     expanded_entity["content_text"] = context
     return [{**selected, "entity": expanded_entity}]
 
@@ -452,7 +515,7 @@ def search_kubeflow_docs(query: str, top_k: int = 5) -> str:
     # needed for a broad question. Rerank pages using URL/path terms, then give
     # the model bounded, ordered context from that one canonical document.
     hits = _rerank_hits(query, hits, _candidate_limit(top_k), max_per_source=3)
-    hits = _expand_top_document(query, hits)
+    hits = _expand_top_document(query, hits)[:top_k]
 
     results = [EVIDENCE_NOTICE]
     for i, hit in enumerate(hits, 1):
@@ -463,20 +526,20 @@ def search_kubeflow_docs(query: str, top_k: int = 5) -> str:
         entry += f"\n**File:** {entity.get('file_path', '')}"
         exact_terms = _exact_query_terms(query, str(entity.get("content_text", "")))
         if exact_terms:
-            entry += "\n**Required verbatim identifiers:** " + ", ".join(
-                f"`{term}`" for term in exact_terms
-            )
+            entry += "\n**Required verbatim identifiers:** " + ", ".join(f"`{term}`" for term in exact_terms)
         entry += f"\n\n{entity.get('content_text', '')}\n"
         results.append(entry)
 
-    return json.dumps({
-        "markdown_summary": "\n---\n".join(results),
-        "citations": [
-            {"url": _source_url(hit["entity"]), "file": hit["entity"].get("file_path", "")}
-            for hit in hits
-            if _source_url(hit["entity"])
-        ]
-    })
+    return json.dumps(
+        {
+            "markdown_summary": "\n---\n".join(results),
+            "citations": [
+                {"url": _source_url(hit["entity"]), "file": hit["entity"].get("file_path", "")}
+                for hit in hits
+                if _source_url(hit["entity"])
+            ],
+        }
+    )
 
 
 @mcp.tool()
@@ -539,27 +602,29 @@ def search_github_issues(query: str, top_k: int = 5, repo: str = "", state: str 
 
         exact_terms = _exact_query_terms(query, str(entity.get("content_text", "")))
         if exact_terms:
-            entry += "\n**Required verbatim identifiers:** " + ", ".join(
-                f"`{term}`" for term in exact_terms
-            )
+            entry += "\n**Required verbatim identifiers:** " + ", ".join(f"`{term}`" for term in exact_terms)
 
         entry += f"\n\n{entity.get('content_text', '')}\n"
         results.append(entry)
 
-    return json.dumps({
-        "markdown_summary": "\n---\n".join(results),
-        "citations": [
-            {"url": _source_url(hit["entity"]), "repo": hit["entity"].get("repo_name", ""), "issue": hit["entity"].get("issue_number", "")}
-            for hit in hits
-            if _source_url(hit["entity"])
-        ]
-    })
+    return json.dumps(
+        {
+            "markdown_summary": "\n---\n".join(results),
+            "citations": [
+                {
+                    "url": _source_url(hit["entity"]),
+                    "repo": hit["entity"].get("repo_name", ""),
+                    "issue": hit["entity"].get("issue_number", ""),
+                }
+                for hit in hits
+                if _source_url(hit["entity"])
+            ],
+        }
+    )
 
 
 @mcp.tool()
-def search_kubeflow_code(
-    query: str, top_k: int = 5, resource_kind: str = "", repo: str = ""
-) -> str:
+def search_kubeflow_code(query: str, top_k: int = 5, resource_kind: str = "", repo: str = "") -> str:
     """Search Kubeflow code and YAML manifests using semantic similarity."""
     try:
         query, top_k = _search_args(query, top_k)
@@ -624,21 +689,25 @@ def search_kubeflow_code(
 
         exact_terms = _exact_query_terms(query, str(entity.get("content_text", "")))
         if exact_terms:
-            entry += "\n**Required verbatim identifiers:** " + ", ".join(
-                f"`{term}`" for term in exact_terms
-            )
+            entry += "\n**Required verbatim identifiers:** " + ", ".join(f"`{term}`" for term in exact_terms)
 
         entry += f"\n\n```\n{entity.get('content_text', '')}\n```\n"
         results.append(entry)
 
-    return json.dumps({
-        "markdown_summary": "\n---\n".join(results),
-        "citations": [
-            {"url": _source_url(hit["entity"]), "file": hit["entity"].get("file_path", ""), "kind": hit["entity"].get("resource_kind", "")}
-            for hit in hits
-            if _source_url(hit["entity"])
-        ]
-    })
+    return json.dumps(
+        {
+            "markdown_summary": "\n---\n".join(results),
+            "citations": [
+                {
+                    "url": _source_url(hit["entity"]),
+                    "file": hit["entity"].get("file_path", ""),
+                    "kind": hit["entity"].get("resource_kind", ""),
+                }
+                for hit in hits
+                if _source_url(hit["entity"])
+            ],
+        }
+    )
 
 
 if __name__ == "__main__":

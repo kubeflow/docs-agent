@@ -73,8 +73,11 @@ class AgentResult:
     tool_fired: bool
     tool_calls: list[str]
     tool_source_urls: set[str]
-    cited_urls: set[str]
+    structured_citation_urls: set[str]
+    answer_urls: set[str]
     invented_urls: list[str]
+    unbacked_citations: list[str]
+    missing_expected_citations: list[str]
     missing_answer_strings: list[str]
     present_forbidden_strings: list[str]
 
@@ -83,6 +86,8 @@ class AgentResult:
         return (
             self.tool_fired
             and not self.invented_urls
+            and not self.unbacked_citations
+            and not self.missing_expected_citations
             and not self.missing_answer_strings
             and not self.present_forbidden_strings
         )
@@ -117,13 +122,22 @@ def run_mcp_search(row: dict[str, Any], namespace: str, deployment: str, top_k: 
 
 
 def score_retrieval(row: dict[str, Any], output: str) -> RetrievalResult:
-    sources = set(SOURCE_RE.findall(output))
+    # MCP tools now return a JSON envelope so the widget can render its
+    # structured citations. The Source lines remain inside markdown_summary
+    # and are still the authoritative retrieval gate.
+    try:
+        payload = json.loads(output)
+    except (json.JSONDecodeError, TypeError):
+        summary = output
+    else:
+        summary = payload.get("markdown_summary", "") if isinstance(payload, dict) else output
+    sources = set(SOURCE_RE.findall(summary))
     missing_sources = [url for url in row["expected_source_urls"] if url not in sources]
     # Evidence coverage is diagnostic rather than a hard Gate 1 condition. It
     # distinguishes "right document, incomplete/stale chunks" from a response
     # generation failure when the answer later misses a required fact.
-    missing_evidence = [value for value in row["must_appear_in_answer"] if value not in output]
-    return RetrievalResult(row, output, sources, missing_sources, missing_evidence)
+    missing_evidence = [value for value in row["must_appear_in_answer"] if value not in summary]
+    return RetrievalResult(row, summary, sources, missing_sources, missing_evidence)
 
 
 def request_json(
@@ -170,6 +184,30 @@ def message_from_event(event: dict[str, Any]) -> dict[str, Any] | None:
     return result.get("message") or (result.get("status") or {}).get("message")
 
 
+def widget_tool_result_payloads(event: Any):
+    """Yield only tool payload paths from which the widget renders citations."""
+    if not isinstance(event, dict):
+        return
+    result = event.get("result") or {}
+    if not isinstance(result, dict):
+        return
+    message = (result.get("status") or {}).get("message") or result.get("message")
+    if not isinstance(message, dict):
+        return
+
+    for part in message.get("parts") or []:
+        if isinstance(part, dict) and part.get("kind") == "data" and "data" in part:
+            yield part["data"]
+
+    metadata = message.get("metadata") or {}
+    for tool_call in metadata.get("tool_calls") or []:
+        if not isinstance(tool_call, dict):
+            continue
+        function = tool_call.get("function") or {}
+        if isinstance(function, dict) and function.get("result") is not None:
+            yield function["result"]
+
+
 def event_names_tool(event: Any, expected_tool: str) -> bool:
     if isinstance(event, dict):
         for key, value in event.items():
@@ -192,6 +230,61 @@ def strings_in_event(event: Any):
     elif isinstance(event, list):
         for item in event:
             yield from strings_in_event(item)
+
+
+def source_urls_in_event(event: Any) -> set[str]:
+    """Find Source lines, including those inside JSON-encoded MCP payloads."""
+    urls: set[str] = set()
+    if isinstance(event, str):
+        urls.update(SOURCE_RE.findall(event))
+        try:
+            decoded = json.loads(event)
+        except (json.JSONDecodeError, TypeError):
+            return urls
+        if decoded != event:
+            urls.update(source_urls_in_event(decoded))
+    elif isinstance(event, dict):
+        for value in event.values():
+            urls.update(source_urls_in_event(value))
+    elif isinstance(event, list):
+        for item in event:
+            urls.update(source_urls_in_event(item))
+    return urls
+
+
+def _citation_entry_urls(value: Any) -> set[str]:
+    """Extract URL fields only from the contents of a citations array."""
+    urls: set[str] = set()
+    if isinstance(value, dict):
+        url = value.get("url")
+        if isinstance(url, str) and url.startswith(("https://", "http://")):
+            urls.add(url)
+    elif isinstance(value, list):
+        for item in value:
+            urls.update(_citation_entry_urls(item))
+    return urls
+
+
+def structured_citation_urls(event: Any) -> set[str]:
+    """Find widget citation URLs without treating unrelated URL fields as sources."""
+    urls: set[str] = set()
+    if isinstance(event, str):
+        try:
+            decoded = json.loads(event)
+        except (json.JSONDecodeError, TypeError):
+            return urls
+        if decoded != event:
+            urls.update(structured_citation_urls(decoded))
+    elif isinstance(event, dict):
+        if "citations" in event:
+            urls.update(_citation_entry_urls(event["citations"]))
+        for key, value in event.items():
+            if key != "citations":
+                urls.update(structured_citation_urls(value))
+    elif isinstance(event, list):
+        for item in event:
+            urls.update(structured_citation_urls(item))
+    return urls
 
 
 def tool_calls_in_event(event: Any, expected_tool: str) -> list[str]:
@@ -264,14 +357,16 @@ def run_agent(
     tool_fired = False
     tool_calls: list[str] = []
     tool_source_urls: set[str] = set()
+    citation_urls: set[str] = set()
     with urllib.request.urlopen(request, timeout=timeout, context=TLS_CONTEXT) as response:
         for event in iter_sse_events(response):
             tool_fired = tool_fired or event_names_tool(event, row["tool"])
             for call in tool_calls_in_event(event, row["tool"]):
                 if call not in tool_calls:
                     tool_calls.append(call)
-            for value in strings_in_event(event):
-                tool_source_urls.update(SOURCE_RE.findall(value))
+            for tool_payload in widget_tool_result_payloads(event):
+                tool_source_urls.update(source_urls_in_event(tool_payload))
+                citation_urls.update(structured_citation_urls(tool_payload))
             message = message_from_event(event)
             if not message or message.get("role") == "user":
                 continue
@@ -288,20 +383,25 @@ def run_agent(
     # final message. Prefer the final message; partials are only a fallback for
     # interrupted streams that never deliver aggregation.
     answer = select_answer(final_text, streamed)
-    cited_urls = extract_answer_urls(answer)
-    invented = sorted(cited_urls - allowed_urls)
+    answer_urls = extract_answer_urls(answer)
+    invented = sorted((citation_urls | answer_urls) - allowed_urls)
+    unbacked = sorted(citation_urls - tool_source_urls)
+    missing_citations = [url for url in row["expected_source_urls"] if url not in citation_urls]
     missing = [value for value in row["must_appear_in_answer"] if value not in answer]
     forbidden = [value for value in row["forbidden_in_answer"] if value in answer]
     return AgentResult(
-        row,
-        answer,
-        tool_fired,
-        tool_calls,
-        tool_source_urls,
-        cited_urls,
-        invented,
-        missing,
-        forbidden,
+        row=row,
+        answer=answer,
+        tool_fired=tool_fired,
+        tool_calls=tool_calls,
+        tool_source_urls=tool_source_urls,
+        structured_citation_urls=citation_urls,
+        answer_urls=answer_urls,
+        invented_urls=invented,
+        unbacked_citations=unbacked,
+        missing_expected_citations=missing_citations,
+        missing_answer_strings=missing,
+        present_forbidden_strings=forbidden,
     )
 
 
@@ -321,8 +421,13 @@ def print_agent(result: AgentResult, *, verbose: bool = False) -> None:
     print(f"  named tool fired: {result.tool_fired}")
     if result.tool_source_urls:
         print(f"  Source URLs observed in agent tool events: {len(result.tool_source_urls)}")
+    print(f"  structured widget citations observed: {len(result.structured_citation_urls)}")
     if result.invented_urls:
         print(f"  URLs absent from MCP Source lines: {', '.join(result.invented_urls)}")
+    if result.unbacked_citations:
+        print(f"  structured citations without matching tool Source: {', '.join(result.unbacked_citations)}")
+    if result.missing_expected_citations:
+        print(f"  expected widget citations missing: {', '.join(result.missing_expected_citations)}")
     if result.missing_answer_strings:
         print(f"  answer strings missing: {', '.join(result.missing_answer_strings)}")
     if result.present_forbidden_strings:
@@ -337,6 +442,10 @@ def print_agent(result: AgentResult, *, verbose: bool = False) -> None:
         if result.tool_source_urls:
             print("  agent tool Source URLs:")
             for url in sorted(result.tool_source_urls):
+                print(f"    {url}")
+        if result.structured_citation_urls:
+            print("  structured widget citation URLs:")
+            for url in sorted(result.structured_citation_urls):
                 print(f"    {url}")
 
 

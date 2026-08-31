@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "notes": "Golden set from the 2026 showcase demos. Gate 1 is MCP retrieval (Source URLs). Gate 2 is the live agent (tool used + citations subset of gate 1 + no invented URLs). Ingest the listed sources BEFORE evaluating — default pipeline repos do not cover all three.",
+  "notes": "Golden set from the 2026 showcase demos. Gate 1 is MCP retrieval (Source URLs). Gate 2 is the live agent (tool used + expected structured widget citations + citations subset of gate 1 + no invented URLs). Ingest the listed sources BEFORE evaluating — default pipeline repos do not cover all three.",
   "collections": {
     "docs": "kubeflow_docs",
     "issues": "issues_rag",

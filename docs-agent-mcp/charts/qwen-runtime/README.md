@@ -29,6 +29,13 @@ explicit runtime release or a change under this chart should run the upgrade.
 The Hugging Face PVC is annotated `helm.sh/resource-policy: keep`, so uninstall
 does not delete the model cache.
 
+The KServe Hugging Face runtime is intentionally pinned to
+`docker.io/kserve/huggingfaceserver:v0.15.2-gpu`. Do not replace it with a
+floating tag or upgrade it as part of a normal docs-agent release. Treat a
+runtime-image change as a separately reviewed, manually dispatched
+`deploy_kserve=true` migration with an approved single-GPU downtime window and
+successful model-endpoint validation.
+
 The Helm test pod runs in `docs-agent` and calls the stable service in
 `ml-infra`. This checks the same namespace-to-LLM authorization path used by
 Kagent, rather than testing only from inside the serving namespace.
