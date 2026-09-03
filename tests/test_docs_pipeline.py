@@ -280,4 +280,3 @@ def test_store_rejects_embedding_dim_mismatch(monkeypatch, tmp_path):
             collection_name="kubeflow_docs",
             embedding_dim=1024,
         )
-
