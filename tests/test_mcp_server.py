@@ -16,6 +16,7 @@ def _tool_payload(result: str) -> dict:
     """Parse JSON returned by search_* MCP tools."""
     return json.loads(result)
 
+
 MCP_SERVER_DIR = Path(__file__).parent.parent / "docs-agent-mcp" / "mcp-server"
 MCP_SERVER_PATH = MCP_SERVER_DIR / "server.py"
 
