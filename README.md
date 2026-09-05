@@ -430,10 +430,10 @@ data: {"type": "done"}
 3. **Start the API Server**:
    ```bash
    # WebSocket API
-   python server/app.py
+   python legacy/server/app.py
 
    # HTTPS API
-   python server-https/app.py
+   python legacy/server-https/app.py
    ```
 
 ### API Usage Examples
