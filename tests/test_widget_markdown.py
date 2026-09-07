@@ -81,3 +81,27 @@ def test_does_not_linkify_markdown_inside_inline_code():
 
     assert "<code>[title](https://example.test/literal)</code>" in rendered
     assert rendered.count("<a ") == 1
+
+
+def test_escapes_raw_html_in_chat_output():
+    rendered = run_formatter("Hello <script>alert(1)</script> and <img src=x onerror=alert(1)>")
+
+    assert "<script>" not in rendered
+    assert "<img" not in rendered
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in rendered
+    assert "&lt;img src=x onerror=alert(1)&gt;" in rendered
+
+
+def test_escapes_html_inside_bold_formatting():
+    rendered = run_formatter("Look at **<img src=x onerror=alert(1)>** now")
+
+    assert "<img" not in rendered
+    assert "<strong>&lt;img src=x onerror=alert(1)&gt;</strong>" in rendered
+
+
+def test_escapes_html_in_unsafe_link_labels():
+    rendered = run_formatter("[<script>alert(1)</script>](javascript:alert(1))")
+
+    assert "<script>" not in rendered
+    assert "<a " not in rendered
+    assert "[&lt;script&gt;alert(1)&lt;/script&gt;](javascript:alert(1))" in rendered

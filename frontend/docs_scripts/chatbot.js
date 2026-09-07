@@ -343,6 +343,10 @@ function escapeMarkdownHtml(text) {
     });
 }
 
+function escapeHtml(text) {
+    return escapeMarkdownHtml(text);
+}
+
 // Small, dependency-free Markdown subset used by streamed and completed chat
 // messages. Code is protected before other formatting so YAML and shell
 // snippets are never interpreted as links or replacement-string tokens.
@@ -352,6 +356,7 @@ function formatChatMarkdown(text, isStreaming = false) {
     let formatted = text;
     const codeBlockPlaceholders = [];
     const inlineCodePlaceholders = [];
+    const linkPlaceholders = [];
 
     function preserveCodeBlock(language, code, trimCode) {
         const placeholder = `__CODE_BLOCK_${codeBlockPlaceholders.length}__`;
@@ -388,12 +393,25 @@ function formatChatMarkdown(text, isStreaming = false) {
     formatted = formatted.replace(
         /\[([^\]\n]+)\]\((https?:\/\/[^\s<>"')]+)\)/gi,
         function(match, label, url) {
-            return `<a href="${escapeMarkdownHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeMarkdownHtml(label)}</a>`;
+            const placeholder = `__LINK_${linkPlaceholders.length}__`;
+            linkPlaceholders.push(
+                `<a href="${escapeMarkdownHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeMarkdownHtml(label)}</a>`
+            );
+            return placeholder;
         }
     );
 
+    // Escape all raw text before applying safe markdown conversions (bold, line breaks)
+    // to prevent HTML injection and XSS vulnerabilities.
+    formatted = escapeMarkdownHtml(formatted);
     formatted = formatted.replace(/\n/g, '<br>');
     formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+
+    linkPlaceholders.forEach(function(link, index) {
+        formatted = formatted.replace(`__LINK_${index}__`, function() {
+            return link;
+        });
+    });
 
     inlineCodePlaceholders.forEach(function(inlineCode, index) {
         formatted = formatted.replace(`__INLINE_CODE_${index}__`, function() {
