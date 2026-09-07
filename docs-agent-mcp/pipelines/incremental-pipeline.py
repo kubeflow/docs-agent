@@ -8,7 +8,13 @@ try:
 except ImportError:  # pragma: no cover - optional at compile time
     k8s = None
 
-from utils import DEFAULT_EMBEDDING_BATCH_SIZE, DOCS_COLLECTION
+from utils import (
+    DEFAULT_DOCS_CHUNK_OVERLAP,
+    DEFAULT_DOCS_CHUNK_SIZE,
+    DEFAULT_DOCS_MAX_TEI_CHARS,
+    DEFAULT_EMBEDDING_BATCH_SIZE,
+    DOCS_COLLECTION,
+)
 
 @dsl.component(
     base_image="docker.io/library/python:3.9",
@@ -182,6 +188,7 @@ def chunk_and_embed_incremental(
     chunk_overlap: int,
     embeddings_service_url: str,
     embedding_batch_size: int,
+    max_tei_chars: int,
     embedded_data: dsl.Output[dsl.Dataset]
 ):
     import json
@@ -189,6 +196,57 @@ def chunk_and_embed_incremental(
     import re
     import requests
     from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+    # Mirrors utils.clean_content and utils.build_docs_citation_url; KFP runs
+    # components in their own containers, so utils is not importable at runtime.
+    def clean_content(content):
+        """Clean presentation-only markup, keeping code/YAML line structure."""
+        # Remove Hugo frontmatter (both --- and +++ styles)
+        content = re.sub(
+            r'\A[ \t]*(?P<delimiter>---|\+\+\+)[ \t]*\r?\n.*?'
+            r'^[ \t]*(?P=delimiter)[ \t]*(?:\r?\n|\Z)',
+            '',
+            content,
+            flags=re.DOTALL | re.MULTILINE,
+        )
+
+        # Remove Hugo template syntax
+        content = re.sub(r'\{\{.*?\}\}', '', content, flags=re.DOTALL)
+
+        # Remove HTML comments and tags
+        content = re.sub(r'<!--.*?-->', '', content, flags=re.DOTALL)
+        content = re.sub(r'<[^>]+>', ' ', content)
+
+        # Remove navigation/menu artifacts
+        content = re.sub(r'\b(Get Started|Contribute|GenAI|Home|Menu|Navigation)\b', '', content, flags=re.IGNORECASE)
+
+        # Convert Markdown links before removing bare URLs. Doing this in
+        # the reverse order leaves dangling `](` tokens; the link regex can
+        # then span multiple paragraphs and delete intervening YAML.
+        content = re.sub(r'\[([^\]]+)\]\((?:[^()]|\([^()]*\))*\)', r'\1', content)
+        content = re.sub(r'https?://[^\s]+', '', content)
+
+        # Keep newlines and indentation so split boundaries and YAML
+        # structure survive cleaning; only collapse horizontal whitespace
+        # and runs of blank lines.
+        content = re.sub(r'[ \t]+', ' ', content)
+        content = re.sub(r'\n[ \t]*\n(?:[ \t]*\n)+', '\n\n', content)
+        return content.strip()
+
+    def build_docs_citation_url(file_path, base_url):
+        """Return the URL Hugo publishes this content path at."""
+        base = base_url.rstrip('/')
+        marker = 'content/en/docs'
+        marker_index = file_path.find(marker)
+        if marker_index == -1:
+            return f"{base}/{file_path}"
+
+        url_path = os.path.splitext(file_path[marker_index + len(marker):].strip('/'))[0]
+        parent, _, page_name = url_path.rpartition('/')
+        # A section's _index.md is served at the section directory itself
+        if page_name in ('_index', 'index'):
+            url_path = parent
+        return f"{base}/{url_path}/" if url_path else f"{base}/"
 
     print(f"Using embeddings service: {embeddings_service_url}")
     embedding_batch_size = max(1, int(embedding_batch_size))
@@ -198,47 +256,14 @@ def chunk_and_embed_incremental(
     with open(github_data.path, 'r', encoding='utf-8') as f:
         for line in f:
             file_data = json.loads(line)
-            content = file_data['content']
-
-            # AGGRESSIVE CLEANING FOR BETTER EMBEDDINGS (same as original)
-            
-            # Remove Hugo frontmatter (both --- and +++ styles)
-            content = re.sub(r'^\s*[+\-]{3,}.*?[+\-]{3,}\s*', '', content, flags=re.DOTALL | re.MULTILINE)
-
-            # Remove Hugo template syntax
-            content = re.sub(r'\{\{.*?\}\}', '', content, flags=re.DOTALL)
-
-            # Remove HTML comments and tags
-            content = re.sub(r'<!--.*?-->', '', content, flags=re.DOTALL)
-            content = re.sub(r'<[^>]+>', ' ', content)
-
-            # Remove navigation/menu artifacts
-            content = re.sub(r'\b(Get Started|Contribute|GenAI|Home|Menu|Navigation)\b', '', content, flags=re.IGNORECASE)
-
-            # Clean up URLs and links
-            content = re.sub(r'https?://[^\s]+', '', content)
-            content = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', content)  # Convert [text](url) to text
-
-            # Remove excessive whitespace and normalize
-            content = re.sub(r'\s+', ' ', content)  # Multiple spaces to single
-            content = re.sub(r'\n\s*\n\s*\n+', '\n\n', content)  # Multiple newlines to double
-            content = content.strip()
+            content = clean_content(file_data['content'])
 
             # Skip files that are too short after cleaning
             if len(content) < 50:
                 print(f"Skipping file after cleaning: {file_data['path']} ({len(content)} chars)")
                 continue
 
-            # Build citation URL
-            path_parts = file_data['path'].split('/')
-            if 'content/en/docs' in file_data['path']:
-                docs_index = path_parts.index('docs')
-                url_path = '/'.join(path_parts[docs_index+1:])
-                url_path = os.path.splitext(url_path)[0]
-                citation_url = f"{base_url}/{url_path}"
-            else:
-                citation_url = f"{base_url}/{file_data['path']}"
-
+            citation_url = build_docs_citation_url(file_data['path'], base_url)
             file_unique_id = f"{repo_name}:{file_data['path']}"
 
             # Create splitter
@@ -267,8 +292,9 @@ def chunk_and_embed_incremental(
 
     print(f"Created {len(records)} total chunks for incremental update; requesting embeddings from TEI service...")
 
-    # TEI all-mpnet-base-v2 rejects any input >=384 tokens (~1000 chars).
-    max_tei_chars = 1000
+    # TEI all-mpnet-base-v2 rejects any input >=384 tokens. Keep this in step
+    # with the full pipeline: both write into the same collection.
+    max_tei_chars = max(1, int(max_tei_chars))
     for i in range(0, len(records), embedding_batch_size):
         batch = records[i:i + embedding_batch_size]
         texts = [r["content_text"][:max_tei_chars] for r in batch]
@@ -408,8 +434,9 @@ def github_rag_incremental_pipeline(
     changed_files: str = '[]',  # JSON string of changed file paths
     github_token: str = "",
     base_url: str = "https://www.kubeflow.org/docs",
-    chunk_size: int = 1200,
-    chunk_overlap: int = 100,
+    chunk_size: int = DEFAULT_DOCS_CHUNK_SIZE,
+    chunk_overlap: int = DEFAULT_DOCS_CHUNK_OVERLAP,
+    max_tei_chars: int = DEFAULT_DOCS_MAX_TEI_CHARS,
     embeddings_service_url: str = (
         "http://embeddings-service-predictor.ml-infra.svc.cluster.local/embed"
     ),
@@ -454,6 +481,7 @@ def github_rag_incremental_pipeline(
         chunk_overlap=chunk_overlap,
         embeddings_service_url=embeddings_service_url,
         embedding_batch_size=embedding_batch_size,
+        max_tei_chars=max_tei_chars,
     )
     
     # Step 4: Store new vectors in Milvus (after deletion is complete)

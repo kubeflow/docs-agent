@@ -52,6 +52,15 @@ def load_docs_pipeline_module():
     return module
 
 
+def load_incremental_pipeline_module():
+    pytest.importorskip("kfp", reason="pipeline component tests require the KFP SDK")
+    pipeline_path = PIPELINES_DIR / "incremental-pipeline.py"
+    spec = importlib.util.spec_from_file_location("incremental_pipeline", pipeline_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def legacy_docs_schema():
     """Match the compatible pre-versioned schema currently used in Milvus."""
     return CollectionSchema(
@@ -281,3 +290,100 @@ def test_store_rejects_embedding_dim_mismatch(monkeypatch, tmp_path):
             embedding_dim=1024,
         )
 
+
+DOCS_BASE_URL = "https://www.kubeflow.org/docs"
+
+DOCS_PAGES = [
+    {
+        "path": "content/en/docs/components/pipelines/operator-guides/installation/_index.md",
+        "file_name": "_index.md",
+        "content": (
+            "---\ntitle: Installation\n---\n"
+            "Install Kubeflow Pipelines from the "
+            "[manifests repository](https://github.com/kubeflow/manifests).\n\n"
+            "kind: ConfigMap\n"
+            "metadata:\n"
+            "  name: pipeline-install-config\n\n"
+            "Then confirm the deployment rolled out before continuing."
+        ),
+    },
+    {
+        "path": "content/en/docs/components/katib/user-guides/hp-tuning/configure-experiment.md",
+        "file_name": "configure-experiment.md",
+        "content": (
+            "---\ntitle: Configure an Experiment\n---\n"
+            "{{% alert %}}\n"
+            "<!-- generated -->\n"
+            "<p>Set the objective</p> and the search space on the Experiment resource.\n"
+            "\n\n\n"
+            "See https://kubeflow.org/docs/components/katib/ for the Home page details."
+        ),
+    },
+]
+
+
+def run_chunk_component(component, pages, monkeypatch, tmp_path, label):
+    """Run a chunk-and-embed component over `pages` and return the records it wrote."""
+
+    class FakeEmbeddingResponse:
+        def __init__(self, count):
+            self.count = count
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return [[0.0] * 768] * self.count
+
+    monkeypatch.setattr(
+        "requests.post",
+        lambda url, **kwargs: FakeEmbeddingResponse(len(kwargs["json"]["inputs"])),
+    )
+
+    source_path = tmp_path / f"{label}-source.jsonl"
+    source_path.write_text("".join(json.dumps(page) + "\n" for page in pages))
+    output_path = tmp_path / f"{label}-embedded.jsonl"
+
+    component.python_func(
+        github_data=SimpleNamespace(path=str(source_path)),
+        repo_name="website",
+        base_url=DOCS_BASE_URL,
+        chunk_size=600,
+        chunk_overlap=60,
+        embeddings_service_url="http://embeddings.test/embed",
+        embedding_batch_size=8,
+        max_tei_chars=600,
+        embedded_data=SimpleNamespace(path=str(output_path)),
+    )
+    return [json.loads(line) for line in output_path.read_text().splitlines() if line]
+
+
+def test_chunk_and_embed_cites_the_published_docs_url(monkeypatch, tmp_path):
+    from utils import build_docs_citation_url
+
+    module = load_docs_pipeline_module()
+    records = run_chunk_component(module.chunk_and_embed, DOCS_PAGES, monkeypatch, tmp_path, "full")
+
+    assert records
+    cited = {record["file_path"]: record["citation_url"] for record in records}
+    assert cited == {page["path"]: build_docs_citation_url(page["path"], DOCS_BASE_URL) for page in DOCS_PAGES}
+    section_landing_page = DOCS_PAGES[0]["path"]
+    assert cited[section_landing_page].endswith("/pipelines/operator-guides/installation/")
+
+
+def test_incremental_chunking_matches_the_full_pipeline(monkeypatch, tmp_path):
+    from utils import clean_content
+
+    full = load_docs_pipeline_module()
+    incremental = load_incremental_pipeline_module()
+
+    full_records = run_chunk_component(full.chunk_and_embed, DOCS_PAGES, monkeypatch, tmp_path, "full")
+    incremental_records = run_chunk_component(
+        incremental.chunk_and_embed_incremental, DOCS_PAGES, monkeypatch, tmp_path, "incremental"
+    )
+
+    assert full_records == incremental_records
+    # Both copies must reproduce the shared cleaner; each page fits in one chunk.
+    assert [record["content_text"] for record in full_records] == [
+        clean_content(page["content"]) for page in DOCS_PAGES
+    ]

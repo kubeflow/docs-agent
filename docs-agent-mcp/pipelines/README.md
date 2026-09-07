@@ -209,13 +209,18 @@ kfp.compiler.Compiler().compile(
 </tr>
 <tr>
 <td><code>chunk_size</code></td>
-<td>1200</td>
+<td>600</td>
 <td>Text chunk size for embeddings</td>
 </tr>
 <tr>
 <td><code>chunk_overlap</code></td>
-<td>100</td>
+<td>60</td>
 <td>Overlap between chunks</td>
+</tr>
+<tr>
+<td><code>max_tei_chars</code></td>
+<td>600</td>
+<td>Per-input truncation before TEI embedding (model-dependent)</td>
 </tr>
 <tr>
 <td><code>milvus_host</code></td>

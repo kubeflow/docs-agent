@@ -7,7 +7,9 @@ from pathlib import Path
 PIPELINES_DIR = Path(__file__).parent.parent / "docs-agent-mcp" / "pipelines"
 sys.path.insert(0, str(PIPELINES_DIR))
 
-from utils import clean_content, embed_texts, resolve_github_token, truncate_for_tei
+from utils import build_docs_citation_url, clean_content, embed_texts, resolve_github_token, truncate_for_tei
+
+DOCS_BASE_URL = "https://www.kubeflow.org/docs"
 
 
 class TestResolveGithubToken:
@@ -146,6 +148,30 @@ class TestCleanContent:
         assert "{{ if" not in result
         assert "{{ end }}" not in result
 
+    def test_converts_links_before_removing_bare_urls(self):
+        """Removing bare URLs first leaves a dangling `](` that eats later text."""
+        content = (
+            "See the [web app](https://github.com/kserve/models-web-app) guide.\n\n"
+            "kind: InferenceService\n\n"
+            "Then check the (namespace) it was created in."
+        )
+        result = clean_content(content)
+        assert "web app" in result
+        assert "kind: InferenceService" in result
+        assert "it was created in." in result
+
+    def test_preserves_line_structure(self):
+        """Indented YAML must survive cleaning so chunks stay retrievable."""
+        content = "Apply this manifest:\n\nmetadata:\n  name: pipeline-install-config\n"
+        result = clean_content(content)
+        assert "metadata:\n name: pipeline-install-config" in result
+
+    def test_frontmatter_closes_only_on_a_delimiter_line(self):
+        """A `---` inside a frontmatter value must not end the frontmatter."""
+        content = '---\ntitle: "Katib --- Overview"\ndescription: real\n---\nBody text here.\n'
+        result = clean_content(content)
+        assert result == "Body text here."
+
     def test_real_world_kubeflow_doc_snippet(self):
         """Test with a realistic Kubeflow documentation snippet."""
         content = """---
@@ -247,3 +273,40 @@ class TestEmbedTexts:
         long = "x" * 5000
         embed_texts([long], "http://embeddings/embed", batch_size=1)
         assert len(sent[0]) == 1000
+
+
+class TestBuildDocsCitationUrl:
+    """Tests for build_docs_citation_url."""
+
+    def test_regular_page_gets_a_trailing_slash(self):
+        url = build_docs_citation_url("content/en/docs/about/community.md", DOCS_BASE_URL)
+        assert url == "https://www.kubeflow.org/docs/about/community/"
+
+    def test_section_index_resolves_to_the_section_directory(self):
+        url = build_docs_citation_url("content/en/docs/components/katib/_index.md", DOCS_BASE_URL)
+        assert url == "https://www.kubeflow.org/docs/components/katib/"
+
+    def test_docs_root_index_resolves_to_the_base_url(self):
+        url = build_docs_citation_url("content/en/docs/_index.md", DOCS_BASE_URL)
+        assert url == "https://www.kubeflow.org/docs/"
+
+    def test_page_bundle_index_resolves_to_the_bundle_directory(self):
+        url = build_docs_citation_url("content/en/docs/started/installing-kubeflow/index.md", DOCS_BASE_URL)
+        assert url == "https://www.kubeflow.org/docs/started/installing-kubeflow/"
+
+    def test_html_pages_drop_the_extension(self):
+        url = build_docs_citation_url("content/en/docs/about/events.html", DOCS_BASE_URL)
+        assert url == "https://www.kubeflow.org/docs/about/events/"
+
+    def test_index_only_matches_the_page_name(self):
+        """A directory called `index` is part of the path, not a section marker."""
+        url = build_docs_citation_url("content/en/docs/index/overview.md", DOCS_BASE_URL)
+        assert url == "https://www.kubeflow.org/docs/index/overview/"
+
+    def test_trailing_slash_on_base_url_is_normalised(self):
+        url = build_docs_citation_url("content/en/docs/about/community.md", DOCS_BASE_URL + "/")
+        assert url == "https://www.kubeflow.org/docs/about/community/"
+
+    def test_paths_outside_the_docs_root_fall_back_to_the_raw_path(self):
+        url = build_docs_citation_url("README.md", DOCS_BASE_URL)
+        assert url == "https://www.kubeflow.org/docs/README.md"
