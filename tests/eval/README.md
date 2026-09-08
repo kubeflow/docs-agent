@@ -26,7 +26,7 @@ Known gaps against **default** pipeline arguments:
 |---|---|---|
 | Katib hyperparameter tuning | `website` `content/en/docs/components/katib` → configure-experiment | Yes, if the docs full/incremental pipeline has been run on `content/en/docs` |
 | KServe deploymentMode / Knative vs Serverless | `kserve/kserve#5885` | **No.** Issues default is `kubeflow/kubeflow,kubeflow/pipelines,kubeflow/manifests` |
-| Katib Experiment YAML | `kubeflow/katib` `examples/v1beta1/hp-tuning/random.yaml` | **No.** Code default is `kubeflow/manifests` `apps/katib` (install YAML/CRDs) |
+| Katib Experiment YAML | `kubeflow/katib` `examples/v1beta1/hp-tuning/random.yaml` | **No.** Code default is `kubeflow/manifests` `applications/katib` (install YAML/CRDs) |
 
 ## 2. Ingest the missing sources
 

@@ -25,7 +25,7 @@ def download_github_code(
     Args:
         repos: Comma-separated repos (e.g., "kubeflow/manifests,kubeflow/pipelines").
         directory_paths: Comma-separated directory paths to crawl per repo
-            (e.g., "apps/pipeline,common/istio").
+            (e.g., "applications/pipeline,common/istio").
         file_extensions: Comma-separated extensions to include
             (e.g., "yaml,yml,py,json").
         github_token: GitHub personal access token.
@@ -33,7 +33,6 @@ def download_github_code(
     """
     import requests
     import json
-    import base64
     import time
     import os
 
@@ -52,42 +51,57 @@ def download_github_code(
     headers = {"Authorization": f"token {github_token}"} if github_token else {}
     extensions = [ext.strip().lstrip(".") for ext in file_extensions.split(",")]
 
-    def api_request(url, params=None):
-        """GitHub API request with rate limit handling and retries."""
+    def request_with_retries(url, params=None):
+        """GET with GitHub rate-limit handling; raises once the retries are spent.
+
+        A directory the operator asked for must not quietly resolve to nothing,
+        so an unrecoverable response ends the component instead of returning None.
+        """
         max_retries = 3
+        last_error = "no response"
         for attempt in range(max_retries):
             try:
                 resp = requests.get(url, params=params, headers=headers)
 
-                if resp.status_code == 403:
-                    remaining = resp.headers.get("X-RateLimit-Remaining", "0")
-                    if remaining == "0":
+                if resp.status_code == 200:
+                    return resp
+
+                # GitHub reports both primary and secondary rate limits as 403
+                # or 429; a secondary limit carries Retry-After rather than a
+                # zeroed X-RateLimit-Remaining.
+                if resp.status_code in (403, 429):
+                    retry_after = resp.headers.get("Retry-After", "")
+                    if retry_after or resp.headers.get("X-RateLimit-Remaining") == "0":
                         reset_time = int(resp.headers.get("X-RateLimit-Reset", 0))
                         wait_time = max(reset_time - int(time.time()), 60)
+                        if retry_after.isdigit():
+                            wait_time = int(retry_after)
                         print(f"Rate limited. Waiting {wait_time}s...")
                         time.sleep(min(wait_time, 300))
+                        last_error = f"rate limited (HTTP {resp.status_code})"
                         continue
 
-                if resp.status_code == 200:
-                    return resp.json()
-                else:
-                    print(f"API error: HTTP {resp.status_code} for {url}")
-                    return None
+                last_error = f"HTTP {resp.status_code}"
+                # A 4xx will not change on retry; a 5xx might.
+                if resp.status_code < 500:
+                    break
 
             except Exception as e:
-                print(f"Request failed (attempt {attempt+1}): {e}")
+                last_error = str(e)
+
+            if attempt < max_retries - 1:
                 time.sleep(2 ** attempt)
 
-        return None
+        raise RuntimeError(f"GitHub request failed for {url}: {last_error}")
 
     def get_files_recursive(owner, name, path):
         """Recursively fetch files from a GitHub directory."""
         files = []
         url = f"https://api.github.com/repos/{owner}/{name}/contents/{path}"
-        items = api_request(url)
+        items = request_with_retries(url).json()
 
-        if not items or not isinstance(items, list):
-            return files
+        if not isinstance(items, list):
+            raise RuntimeError(f"Expected a directory listing at {owner}/{name}/{path}")
 
         for item in items:
             if item["type"] == "file":
@@ -95,23 +109,31 @@ def download_github_code(
                 # Also include extensionless files like Dockerfile, Makefile
                 include_no_ext = item["name"] in ("Dockerfile", "Makefile", "Kustomization")
                 if ext in extensions or include_no_ext:
+                    # Read the blob from the listing's raw URL. The Contents API
+                    # only base64-encodes files under 1 MiB; above that it answers
+                    # 200 with encoding "none" and an empty content field, which
+                    # was stored as an empty file and dropped further down.
+                    download_url = item.get("download_url")
+                    if not download_url:
+                        print(f"Skipping {item['path']}: no raw URL (submodule)")
+                        continue
+                    blob = request_with_retries(download_url)
                     try:
-                        file_resp = api_request(item["url"])
-                        if file_resp and "content" in file_resp:
-                            content = base64.b64decode(file_resp["content"]).decode("utf-8")
-                            files.append({
-                                "path": item["path"],
-                                "content": content,
-                                "file_name": item["name"],
-                                "repo": f"{owner}/{name}",
-                                # Preserve GitHub's canonical page URL. Repositories do
-                                # not all use `main` (kubeflow/katib uses `master`), and
-                                # reconstructing this URL downstream creates dead or
-                                # non-canonical citations even when retrieval is correct.
-                                "citation_url": file_resp.get("html_url") or item.get("html_url", ""),
-                            })
-                    except Exception as e:
-                        print(f"Error decoding {item['path']}: {e}")
+                        content = blob.content.decode("utf-8")
+                    except UnicodeDecodeError:
+                        print(f"WARNING: skipping {item['path']}: not valid UTF-8")
+                        continue
+                    files.append({
+                        "path": item["path"],
+                        "content": content,
+                        "file_name": item["name"],
+                        "repo": f"{owner}/{name}",
+                        # Preserve GitHub's canonical page URL. Repositories do
+                        # not all use `main` (kubeflow/katib uses `master`), and
+                        # reconstructing this URL downstream creates dead or
+                        # non-canonical citations even when retrieval is correct.
+                        "citation_url": item.get("html_url", ""),
+                    })
             elif item["type"] == "dir":
                 files.extend(get_files_recursive(owner, name, item["path"]))
 
@@ -134,6 +156,8 @@ def download_github_code(
             files = get_files_recursive(owner, name, dir_path)
             all_files.extend(files)
             print(f"  Found {len(files)} files in {dir_path}/")
+            if not files:
+                print(f"  WARNING: no {file_extensions} files under {dir_path}/")
 
     print(f"Total code files fetched: {len(all_files)}")
 
@@ -389,6 +413,11 @@ def chunk_and_embed_code(
         )
         response.raise_for_status()
         vectors = response.json()
+        if not isinstance(vectors, list) or len(vectors) != len(texts):
+            raise RuntimeError(
+                f"Embeddings service returned {len(vectors) if isinstance(vectors, list) else type(vectors)} "
+                f"vectors for batch of {len(texts)}"
+            )
         for idx, vector in enumerate(vectors):
             batch[idx]["embedding"] = vector
 
@@ -553,7 +582,9 @@ def store_code_milvus(
 )
 def code_rag_pipeline(
     repos: str = "kubeflow/manifests",
-    directory_paths: str = "apps/pipeline/upstream,apps/katib,common/istio,apps/jupyter",
+    directory_paths: str = (
+        "applications/pipeline,applications/katib,applications/notebooks-v1,common/istio"
+    ),
     file_extensions: str = "yaml,yml,py,json",
     github_token: str = "",
     chunk_size: int = 1000,
