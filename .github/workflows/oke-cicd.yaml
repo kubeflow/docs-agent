@@ -46,6 +46,7 @@ jobs:
         working-directory: docs-agent-mcp/pipelines
         run: |
           python kubeflow-pipeline.py
+          python incremental-pipeline.py
           python issues-pipeline.py
           python code-pipeline.py
 

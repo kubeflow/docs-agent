@@ -17,6 +17,8 @@ DEFAULT_EMBEDDINGS_URL = (
     "http://embeddings-service-predictor.ml-infra.svc.cluster.local/embed"
 )
 DEFAULT_MILVUS_HOST = "milvus-milvus.ml-infra.svc.cluster.local"
+# Hugo content root the docs pipelines index.
+DOCS_CONTENT_ROOT = "content/en/docs"
 # all-mpnet-base-v2 output size; other TEI models may differ — pass embedding_dim.
 DEFAULT_EMBEDDING_DIM = 768
 # Docs defaults: YAML-heavy pages tokenize denser than prose, so keep TEI inputs
@@ -57,7 +59,8 @@ def clean_content(content: str) -> str:
     """Clean raw document content for better embeddings.
 
     Removes Hugo frontmatter, template syntax, HTML tags, navigation
-    artifacts, URLs, and normalizes whitespace.
+    artifacts and URLs, keeping the line structure that makes code and
+    YAML retrievable.
 
     Args:
         content: Raw document content (markdown/HTML).
@@ -68,8 +71,10 @@ def clean_content(content: str) -> str:
     # Remove Hugo frontmatter (both --- and +++ styles)
     # \A anchors to absolute start of string; backreference ensures matching delimiters
     content = re.sub(
-        r'\A\s*(?P<delim>-{3,}|\+{3,}).*?(?P=delim)\s*', '', content,
-        flags=re.DOTALL
+        r'\A[ \t]*(?P<delimiter>---|\+\+\+)[ \t]*\r?\n.*?'
+        r'^[ \t]*(?P=delimiter)[ \t]*(?:\r?\n|\Z)',
+        '', content,
+        flags=re.DOTALL | re.MULTILINE
     )
 
     # Remove Hugo template syntax
@@ -85,16 +90,31 @@ def clean_content(content: str) -> str:
         content, flags=re.IGNORECASE
     )
 
-    # Clean up URLs and links
+    # Convert Markdown links before removing bare URLs. Doing this in
+    # the reverse order leaves dangling `](` tokens; the link regex can
+    # then span multiple paragraphs and delete intervening YAML.
+    content = re.sub(r'\[([^\]]+)\]\((?:[^()]|\([^()]*\))*\)', r'\1', content)
     content = re.sub(r'https?://[^\s]+', '', content)
-    content = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', content)
 
-    # Remove excessive whitespace and normalize
-    content = re.sub(r'\s+', ' ', content)
-    content = re.sub(r'\n\s*\n\s*\n+', '\n\n', content)
+    # Collapse horizontal whitespace and blank-line runs, keeping newlines
+    content = re.sub(r'[ \t]+', ' ', content)
+    content = re.sub(r'\n[ \t]*\n(?:[ \t]*\n)+', '\n\n', content)
     content = content.strip()
 
     return content
+
+
+def build_docs_citation_url(file_path: str, base_url: str) -> str:
+    base = base_url.rstrip('/')
+    marker_index = file_path.find(DOCS_CONTENT_ROOT)
+    if marker_index == -1:
+        return f"{base}/{file_path}"
+
+    url_path = os.path.splitext(file_path[marker_index + len(DOCS_CONTENT_ROOT):].strip('/'))[0]
+    parent, _, page_name = url_path.rpartition('/')
+    if page_name in ('_index', 'index'):
+        url_path = parent
+    return f"{base}/{url_path}/" if url_path else f"{base}/"
 
 
 def embed_texts(
