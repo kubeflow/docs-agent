@@ -8,7 +8,7 @@ try:
 except ImportError:  # pragma: no cover - optional at compile time
     k8s = None
 
-from utils import DEFAULT_EMBEDDING_BATCH_SIZE, DOCS_COLLECTION
+from utils import DEFAULT_EMBEDDING_BATCH_SIZE, DEFAULT_EMBEDDING_DIM, DOCS_COLLECTION
 
 @dsl.component(
     base_image="docker.io/library/python:3.9",
@@ -298,12 +298,20 @@ def store_milvus_incremental(
     embedded_data: dsl.Input[dsl.Dataset],
     milvus_host: str,
     milvus_port: str,
-    collection_name: str
+    collection_name: str,
+    embedding_dim: int,
 ):
     from pymilvus import connections, utility, FieldSchema, CollectionSchema, DataType, Collection
     import json
     import os
     from datetime import datetime
+
+    # Kept in lockstep with store_milvus in kubeflow-pipeline.py: both
+    # components write into the same collection, so a schema accepted by one
+    # must be accepted by the other.
+    SCHEMA_VERSION = 1
+    SCHEMA_DESCRIPTION = f"RAG collection for documentation (v={SCHEMA_VERSION})"
+    embedding_dim = int(embedding_dim)
 
     milvus_user = os.environ.get("MILVUS_USER", "root")
     milvus_password = os.environ.get("MILVUS_PASSWORD", "")
@@ -321,8 +329,7 @@ def store_milvus_incremental(
     # Check if collection exists, if not create it
     if not utility.has_collection(collection_name):
         print(f"Collection {collection_name} doesn't exist, creating it...")
-        
-        # Enhanced schema with 768 dimensions
+
         fields = [
             FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
             FieldSchema(name="file_unique_id", dtype=DataType.VARCHAR, max_length=512),
@@ -332,16 +339,45 @@ def store_milvus_incremental(
             FieldSchema(name="citation_url", dtype=DataType.VARCHAR, max_length=1024),
             FieldSchema(name="chunk_index", dtype=DataType.INT64),
             FieldSchema(name="content_text", dtype=DataType.VARCHAR, max_length=2000),
-            FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=768),
+            FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=embedding_dim),
             FieldSchema(name="last_updated", dtype=DataType.INT64)
         ]
 
-        schema = CollectionSchema(fields, "RAG collection for documentation")
+        schema = CollectionSchema(fields, SCHEMA_DESCRIPTION)
         collection = Collection(collection_name, schema)
-        print(f"Created new collection: {collection_name}")
+        print(f"Created new collection: {collection_name} (schema v={SCHEMA_VERSION})")
     else:
         collection = Collection(collection_name)
-        print(f"Using existing collection: {collection_name}")
+        existing_desc = collection.description or ""
+        existing_fields = {field.name: field for field in collection.schema.fields}
+        required_types = {
+            "id": DataType.INT64,
+            "file_unique_id": DataType.VARCHAR,
+            "repo_name": DataType.VARCHAR,
+            "file_path": DataType.VARCHAR,
+            "file_name": DataType.VARCHAR,
+            "citation_url": DataType.VARCHAR,
+            "chunk_index": DataType.INT64,
+            "content_text": DataType.VARCHAR,
+            "vector": DataType.FLOAT_VECTOR,
+        }
+        missing_fields = sorted(set(required_types) - set(existing_fields))
+        wrong_types = sorted(
+            name
+            for name, expected_type in required_types.items()
+            if name in existing_fields and existing_fields[name].dtype != expected_type
+        )
+        vector_dim = int(existing_fields.get("vector").params.get("dim", 0)) if "vector" in existing_fields else 0
+        version_conflict = "v=" in existing_desc and f"v={SCHEMA_VERSION}" not in existing_desc
+        if missing_fields or wrong_types or vector_dim != embedding_dim or version_conflict:
+            raise RuntimeError(
+                f"Schema version mismatch for {collection_name}. "
+                f"Expected compatible v={SCHEMA_VERSION}; description='{existing_desc}', "
+                f"missing={missing_fields}, wrong_types={wrong_types}, vector_dim={vector_dim}. "
+                f"Run a migration job to drop+recreate before re-indexing."
+            )
+        schema_label = f"v={SCHEMA_VERSION}" if f"v={SCHEMA_VERSION}" in existing_desc else "compatible legacy"
+        print(f"Using existing collection: {collection_name} ({schema_label})")
 
     # Prepare records for insertion
     records = []
@@ -416,7 +452,8 @@ def github_rag_incremental_pipeline(
     embedding_batch_size: int = DEFAULT_EMBEDDING_BATCH_SIZE,
     milvus_host: str = "milvus-milvus.ml-infra.svc.cluster.local",
     milvus_port: str = "19530",
-    collection_name: str = DOCS_COLLECTION
+    collection_name: str = DOCS_COLLECTION,
+    embedding_dim: int = DEFAULT_EMBEDDING_DIM,
 ):
     # Step 1: Delete old vectors for changed files
     delete_task = delete_old_vectors(
@@ -461,7 +498,8 @@ def github_rag_incremental_pipeline(
         embedded_data=chunk_task.outputs["embedded_data"],
         milvus_host=milvus_host,
         milvus_port=milvus_port,
-        collection_name=collection_name
+        collection_name=collection_name,
+        embedding_dim=embedding_dim,
     )
     
     if k8s is not None:

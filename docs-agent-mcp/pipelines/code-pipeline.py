@@ -538,7 +538,10 @@ def store_code_milvus(
             index_params = {
                 "metric_type": "COSINE",
                 "index_type": "IVF_FLAT",
-                "params": {"nlist": min(1024, len(records))},
+                # Milvus recommends nlist in [32, 4096]; a small first run
+                # would otherwise build a 1-cluster index. Matches the floors
+                # already used by the incremental and issues pipelines.
+                "params": {"nlist": min(1024, max(32, len(records)))},
             }
             collection.create_index("vector", index_params, timeout=120)
         collection.load()
