@@ -103,3 +103,5 @@ sessionAuth:
 # The RAG-stack AuthorizationPolicies previously defined in istio_policies.tf.
 meshPolicies:
   enabled: true
+  # Must match the active KServe InferenceService label.
+  qwenInferenceServiceName: qwen-llm-standard

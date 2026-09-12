@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.stableService.name }}
+  labels:
+    {{- include "qwen-runtime.labels" . | nindent 4 }}
+spec:
+  selector:
+    serving.kserve.io/inferenceservice: {{ .Values.inferenceService.name }}
+  ports:
+    - name: http
+      protocol: TCP
+      port: {{ .Values.stableService.port }}
+      targetPort: {{ .Values.stableService.targetPort }}
+  type: ClusterIP

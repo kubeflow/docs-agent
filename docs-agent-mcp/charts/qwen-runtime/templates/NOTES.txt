@@ -1,0 +1,5 @@
+This release owns the single-GPU Qwen runtime and may cause intentional downtime.
+
+Wait for KServe's generated Deployment (Helm does not wait on custom conditions):
+  kubectl rollout status deployment/{{ .Values.inferenceService.name }}-predictor -n {{ .Release.Namespace }} --timeout=1800s
+  helm test {{ .Release.Name }} -n {{ .Release.Namespace }}

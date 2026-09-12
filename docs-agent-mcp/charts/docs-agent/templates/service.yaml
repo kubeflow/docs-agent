@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "docs-agent.mcpName" . }}
+  labels:
+    {{- include "docs-agent.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: {{ include "docs-agent.mcpName" . }}
+  ports:
+    - name: mcp
+      port: {{ .Values.mcp.service.port }}
+      targetPort: mcp
+      protocol: TCP
+  type: ClusterIP

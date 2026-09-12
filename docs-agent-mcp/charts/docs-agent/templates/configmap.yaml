@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mcp-server-config
+  labels:
+    {{- include "docs-agent.labels" . | nindent 4 }}
+data:
+  COLLECTION_NAME: {{ .Values.mcp.config.docsCollection | quote }}
+  ISSUES_COLLECTION_NAME: {{ .Values.mcp.config.issuesCollection | quote }}
+  CODE_COLLECTION_NAME: {{ .Values.mcp.config.codeCollection | quote }}
+  EMBEDDINGS_URL: {{ .Values.mcp.config.embeddingsUrl | quote }}
+  MILVUS_URI: {{ .Values.mcp.config.milvusUri | quote }}
+  MILVUS_USER: {{ .Values.mcp.config.milvusUser | quote }}
+  MAX_QUERY_CHARS: {{ .Values.mcp.config.maxQueryChars | quote }}
+  MAX_TOP_K: {{ .Values.mcp.config.maxTopK | quote }}
+  MAX_CANDIDATE_HITS: {{ .Values.mcp.config.maxCandidateHits | quote }}
+  PORT: {{ .Values.mcp.service.port | quote }}
+  PYTHONUNBUFFERED: "1"
+  PYTHONDONTWRITEBYTECODE: "1"

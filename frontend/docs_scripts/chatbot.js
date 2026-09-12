@@ -412,6 +412,84 @@ function formatChatMarkdown(text, isStreaming = false) {
     return formatted;
 }
 
+// Incrementally decode Server-Sent Events without assuming that a network
+// chunk ends on a line or event boundary.  `push` returns only complete event
+// payloads; `finish` also flushes one final unterminated frame when the server
+// closes the stream.
+function createSSEFrameParser() {
+    let buffer = '';
+    let finished = false;
+
+    function payloadFromFrame(frame) {
+        const dataLines = [];
+        const rawLines = [];
+
+        for (const line of frame.split(/\r\n|\r|\n/)) {
+            if (!line || line.startsWith(':')) continue;
+
+            const colonIndex = line.indexOf(':');
+            const field = colonIndex === -1 ? line : line.substring(0, colonIndex);
+            let value = colonIndex === -1 ? '' : line.substring(colonIndex + 1);
+            if (value.startsWith(' ')) value = value.substring(1);
+
+            if (field === 'data') {
+                dataLines.push(value);
+            } else if (colonIndex === -1) {
+                // Keep compatibility with endpoints that return newline-framed
+                // JSON without the optional SSE `data:` prefix.
+                rawLines.push(line);
+            }
+        }
+
+        if (dataLines.length > 0) return dataLines.join('\n');
+        if (rawLines.length > 0) return rawLines.join('\n');
+        return null;
+    }
+
+    function drainCompleteFrames(isFinal = false) {
+        const payloads = [];
+        // A blank SSE line may use LF, CRLF, or CR. Negative lookahead keeps a
+        // single CRLF from being mistaken for two separate line endings.
+        const boundary = /(?:\r\n|\r(?!\n)|\n)(?:\r\n|\r(?!\n)|\n)/;
+        let match;
+
+        while ((match = boundary.exec(buffer)) !== null) {
+            const matchEnd = match.index + match[0].length;
+            // A CR at the current end of the buffer may become the first byte
+            // of CRLF in the next chunk, so defer classifying it until then.
+            if (!isFinal && matchEnd === buffer.length && match[0].endsWith('\r')) {
+                break;
+            }
+            const frame = buffer.substring(0, match.index);
+            buffer = buffer.substring(matchEnd);
+            const payload = payloadFromFrame(frame);
+            if (payload !== null) payloads.push(payload);
+        }
+
+        return payloads;
+    }
+
+    return {
+        push(chunk) {
+            if (finished || !chunk) return [];
+            buffer += chunk;
+            return drainCompleteFrames();
+        },
+        finish(chunk = '') {
+            if (finished) return [];
+            if (chunk) buffer += chunk;
+
+            const payloads = drainCompleteFrames(true);
+            const finalPayload = payloadFromFrame(buffer);
+            if (finalPayload !== null) payloads.push(finalPayload);
+
+            buffer = '';
+            finished = true;
+            return payloads;
+        }
+    };
+}
+
 document.addEventListener('DOMContentLoaded', async function() {
     console.log('Docs Bot Initialized (v1.1.0 - Kagent A2A, configurable URL)');
 
@@ -1007,6 +1085,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             const reader = response.body.getReader();
             currentReader = reader;
             const decoder = new TextDecoder();
+            const frameParser = createSSEFrameParser();
 
             // Reset current message state
             currentMessageDiv = null;
@@ -1051,27 +1130,21 @@ document.addEventListener('DOMContentLoaded', async function() {
                 }
 
                 const { done, value } = await reader.read();
-                if (done) break;
 
                 if (!isTyping || !currentAbortController || currentAbortController.signal.aborted) {
                     break;
                 }
 
-                const chunk = decoder.decode(value, { stream: true });
-                const lines = chunk.split('\n');
+                const eventPayloads = done
+                    ? frameParser.finish(decoder.decode())
+                    : frameParser.push(decoder.decode(value, { stream: true }));
 
-                for (const line of lines) {
-                    if (line.trim() === '') continue;
+                for (const dataStr of eventPayloads) {
                     if (!isTyping || !currentAbortController || currentAbortController.signal.aborted) {
                         break;
                     }
 
                     try {
-                        let dataStr = line;
-                        if (line.startsWith('data: ')) {
-                            dataStr = line.substring(6);
-                        }
-
                         if (dataStr === '[DONE]') {
                             if (currentMessageDiv && pendingCitations.length > 0) {
                                 renderCitationsOnDiv(currentMessageDiv, pendingCitations);
@@ -1212,9 +1285,12 @@ document.addEventListener('DOMContentLoaded', async function() {
                             return;
                         }
                     } catch (parseError) {
-                        // Ignore partial / heartbeat lines
+                        // Ignore malformed event payloads; SSE comments and
+                        // heartbeats are filtered by the frame parser.
                     }
                 }
+
+                if (done) break;
             }
 
         } catch (error) {

@@ -16,6 +16,7 @@ def _tool_payload(result: str) -> dict:
     """Parse JSON returned by search_* MCP tools."""
     return json.loads(result)
 
+
 MCP_SERVER_DIR = Path(__file__).parent.parent / "docs-agent-mcp" / "mcp-server"
 MCP_SERVER_PATH = MCP_SERVER_DIR / "server.py"
 
@@ -122,14 +123,14 @@ class TestSearchKubeflowDocs:
 
         assert "content/en/docs/kserve/overview.md" in _tool_payload(result)["markdown_summary"]
 
-    def test_respects_top_k_parameter(self, inject_mocks):
-        """top_k should be passed through to Milvus client.search limit."""
+    def test_top_k_controls_bounded_candidate_pool(self, inject_mocks):
+        """top_k should expand to a bounded reranking candidate pool."""
         mock_client, _ = inject_mocks
         mock_client.search.return_value = [[]]
 
         server.search_kubeflow_docs("test", top_k=3)
 
-        assert mock_client.search.call_args.kwargs["limit"] == 3
+        assert mock_client.search.call_args.kwargs["limit"] == 12
 
     def test_calls_embeddings_service_for_query(self, inject_mocks):
         mock_client, embed_mock = inject_mocks
@@ -139,6 +140,15 @@ class TestSearchKubeflowDocs:
 
         embed_mock.assert_called_once()
         assert embed_mock.call_args[0][0] == "KServe setup guide"
+
+    def test_deterministically_focuses_broad_katib_configuration_query(self, inject_mocks):
+        mock_client, embed_mock = inject_mocks
+        mock_client.search.return_value = [[]]
+
+        server.search_kubeflow_docs("Katib hyperparameter tuning configuration")
+
+        focused = embed_mock.call_args[0][0]
+        assert focused.endswith("parallelTrialCount sidecar.istio.io/inject")
 
     def test_passes_embedding_to_milvus(self, inject_mocks):
         mock_client, embed_mock = inject_mocks
@@ -216,6 +226,70 @@ class TestSearchKubeflowDocs:
         assert "getting-started" not in summary
         assert summary.count("**Source:**") == 1
         assert "configure-experiment" in mock_client.query.call_args.kwargs["filter"]
+        assert "**Required verbatim identifiers:** `parallelTrialCount`, `sidecar.istio.io/inject`" in summary
+
+    def test_expansion_retains_selected_hit_when_bounded_rows_omit_it(self, inject_mocks):
+        mock_client, _ = inject_mocks
+        source = "https://www.kubeflow.org/docs/components/katib/target-guide"
+        file_path = "content/en/docs/components/katib/target-guide.md"
+        selected_evidence = "SELECTED MATCHING EVIDENCE parallelTrialCount"
+        mock_client.search.return_value = [
+            [
+                {
+                    "distance": 0.8,
+                    "entity": {
+                        "content_text": selected_evidence,
+                        "citation_url": source,
+                        "file_path": file_path,
+                        "chunk_index": 30,
+                    },
+                }
+            ]
+        ]
+        # Simulate an unordered, limit-sized query response which omits the
+        # selected vector hit. Earlier chunks also exhaust the char budget.
+        mock_client.query.return_value = [
+            {
+                "chunk_index": index,
+                "content_text": f"chunk-{index} " + ("x" * 1_800),
+                "citation_url": source,
+                "file_path": file_path,
+            }
+            for index in reversed(range(23, 39))
+            if index != 30
+        ]
+
+        result = server.search_kubeflow_docs("Katib target guide parallelTrialCount", top_k=1)
+        summary = _tool_payload(result)["markdown_summary"]
+
+        assert selected_evidence in summary
+        assert "chunk-23" not in summary
+        assert "chunk_index >= 23" in mock_client.query.call_args.kwargs["filter"]
+        assert "chunk_index <= 38" in mock_client.query.call_args.kwargs["filter"]
+
+    def test_expansion_query_failure_never_returns_candidate_pool_over_top_k(self, inject_mocks):
+        mock_client, _ = inject_mocks
+        mock_client.search.return_value = [
+            [
+                {
+                    "distance": 0.9 - (index / 100),
+                    "entity": {
+                        "content_text": f"candidate {index}",
+                        "citation_url": f"https://www.kubeflow.org/docs/candidate-{index}",
+                        "file_path": f"content/en/docs/candidate-{index}.md",
+                        "chunk_index": index,
+                    },
+                }
+                for index in range(8)
+            ]
+        ]
+        mock_client.query.side_effect = RuntimeError("query unavailable")
+
+        result = server.search_kubeflow_docs("candidate", top_k=2)
+        payload = _tool_payload(result)
+
+        assert payload["markdown_summary"].count("### Result") == 2
+        assert len(payload["citations"]) == 2
 
     def test_searches_correct_collection(self, inject_mocks):
         """Should search the configured COLLECTION_NAME."""
@@ -254,14 +328,52 @@ class TestSearchKubeflowDocs:
 
         assert "\n---\n" in _tool_payload(result)["markdown_summary"]
 
-    def test_default_top_k_is_five(self, inject_mocks):
-        """Default top_k should be 5 when not specified."""
+    def test_default_top_k_fetches_twenty_candidates(self, inject_mocks):
+        """Default top_k=5 should fetch twenty candidates for hybrid reranking."""
         mock_client, _ = inject_mocks
         mock_client.search.return_value = [[]]
 
         server.search_kubeflow_docs("test")
 
-        assert mock_client.search.call_args.kwargs["limit"] == 5
+        assert mock_client.search.call_args.kwargs["limit"] == 20
+
+    def test_rejects_oversized_query_without_embedding(self, inject_mocks):
+        mock_client, embed_mock = inject_mocks
+
+        result = server.search_kubeflow_docs("x" * (server.MAX_QUERY_CHARS + 1))
+
+        assert result == f"Search rejected: query exceeds the {server.MAX_QUERY_CHARS}-character limit"
+        embed_mock.assert_not_called()
+        mock_client.search.assert_not_called()
+
+    def test_clamps_excessive_top_k(self, inject_mocks):
+        mock_client, _ = inject_mocks
+        mock_client.search.return_value = [[]]
+
+        server.search_kubeflow_docs("Katib", top_k=10_000)
+
+        assert mock_client.search.call_args.kwargs["limit"] == server.MAX_CANDIDATE_HITS
+
+    def test_returns_trusted_structured_citation(self, inject_mocks, sample_milvus_hits):
+        mock_client, _ = inject_mocks
+        mock_client.search.return_value = sample_milvus_hits
+
+        result = server.search_kubeflow_docs("KServe")
+        payload = _tool_payload(result)
+        summary = payload["markdown_summary"]
+
+        assert "**Citation Markdown (copy exactly):**" not in summary
+        assert "**Trust:** Official Kubeflow documentation" in summary
+        assert payload["citations"] == [
+            {
+                "url": "https://www.kubeflow.org/docs/kserve/",
+                "file": "content/en/docs/kserve/overview.md",
+            },
+            {
+                "url": "https://www.kubeflow.org/docs/pipelines/install/",
+                "file": "content/en/docs/pipelines/install.md",
+            },
+        ]
 
 
 class TestSearchCollection:
@@ -340,6 +452,102 @@ class TestSearchCollection:
         assert result[0]["distance"] == 0.9
 
 
+class TestEvidencePolicy:
+    def test_exact_query_terms_require_literal_evidence(self):
+        terms = server._exact_query_terms(
+            "Katib parallelTrialCount sidecar.istio.io/inject missingField",
+            "Use parallelTrialCount and set sidecar.istio.io/inject to false.",
+        )
+
+        assert terms == ["parallelTrialCount", "sidecar.istio.io/inject"]
+
+    def test_merges_ordered_chunks_without_repeating_overlap(self):
+        rows = [
+            {"chunk_index": 1, "content_text": "gamma delta"},
+            {"chunk_index": 0, "content_text": "alpha beta gamma"},
+        ]
+
+        assert server._merge_ordered_content(rows, 100) == "alpha beta gamma delta"
+
+    def test_merge_keeps_evidence_with_missing_chunk_index(self):
+        rows = [
+            {"chunk_index": 0, "content_text": "indexed evidence"},
+            {"chunk_index": None, "content_text": "unindexed evidence"},
+        ]
+
+        assert server._merge_ordered_content(rows, 100) == "indexed evidence\n\nunindexed evidence"
+
+    def test_lexical_metadata_can_promote_exact_file(self):
+        hits = [
+            {
+                "distance": 0.80,
+                "entity": {
+                    "citation_url": "https://github.com/kubeflow/katib/blob/master/examples/grid.yaml",
+                    "file_path": "examples/grid.yaml",
+                    "content_text": "kind: Experiment\nalgorithmName: grid",
+                },
+            },
+            {
+                "distance": 0.76,
+                "entity": {
+                    "citation_url": "https://github.com/kubeflow/katib/blob/master/examples/random.yaml",
+                    "file_path": "examples/v1beta1/hp-tuning/random.yaml",
+                    "content_text": "apiVersion: kubeflow.org/v1beta1\nkind: Experiment",
+                },
+            },
+        ]
+
+        result = server._rerank_hits("kubeflow katib examples v1beta1 hp-tuning random yaml", hits, limit=2)
+
+        assert result[0]["entity"]["file_path"].endswith("random.yaml")
+
+    def test_exact_filename_beats_algorithm_word_in_another_file(self):
+        hits = [
+            {
+                "distance": 0.72,
+                "entity": {
+                    "citation_url": "https://github.com/kubeflow/katib/blob/master/examples/hyperopt-distribution.yaml",
+                    "file_path": "examples/v1beta1/hp-tuning/hyperopt-distribution.yaml",
+                    "content_text": "kind: Experiment\nalgorithmName: random",
+                },
+            },
+            {
+                "distance": 0.60,
+                "entity": {
+                    "citation_url": "https://github.com/kubeflow/katib/blob/master/examples/random.yaml",
+                    "file_path": "examples/v1beta1/hp-tuning/random.yaml",
+                    "content_text": "apiVersion: kubeflow.org/v1beta1\nkind: Experiment",
+                },
+            },
+        ]
+
+        result = server._rerank_hits("kubeflow katib examples v1beta1 hp-tuning random yaml", hits, limit=2)
+
+        assert result[0]["entity"]["file_path"].endswith("/random.yaml")
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://www.kubeflow.org/docs/unsafe",
+            "https://github.com.evil.example/kubeflow/katib",
+            "https://evil.example/steal",
+            "javascript:alert(1)",
+        ],
+    )
+    def test_rejects_untrusted_source_urls(self, url):
+        assert server._source_url({"citation_url": url}) == ""
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://www.kubeflow.org/docs/components/katib",
+            "https://github.com/kubeflow/katib/blob/master/random.yaml",
+        ],
+    )
+    def test_accepts_trusted_source_urls(self, url):
+        assert server._source_url({"citation_url": url}) == url
+
+
 class TestSearchGithubIssues:
     """Tests for the search_github_issues MCP tool."""
 
@@ -382,6 +590,110 @@ class TestSearchGithubIssues:
 
         result = server.search_github_issues("test")
         assert "kind/bug, area/kserve" in _tool_payload(result)["markdown_summary"]
+
+    def test_expands_only_the_best_issue_in_chunk_order(self, inject_mocks):
+        mock_client, _ = inject_mocks
+        mock_client.search.return_value = [
+            [
+                {
+                    "distance": 0.8,
+                    "entity": {
+                        "content_text": "matching chunk",
+                        "citation_url": "https://github.com/kserve/kserve/issues/5885",
+                        "repo_name": "kserve/kserve",
+                        "issue_number": 5885,
+                        "issue_state": "open",
+                        "issue_labels": "kind/bug",
+                        "chunk_index": 1,
+                    },
+                },
+                {
+                    "distance": 0.7,
+                    "entity": {
+                        "content_text": "unrelated workaround",
+                        "citation_url": "https://github.com/kserve/kserve/issues/5914",
+                        "repo_name": "kserve/kserve",
+                        "issue_number": 5914,
+                        "issue_state": "open",
+                        "issue_labels": "kind/bug",
+                        "chunk_index": 0,
+                    },
+                },
+            ]
+        ]
+        mock_client.query.return_value = [
+            {
+                "content_text": "second chunk",
+                "citation_url": "https://github.com/kserve/kserve/issues/5885",
+                "repo_name": "kserve/kserve",
+                "issue_number": 5885,
+                "issue_state": "open",
+                "issue_labels": "kind/bug",
+                "chunk_index": 1,
+            },
+            {
+                "content_text": "first chunk",
+                "citation_url": "https://github.com/kserve/kserve/issues/5885",
+                "repo_name": "kserve/kserve",
+                "issue_number": 5885,
+                "issue_state": "open",
+                "issue_labels": "kind/bug",
+                "chunk_index": 0,
+            },
+        ]
+
+        result = server.search_github_issues(
+            "deploymentMode cannot be changed from Knative to Serverless",
+            repo="kserve/kserve",
+        )
+        summary = _tool_payload(result)["markdown_summary"]
+
+        assert summary.count("**Source:**") == 1
+        assert summary.index("first chunk") < summary.index("second chunk")
+        assert "issues/5914" not in summary
+        assert "issue_number == 5885" in mock_client.query.call_args.kwargs["filter"]
+
+    def test_issue_expansion_retains_later_selected_chunk_when_query_omits_it(self, inject_mocks):
+        mock_client, _ = inject_mocks
+        source = "https://github.com/kserve/kserve/issues/5885"
+        selected_evidence = "SELECTED ISSUE EVIDENCE deploymentMode remains unchanged"
+        mock_client.search.return_value = [
+            [
+                {
+                    "distance": 0.9,
+                    "entity": {
+                        "content_text": selected_evidence,
+                        "citation_url": source,
+                        "repo_name": "kserve/kserve",
+                        "issue_number": 5885,
+                        "issue_state": "closed",
+                        "issue_labels": "kind/bug",
+                        "chunk_index": 30,
+                    },
+                }
+            ]
+        ]
+        mock_client.query.return_value = [
+            {
+                "content_text": f"issue chunk {index} " + ("x" * 1_800),
+                "citation_url": source,
+                "repo_name": "kserve/kserve",
+                "issue_number": 5885,
+                "issue_state": "closed",
+                "issue_labels": "kind/bug",
+                "chunk_index": index,
+            }
+            for index in reversed(range(23, 39))
+            if index != 30
+        ]
+
+        result = server.search_github_issues("deploymentMode remains unchanged", repo="kserve/kserve")
+        summary = _tool_payload(result)["markdown_summary"]
+
+        assert selected_evidence in summary
+        assert "issue chunk 23" not in summary
+        assert "chunk_index >= 23" in mock_client.query.call_args.kwargs["filter"]
+        assert "chunk_index <= 38" in mock_client.query.call_args.kwargs["filter"]
 
     def test_filters_by_repo(self, inject_mocks):
         """Should construct repo filter expression."""
@@ -433,14 +745,14 @@ class TestSearchGithubIssues:
 
         assert mock_client.search.call_args.kwargs["collection_name"] == server.ISSUES_COLLECTION_NAME
 
-    def test_default_top_k_is_five(self, inject_mocks):
-        """Default top_k should be 5."""
+    def test_default_top_k_fetches_twenty_candidates(self, inject_mocks):
+        """Default top_k=5 should fetch twenty candidates for reranking."""
         mock_client, _ = inject_mocks
         mock_client.search.return_value = [[]]
 
         server.search_github_issues("test")
 
-        assert mock_client.search.call_args.kwargs["limit"] == 5
+        assert mock_client.search.call_args.kwargs["limit"] == 20
 
     @pytest.mark.parametrize(
         ("field_name", "kwargs"),
@@ -506,23 +818,23 @@ class TestSearchKubeflowCode:
 
         assert mock_client.search.call_args.kwargs["collection_name"] == server.CODE_COLLECTION_NAME
 
-    def test_default_top_k_is_five(self, inject_mocks):
-        """Default top_k should be 5."""
+    def test_default_top_k_fetches_twenty_candidates(self, inject_mocks):
+        """Default top_k=5 should fetch twenty candidates for reranking."""
         mock_client, _ = inject_mocks
         mock_client.search.return_value = [[]]
 
         server.search_kubeflow_code("test")
 
-        assert mock_client.search.call_args.kwargs["limit"] == 5
+        assert mock_client.search.call_args.kwargs["limit"] == 20
 
-    def test_respects_top_k_parameter(self, inject_mocks):
-        """top_k should be passed through to Milvus client.search limit."""
+    def test_top_k_controls_bounded_candidate_pool(self, inject_mocks):
+        """top_k should expand to a bounded reranking candidate pool."""
         mock_client, _ = inject_mocks
         mock_client.search.return_value = [[]]
 
         server.search_kubeflow_code("test", top_k=2)
 
-        assert mock_client.search.call_args.kwargs["limit"] == 2
+        assert mock_client.search.call_args.kwargs["limit"] == 8
 
     def test_requests_code_output_fields(self, inject_mocks):
         """Should request code-specific output fields from Milvus."""
@@ -534,7 +846,9 @@ class TestSearchKubeflowCode:
         output_fields = mock_client.search.call_args.kwargs["output_fields"]
         assert "content_text" in output_fields
         assert "citation_url" in output_fields
+        assert "repo_name" in output_fields
         assert "file_path" in output_fields
+        assert "chunk_index" in output_fields
         assert "resource_kind" in output_fields
         assert "resource_name" in output_fields
         assert "resource_namespace" in output_fields
@@ -547,7 +861,17 @@ class TestSearchKubeflowCode:
 
         server.search_kubeflow_code("test", resource_kind="Deployment")
 
-        assert mock_client.search.call_args.kwargs["filter"] == "resource_kind == 'Deployment'"
+        assert mock_client.search.call_args.kwargs["filter"] == 'resource_kind == "Deployment"'
+
+    def test_filters_by_repo_and_resource_kind(self, inject_mocks):
+        mock_client, _ = inject_mocks
+        mock_client.search.return_value = [[]]
+
+        server.search_kubeflow_code("random yaml", resource_kind="Experiment", repo="kubeflow/katib")
+
+        assert mock_client.search.call_args.kwargs["filter"] == (
+            'resource_kind == "Experiment" and repo_name == "kubeflow/katib"'
+        )
 
     def test_no_filter_when_resource_kind_empty(self, inject_mocks):
         """Should not include filter when resource_kind is empty."""
@@ -566,3 +890,121 @@ class TestSearchKubeflowCode:
             server.search_kubeflow_code("test", resource_kind="Deployment' or file_type == 'python")
 
         mock_client.search.assert_not_called()
+
+    def test_returns_only_selected_yaml_resource_without_merging_documents(self, inject_mocks):
+        mock_client, _ = inject_mocks
+        mock_client.search.return_value = [
+            [
+                {
+                    "distance": 0.8,
+                    "entity": {
+                        "content_text": "kind: Experiment\nspec:\n  algorithm:\n    algorithmName: random",
+                        "citation_url": "https://github.com/kubeflow/katib/blob/master/examples/random.yaml",
+                        "repo_name": "kubeflow/katib",
+                        "file_path": "examples/random.yaml",
+                        "resource_kind": "Experiment",
+                        "resource_name": "random",
+                        "resource_namespace": "kubeflow",
+                        "file_type": "yaml",
+                        "chunk_index": 0,
+                    },
+                },
+                {
+                    "distance": 0.7,
+                    "entity": {
+                        "content_text": "kind: Experiment",
+                        "citation_url": "https://github.com/kubeflow/katib/blob/master/examples/grid.yaml",
+                        "repo_name": "kubeflow/katib",
+                        "file_path": "examples/grid.yaml",
+                        "resource_kind": "Experiment",
+                        "resource_name": "grid",
+                        "resource_namespace": "kubeflow",
+                        "file_type": "yaml",
+                        "chunk_index": 0,
+                    },
+                },
+            ]
+        ]
+        # These are two independently valid YAML documents from the same file.
+        # Treating their chunks as one file would silently remove the `---`
+        # boundary and produce a corrupt manifest.
+        mock_client.query.return_value = [
+            {
+                "content_text": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: settings",
+                "citation_url": "https://github.com/kubeflow/katib/blob/master/examples/random.yaml",
+                "repo_name": "kubeflow/katib",
+                "file_path": "examples/random.yaml",
+                "resource_kind": "ConfigMap",
+                "resource_name": "settings",
+                "resource_namespace": "kubeflow",
+                "file_type": "yaml",
+                "chunk_index": 0,
+            },
+            {
+                "content_text": "spec:\n  algorithm:\n    algorithmName: random",
+                "citation_url": "https://github.com/kubeflow/katib/blob/master/examples/random.yaml",
+                "repo_name": "kubeflow/katib",
+                "file_path": "examples/random.yaml",
+                "resource_kind": "Experiment",
+                "resource_name": "random",
+                "resource_namespace": "kubeflow",
+                "file_type": "yaml",
+                "chunk_index": 1,
+            },
+        ]
+
+        result = server.search_kubeflow_code("random yaml", resource_kind="Experiment", repo="kubeflow/katib")
+        summary = _tool_payload(result)["markdown_summary"]
+
+        assert summary.count("**Source:**") == 1
+        assert "algorithmName: random" in summary
+        assert "kind: ConfigMap" not in summary
+        assert "examples/grid.yaml" not in summary
+        mock_client.query.assert_not_called()
+
+    def test_non_yaml_expansion_retains_later_selected_chunk_when_query_omits_it(self, inject_mocks):
+        mock_client, _ = inject_mocks
+        source = "https://github.com/kubeflow/katib/blob/master/pkg/controller/suggestion.go"
+        file_path = "pkg/controller/suggestion.go"
+        selected_evidence = "func reconcileSelectedSuggestion() { /* matching evidence */ }"
+        mock_client.search.return_value = [
+            [
+                {
+                    "distance": 0.9,
+                    "entity": {
+                        "content_text": selected_evidence,
+                        "citation_url": source,
+                        "repo_name": "kubeflow/katib",
+                        "file_path": file_path,
+                        "resource_kind": "function",
+                        "resource_name": "reconcileSelectedSuggestion",
+                        "resource_namespace": "",
+                        "file_type": "go",
+                        "chunk_index": 50,
+                    },
+                }
+            ]
+        ]
+        mock_client.query.return_value = [
+            {
+                "content_text": f"code chunk {index} " + ("x" * 1_600),
+                "citation_url": source,
+                "repo_name": "kubeflow/katib",
+                "file_path": file_path,
+                "resource_kind": "function",
+                "resource_name": f"other{index}",
+                "resource_namespace": "",
+                "file_type": "go",
+                "chunk_index": index,
+            }
+            for index in reversed(range(39, 63))
+            if index != 50
+        ]
+
+        result = server.search_kubeflow_code("reconcileSelectedSuggestion", repo="kubeflow/katib")
+        summary = _tool_payload(result)["markdown_summary"]
+
+        assert selected_evidence in summary
+        assert "code chunk 39" not in summary
+        assert "chunk_index >= 39" in mock_client.query.call_args.kwargs["filter"]
+        assert "chunk_index <= 62" in mock_client.query.call_args.kwargs["filter"]

@@ -126,9 +126,10 @@ New chat, **Docs** persona, empty `contextId`. Widget-equivalent:
 Pass all of:
 
 - The named `tool` appears in the stream (function-call / tool metadata).
-- Every cited URL is a character-for-character `**Source:**` from gate 1. No invented `docs/components/serving/*`, no `github.com/kubeflow/kserve`.
+- Every golden `expected_source_urls` URL appears in the tool's structured `citations[]` payload that drives the widget Sources accordion.
+- Every structured citation and any URL the model still writes are character-for-character `**Source:**` values from gate 1. No invented `docs/components/serving/*`, no `github.com/kubeflow/kserve`.
 - `must_appear_in_answer` strings are present; `forbidden_in_answer` strings are not.
-- Widget: `[title](url)` is a real `<a href>` once `formatMarkdown` is fixed.
+- Widget: structured citations survive fragmented SSE frames and render as real source links; ordinary Markdown links still render as safe `<a href>` elements.
 
 Fail the row, not the whole suite, if one query still 404s after ingest — that is an ingestion bug, not an LLM bug.
 

@@ -123,7 +123,7 @@ helm install kagent oci://ghcr.io/kagent-dev/kagent/helm/kagent \
   --set tools.querydoc.enabled=false
 ```
 
-Before configuring kagent, make sure you have the local Qwen model (`qwen-llm`) running on KServe and the stable service (`qwen-llm-stable`) created.
+Before configuring kagent, make sure you have the Standard-mode local Qwen model (`qwen-llm-standard`) running on KServe and the stable service (`qwen-llm-stable`) created.
 
 Apply the custom agent configuration:
 
