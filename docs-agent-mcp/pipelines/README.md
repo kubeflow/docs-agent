@@ -232,6 +232,11 @@ kfp.compiler.Compiler().compile(
 <td>"kubeflow_docs"</td>
 <td>Milvus collection name</td>
 </tr>
+<tr>
+<td><code>embedding_dim</code></td>
+<td>768</td>
+<td>Milvus vector dimension (must match the embeddings model and the full pipeline)</td>
+</tr>
 </tbody>
 </table>
 
