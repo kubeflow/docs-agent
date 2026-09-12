@@ -1,3 +1,10 @@
+import sys
+from pathlib import Path
+
+_PIPELINES_DIR = Path(__file__).resolve().parent.parent
+if str(_PIPELINES_DIR) not in sys.path:
+    sys.path.insert(0, str(_PIPELINES_DIR))
+
 import kfp
 from kfp import dsl
 from kfp.dsl import *
@@ -534,7 +541,7 @@ def store_code_milvus(
         if not collection.has_index():
             index_params = {
                 "metric_type": "COSINE",
-                "index_type": "IVF_FLAT",
+                "index_type": "FLAT",
                 "params": {"nlist": min(1024, len(records))},
             }
             collection.create_index("vector", index_params, timeout=120)

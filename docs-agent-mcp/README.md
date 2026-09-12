@@ -5,10 +5,51 @@ Deploy the Kubeflow documentation assistant using kagent, MCP, and Milvus on Kub
 ## Architecture
 
 * **KAgent UI / Runner:** Chat interface that orchestrates interactions.
-* **MCP Server:** Fetches context from Milvus.
+* **MCP Server:** Routes queries to BM25, dense, or hybrid retrieval in Milvus.
 * **LLM Service:** Qwen2.5-7B-Instruct-AWQ running on KServe/vLLM.
-* **Embeddings Service:** Sentence-Transformers MPNet via Hugging Face TEI.
-* **Milvus:** Direct vector database storage (no Feast dependency).
+* **Embeddings Service:** 768-dimensional MPNet embeddings via Hugging Face TEI.
+* **Milvus:** v4 hybrid collection with dense vectors and native BM25 sparse vectors.
+
+## RAG v4 data contract
+
+Production collection: `kubeflow_docs` (schema **v=4**). See
+[docs/RAG_V4_ARCHITECTURE.md](../docs/RAG_V4_ARCHITECTURE.md) for the full
+architecture and eval findings.
+
+### Ingest
+
+`kubeflow-pipeline.py` → `canonical_rag_ingest.py` → TEI MPNet (768-d) → Milvus:
+
+| Field | Role |
+| --- | --- |
+| `content_text` (≤2000) | Chunk prose; BM25 analyzer input |
+| `vector` (768) | Dense cosine search |
+| `sparse_vector` | Native BM25 output |
+| `release_date` | Nullable epoch; temporal reranking |
+| `doc_type`, `version`, `citation_url`, `section_path` | Routing + UI metadata |
+
+### Retrieval (`SEARCH_MODE=auto`)
+
+Deterministic intent router in `mcp-server/server.py` — no LLM mode selection:
+
+| Intent | Mode |
+| --- | --- |
+| temporal / release_date / exact version | BM25 (+ `release_date` rerank when applicable) |
+| conceptual / general | hybrid (0.3 dense / 0.7 sparse) |
+| legacy collection (no `sparse_vector`) | dense fallback |
+
+Set `SEARCH_MODE=auto` in the MCP deployment. Avoid `SEARCH_MODE=bm25` (known bug).
+
+### Citation contract
+
+`search_kubeflow_docs` returns a `ToolResult` with:
+
+- **`content`** — URL-sanitized evidence markdown (chunk text + `[cN]` ids only)
+- **`structured_content.citations`** — `[{id, url, score, section?, version?, release_date?, doc_type?, file_path?}, …]`
+- **`structured_content.retrieval`** — `{retrieval_mode, intent, reason}` (router provenance)
+
+Kagent must not print URLs in answers. The chatbot UI (`frontend/docs_scripts/chatbot.js`)
+reads `structured_content.citations` and renders the Sources panel.
 
 ## Prerequisites
 
@@ -75,10 +116,14 @@ Compile the pipeline:
 ```bash
 cd pipelines
 pip install kfp
+pip install -r requirements.txt
 python kubeflow-pipeline.py
 ```
 
-Upload the generated `github_rag_pipeline.yaml` to the KFP dashboard and create a run. This pipeline is responsible for crawling GitHub docs, chunking, embedding, and registering features in Feast backed by Milvus, so you **do not need** the `feast_repo/` folder for the standard setup.
+Upload the generated `github_rag_pipeline.yaml` to the KFP dashboard and create
+a run. This pipeline crawls GitHub docs, applies the v4 canonical parser and
+chunker, calls the TEI embedding service, and writes dense plus native BM25
+vectors directly to Milvus. Feast is not part of the v4 ingestion path.
 
 ### Step 5: Build, Push, and Deploy MCP Server
 

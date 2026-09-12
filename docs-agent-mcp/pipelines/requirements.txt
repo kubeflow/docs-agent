@@ -1,5 +1,7 @@
-kfp==2.16.1
+kfp==2.17.0
+kfp-kubernetes==2.17.0
 pymilvus==2.6.14
 langchain-text-splitters==1.1.2
 beautifulsoup4==4.15.0
+toml==0.10.2
 requests==2.34.2

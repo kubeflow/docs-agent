@@ -7,7 +7,7 @@ from the chunk_and_embed_issues KFP component for testability.
 import sys
 from pathlib import Path
 
-PIPELINES_DIR = Path(__file__).parent.parent / "docs-agent-mcp" / "pipelines"
+PIPELINES_DIR = Path(__file__).parent.parent / "docs-agent-mcp" / "pipelines" / "extra"
 sys.path.insert(0, str(PIPELINES_DIR))
 
 from issues_utils import (

@@ -61,6 +61,23 @@ Kubeflow users often struggle to find relevant information across the extensive 
 
 ![Data Flow](assets/querying.svg)
 
+## RAG v4
+
+Production docs retrieval uses Milvus v4 hybrid search (768-d MPNet + native
+BM25), typed `release_date`, and a deterministic MCP intent router
+(`SEARCH_MODE=auto`). Structured citations flow to the chatbot UI; the LLM
+never renders URLs.
+
+Full architecture, eval numbers, and artifact trail:
+**[docs/RAG_V4_ARCHITECTURE.md](docs/RAG_V4_ARCHITECTURE.md)**
+
+| Component | Location |
+| --- | --- |
+| Ingest pipeline | `docs-agent-mcp/pipelines/kubeflow-pipeline.py` |
+| Parser/chunker | `docs-agent-mcp/pipelines/canonical_rag_ingest.py` |
+| MCP router + citations | `docs-agent-mcp/mcp-server/server.py` |
+| Milvus infra | `docs-agent-mcp/terraform/milvus.tf` |
+
 ## Prerequisites
 
 - Kubernetes cluster (1.20+)
@@ -266,13 +283,13 @@ def chunk_and_embed(
     github_data: dsl.Input[dsl.Dataset],
     repo_name: str,
     base_url: str,
-    chunk_size: int,
-    chunk_overlap: int,
+    target_tokens: int,
+    overlap_tokens: int,
     embedded_data: dsl.Output[dsl.Dataset]
 ):
-    # Processes text with aggressive cleaning
-    # Creates embeddings using sentence-transformers
-    # Handles chunking with configurable overlap
+    # Uses canonical Hugo/Markdown parsing and release_date extraction
+    # Calls the deployed TEI service for 768-dimensional embeddings
+    # Emits token-aware chunks with native BM25 input text
 ```
 
 ##### 3. Vector Database Storage
@@ -288,9 +305,9 @@ def store_milvus(
     milvus_port: str,
     collection_name: str
 ):
-    # Creates Milvus collection with proper schema
+    # Creates the v4 hybrid schema with dense and native BM25 vectors
     # Inserts vectors in batches for efficiency
-    # Creates indexes for optimal search performance
+    # Creates dense and sparse indexes for hybrid retrieval
 ```
 
 #### RBAC Configuration

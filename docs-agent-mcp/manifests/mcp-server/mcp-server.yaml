@@ -7,6 +7,13 @@ data:
   COLLECTION_NAME: kubeflow_docs
   ISSUES_COLLECTION_NAME: issues_rag
   CODE_COLLECTION_NAME: code_rag
+  SEARCH_MODE: auto
+  HYBRID_RANKER: rrf
+  HYBRID_RRF_K: "60"
+  HYBRID_DENSE_WEIGHT: "0.7"
+  HYBRID_SPARSE_WEIGHT: "0.3"
+  AUTO_TEMPORAL_CANDIDATE_DEPTH: "50"
+  AUTO_BM25_CANDIDATE_DEPTH: "30"
   EMBEDDINGS_URL: http://embeddings-service-predictor.ml-infra.svc.cluster.local/embed
   MILVUS_URI: http://milvus-milvus.ml-infra.svc.cluster.local:19530
   MILVUS_USER: root
@@ -34,6 +41,8 @@ spec:
         - name: ghcrsecret
       containers:
         - name: mcp-server
+          # Official/CI image placeholder. oke-cicd.yaml sed-replaces this tag on deploy.
+          # Do not point manifests at personal Docker Hub repos.
           image: ghcr.io/kubeflow/mcp-kubeflow-docs:v0.1.0
           ports:
             - name: mcp

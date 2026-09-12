@@ -330,6 +330,118 @@ function createChatbotElements() {
     }
 }
 
+// --- Citation helpers (mirrors tests/chatbot_citation_utils.mjs) ----------------
+const CITATION_SOURCE_LINE_RE = /\*\*Source:\*\*\s*(https?:\/\/[^\s\n]+)/gi;
+const CITATION_MARKDOWN_LINK_RE = /\[([^\]]*)\]\(\s*https?:\/\/[^\s)]+\s*\)/gi;
+const CITATION_BARE_URL_RE = /https?:\/\/[^\s<>)\]]+/gi;
+
+function citationUrl(citation) {
+    if (!citation) return '';
+    if (typeof citation === 'string') return citation.trim();
+    return String(citation.url || citation.link || citation.href || '').trim();
+}
+
+function dedupeCitations(citations) {
+    const seen = new Set();
+    const out = [];
+    for (const citation of citations || []) {
+        const url = citationUrl(citation);
+        if (!url || seen.has(url)) continue;
+        seen.add(url);
+        out.push(citation);
+    }
+    return out;
+}
+
+function parseLegacySourceCitations(structuredContent) {
+    if (!structuredContent || typeof structuredContent.result !== 'string') {
+        return [];
+    }
+    const urls = [];
+    let match;
+    const re = new RegExp(CITATION_SOURCE_LINE_RE.source, CITATION_SOURCE_LINE_RE.flags);
+    while ((match = re.exec(structuredContent.result)) !== null) {
+        urls.push({ url: match[1] });
+    }
+    return dedupeCitations(urls);
+}
+
+function extractCitationsFromFunctionResponsePart(part) {
+    if (!part || part.kind !== 'data') return [];
+
+    const kagentType = (part.metadata && part.metadata.kagent_type)
+        || (part.data && part.data.metadata && part.data.metadata.kagent_type);
+    if (kagentType !== 'function_response') return [];
+
+    const response = part.data && part.data.response;
+    if (!response) return [];
+
+    const structured = response.structuredContent;
+    if (structured && Array.isArray(structured.citations) && structured.citations.length > 0) {
+        return dedupeCitations(structured.citations);
+    }
+
+    return parseLegacySourceCitations(structured);
+}
+
+function sanitizeAnswerText(text) {
+    if (!text) return '';
+    let cleaned = text;
+    cleaned = cleaned.replace(CITATION_MARKDOWN_LINK_RE, '$1');
+    cleaned = cleaned.replace(CITATION_BARE_URL_RE, '');
+    cleaned = cleaned.replace(/\[\s*\]\(\s*\)/g, '');
+    cleaned = cleaned.replace(/[ \t]+\n/g, '\n');
+    cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+    return cleaned.trim();
+}
+
+function formatCitationLabel(citation) {
+    const url = citationUrl(citation);
+    if (!url) return null;
+
+    let title = '';
+    if (citation && typeof citation === 'object') {
+        title = citation.title || citation.section || '';
+        if (!title && citation.file_path) {
+            const cleanPath = String(citation.file_path)
+                .replace(/^content\/[a-z]{2}\/docs\//, '')
+                .replace(/\.md$/, '');
+            const segments = cleanPath.split('/').filter(Boolean);
+            title = segments
+                .map((s) => s.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()))
+                .join(' › ');
+        }
+    }
+
+    if (!title) {
+        try {
+            const u = new URL(url);
+            const pathParts = u.pathname.replace(/^\/docs\//, '').replace(/\/$/, '').split('/').filter(Boolean);
+            title = pathParts.length
+                ? pathParts.map((s) => s.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())).join(' › ')
+                : u.hostname;
+        } catch (_e) {
+            title = url.replace(/^https?:\/\//, '');
+        }
+    }
+
+    let displayText = url.replace(/^https?:\/\//, '');
+    if (displayText.length > 60) {
+        displayText = `${displayText.substring(0, 57)}...`;
+    }
+
+    return { url, title, displayText };
+}
+
+function cloneCitationsForHistory(citations) {
+    return dedupeCitations(citations).map((citation) => {
+        if (typeof citation === 'string') {
+            return { url: citation };
+        }
+        return { ...citation };
+    });
+}
+
 document.addEventListener('DOMContentLoaded', async function() {
     console.log('Docs Bot Initialized (v1.1.0 - Kagent A2A, configurable URL)');
     
@@ -390,6 +502,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     let isTyping = false;
     let currentMessageDiv = null;
     let currentMessageContent = '';
+    let pendingCitations = [];
     let messagesHistory = []; // Current chat messages
     let chatsStack = []; // Stack of all chats: [{name: string, messages: array}, ...]
     let currentChatIndex = -1; // Index of current chat in stack, -1 for new unsaved chat
@@ -604,7 +717,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             if (msg.role === 'user') {
                 addMessage(msg.content, 'user');
             } else if (msg.role === 'assistant') {
-                addMessage(msg.content, 'bot');
+                addMessage(msg.content, 'bot', msg.citations || []);
             }
         });
         
@@ -879,6 +992,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             // Reset current message state
             currentMessageDiv = null;
             currentMessageContent = '';
+            pendingCitations = [];
             
             while (true) {
                 const { done, value } = await reader.read();
@@ -902,16 +1016,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                         
                         // KAgent doesn't always send [DONE], but we handle it just in case
                         if (dataStr === '[DONE]') {
-                            if (currentMessageContent.trim()) {
-                                messagesHistory.push({
-                                    role: 'assistant',
-                                    content: currentMessageContent.trim()
-                                });
-                            }
-                            currentMessageDiv = null;
-                            currentMessageContent = '';
-                            autoSaveCurrentChat();
-                            removeTypingIndicator();
+                            finalizeAssistantTurn(messagesHistory);
                             return;
                         }
                         
@@ -923,6 +1028,15 @@ document.addEventListener('DOMContentLoaded', async function() {
                         
                         // Extract message whether it's direct in result or inside result.status
                         const messageObj = result.message || (result.status && result.status.message);
+
+                        if (messageObj && messageObj.parts) {
+                            for (const part of messageObj.parts) {
+                                const foundCitations = extractCitationsFromFunctionResponsePart(part);
+                                if (foundCitations.length > 0) {
+                                    handleAPIResponse({ type: 'citations', citations: foundCitations });
+                                }
+                            }
+                        }
                         
                         if (messageObj && messageObj.parts) {
                             // Skip user messages echoed back by KAgent
@@ -944,16 +1058,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                         const turnComplete = messageObj && messageObj.metadata && messageObj.metadata.turn_complete;
                         
                         if (isFinal || turnComplete) {
-                            if (currentMessageContent.trim()) {
-                                messagesHistory.push({
-                                    role: 'assistant',
-                                    content: currentMessageContent.trim()
-                                });
-                            }
-                            currentMessageDiv = null;
-                            currentMessageContent = '';
-                            autoSaveCurrentChat();
-                            removeTypingIndicator();
+                            finalizeAssistantTurn(messagesHistory);
                             return;
                         }
                     } catch (parseError) {
@@ -970,6 +1075,30 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
     }
     
+    function finalizeAssistantTurn(messagesHistory) {
+        if (currentMessageDiv && pendingCitations.length > 0) {
+            renderCitationsOnDiv(currentMessageDiv, pendingCitations);
+        }
+
+        const cleanedContent = sanitizeAnswerText(currentMessageContent);
+        if (cleanedContent) {
+            const historyEntry = {
+                role: 'assistant',
+                content: cleanedContent
+            };
+            if (pendingCitations.length > 0) {
+                historyEntry.citations = cloneCitationsForHistory(pendingCitations);
+            }
+            messagesHistory.push(historyEntry);
+        }
+
+        currentMessageDiv = null;
+        currentMessageContent = '';
+        pendingCitations = [];
+        autoSaveCurrentChat();
+        removeTypingIndicator();
+    }
+
     function handleAPIResponse(response) {
         console.log('Received API response:', response);
         
@@ -1015,8 +1144,8 @@ document.addEventListener('DOMContentLoaded', async function() {
             currentMessageContent += response.content;
             const paragraph = currentMessageDiv.querySelector('p');
             
-            // Format streaming content
-            const formattedText = formatMarkdown(currentMessageContent, true);
+            // Format streaming content (URL-free body; links live in Sources)
+            const formattedText = formatMarkdown(sanitizeAnswerText(currentMessageContent), true);
             paragraph.innerHTML = formattedText;
             
             // Apply syntax highlighting to any new code blocks
@@ -1035,21 +1164,13 @@ document.addEventListener('DOMContentLoaded', async function() {
         
         // Handle end of message or errors
         if (response.type === 'end') {
-            // Store the complete bot response in conversation history
-            if (currentMessageContent.trim()) {
-                messagesHistory.push({
-                    role: 'assistant',
-                    content: currentMessageContent.trim()
-                });
-            }
-            currentMessageDiv = null;
-            currentMessageContent = '';
-            autoSaveCurrentChat();
+            finalizeAssistantTurn(messagesHistory);
         } else if (response.type === 'error') {
             removeTypingIndicator();
             addMessage('Error: ' + response.content, 'bot');
             currentMessageDiv = null;
             currentMessageContent = '';
+            pendingCitations = [];
         }
     }
 
@@ -1323,8 +1444,8 @@ document.addEventListener('DOMContentLoaded', async function() {
     // Utility function to format text
     function formatMarkdown(text, isStreaming = false) {
         if (!text) return '';
-        
-        let formatted = text;
+
+        let formatted = sanitizeAnswerText(text);
         const codeBlockPlaceholders = [];
         let placeholderIndex = 0;
         
@@ -1411,10 +1532,10 @@ document.addEventListener('DOMContentLoaded', async function() {
         autoSaveCurrentChat();
     }
 
-    function addMessage(text, sender) {
+    function addMessage(text, sender, citations = []) {
         if (!chatMessages) {
             console.error('Cannot add message: chat messages container not found');
-            return;
+            return null;
         }
 
         const messageDiv = document.createElement('div');
@@ -1456,35 +1577,56 @@ document.addEventListener('DOMContentLoaded', async function() {
         messageDiv.appendChild(contentDiv);
         
         chatMessages.appendChild(messageDiv);
+
+        if (sender === 'bot' && citations && citations.length > 0) {
+            renderCitationsOnDiv(messageDiv, citations);
+        }
+
         scrollToBottom();
+        return messageDiv;
     }
 
     function addCitations(citations) {
         if (!citations || citations.length === 0) return;
-        
-        // Find the last bot message content to attach citations to
-        const lastBotMessage = chatMessages.querySelector('.bot-message:last-child');
-        if (!lastBotMessage) {
-            console.error('No bot message found to attach citations to');
+
+        citations.forEach((citation) => {
+            const url = citationUrl(citation);
+            if (!url) return;
+
+            const alreadyExists = pendingCitations.some((existing) => citationUrl(existing) === url);
+            if (!alreadyExists) {
+                pendingCitations.push(citation);
+            }
+        });
+    }
+
+    function renderCitationsOnDiv(botMessageDiv, citations) {
+        if (!botMessageDiv || !citations || citations.length === 0) return;
+
+        const messageContent = botMessageDiv.querySelector('.message-content');
+        if (!messageContent) return;
+
+        const existingCitations = messageContent.querySelector('.citations-container');
+        if (existingCitations) {
+            existingCitations.remove();
+        }
+
+        const validCitations = dedupeCitations(citations)
+            .map(formatCitationLabel)
+            .filter(Boolean);
+
+        if (validCitations.length === 0) {
             return;
         }
-        
-        // Get the message content div inside the bot message
-        const messageContent = lastBotMessage.querySelector('.message-content');
-        if (!messageContent) {
-            console.error('No message content found to attach citations to');
-            return;
-        }
-        
+
         const citationsDiv = document.createElement('div');
         citationsDiv.className = 'citations-container';
         
-        // Create header with title and toggle
         const citationsHeader = document.createElement('div');
         citationsHeader.className = 'citations-header';
         
         const citationsTitle = document.createElement('h4');
-        citationsTitle.textContent = `Sources (${citations.length}):`;
+        citationsTitle.textContent = `Sources (${validCitations.length}):`;
         citationsTitle.className = 'citations-title';
         
         const citationsToggle = document.createElement('span');
@@ -1494,26 +1636,20 @@ document.addEventListener('DOMContentLoaded', async function() {
         citationsHeader.appendChild(citationsTitle);
         citationsHeader.appendChild(citationsToggle);
         
-        // Create collapsible content
         const citationsContent = document.createElement('div');
         citationsContent.className = 'citations-content';
         
         const citationsList = document.createElement('ul');
         citationsList.className = 'citations-list';
         
-        citations.forEach((citation, index) => {
+        validCitations.forEach((info) => {
             const listItem = document.createElement('li');
             const link = document.createElement('a');
-            link.href = citation;
+            link.href = info.url;
             link.target = '_blank';
             link.rel = 'noopener noreferrer';
-            
-            // Extract readable URL text (remove protocol and truncate if too long)
-            let displayText = citation.replace(/^https?:\/\//, '');
-            if (displayText.length > 60) {
-                displayText = displayText.substring(0, 57) + '...';
-            }
-            link.textContent = displayText;
+            link.title = info.title;
+            link.textContent = info.displayText;
             
             listItem.appendChild(link);
             citationsList.appendChild(listItem);
@@ -1521,7 +1657,6 @@ document.addEventListener('DOMContentLoaded', async function() {
         
         citationsContent.appendChild(citationsList);
         
-        // Add click handler for toggle
         citationsHeader.addEventListener('click', function() {
             const isExpanded = citationsContent.classList.contains('expanded');
             if (isExpanded) {
@@ -1533,11 +1668,8 @@ document.addEventListener('DOMContentLoaded', async function() {
             }
         });
         
-        // Assemble the citations container
         citationsDiv.appendChild(citationsHeader);
         citationsDiv.appendChild(citationsContent);
-        
-        // Attach citations to the message content
         messageContent.appendChild(citationsDiv);
         scrollToBottom();
     }

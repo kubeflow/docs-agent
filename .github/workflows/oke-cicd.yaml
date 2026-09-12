@@ -44,8 +44,8 @@ jobs:
         working-directory: docs-agent-mcp/pipelines
         run: |
           python kubeflow-pipeline.py
-          python issues-pipeline.py
-          python code-pipeline.py
+          python extra/issues-pipeline.py
+          python extra/code-pipeline.py
 
       - name: Ruff lint
         run: ruff check docs-agent-mcp/mcp-server docs-agent-mcp/session-issuer tests docs-agent-mcp/pipelines
