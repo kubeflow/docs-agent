@@ -71,22 +71,22 @@ process.stdout.write(JSON.stringify({{
     return json.loads(completed.stdout)
 
 
-def test_linkifies_only_http_sources_with_safe_anchor_attributes():
+def test_strips_prose_links_and_leaves_javascript_urls_as_text():
     rendered = run_formatter("[Katib Experiment](https://www.kubeflow.org/docs/components/katib/)")
 
-    assert rendered == (
-        '<a href="https://www.kubeflow.org/docs/components/katib/" '
-        'target="_blank" rel="noopener noreferrer">Katib Experiment</a>'
-    )
-    assert run_formatter("[unsafe](javascript:alert(1))") == ("[unsafe](javascript:alert(1))")
+    assert rendered == "Katib Experiment"
+    assert "<a " not in rendered
+    assert "https://" not in rendered
+    assert run_formatter("[unsafe](javascript:alert(1))") == "[unsafe](javascript:alert(1))"
 
 
-def test_escapes_markdown_link_label_and_query_delimiter():
+def test_escapes_markdown_link_label_and_drops_the_url():
     rendered = run_formatter("[<img src=x>](https://example.test/docs?a=1&b=2)")
 
     assert "&lt;img src=x&gt;" in rendered
-    assert 'href="https://example.test/docs?a=1&amp;b=2"' in rendered
     assert "<img" not in rendered
+    assert "https://" not in rendered
+    assert "<a " not in rendered
 
 
 @pytest.mark.parametrize("streaming", [False, True])
@@ -113,7 +113,8 @@ def test_does_not_linkify_markdown_inside_inline_code():
     rendered = run_formatter("Use `[title](https://example.test/literal)` then [open docs](https://example.test/docs).")
 
     assert "<code>[title](https://example.test/literal)</code>" in rendered
-    assert rendered.count("<a ") == 1
+    assert "open docs" in rendered
+    assert "<a " not in rendered
 
 
 def test_sse_parser_preserves_fragmented_tool_and_citation_events():

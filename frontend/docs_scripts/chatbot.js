@@ -330,8 +330,6 @@ function createChatbotElements() {
     }
 }
 
-// --- Citation helpers (mirrors tests/chatbot_citation_utils.mjs) ----------------
-const CITATION_SOURCE_LINE_RE = /\*\*Source:\*\*\s*(https?:\/\/[^\s\n]+)/gi;
 const CITATION_MARKDOWN_LINK_RE = /\[([^\]]*)\]\(\s*https?:\/\/[^\s)]+\s*\)/gi;
 const CITATION_BARE_URL_RE = /https?:\/\/[^\s<>)\]]+/gi;
 
@@ -341,109 +339,31 @@ function citationUrl(citation) {
     return String(citation.url || citation.link || citation.href || '').trim();
 }
 
-function dedupeCitations(citations) {
-    const seen = new Set();
-    const out = [];
-    for (const citation of citations || []) {
-        const url = citationUrl(citation);
-        if (!url || seen.has(url)) continue;
-        seen.add(url);
-        out.push(citation);
-    }
-    return out;
-}
-
-function parseLegacySourceCitations(structuredContent) {
-    if (!structuredContent || typeof structuredContent.result !== 'string') {
-        return [];
-    }
-    const urls = [];
-    let match;
-    const re = new RegExp(CITATION_SOURCE_LINE_RE.source, CITATION_SOURCE_LINE_RE.flags);
-    while ((match = re.exec(structuredContent.result)) !== null) {
-        urls.push({ url: match[1] });
-    }
-    return dedupeCitations(urls);
-}
-
-function extractCitationsFromFunctionResponsePart(part) {
-    if (!part || part.kind !== 'data') return [];
-
-    const kagentType = (part.metadata && part.metadata.kagent_type)
-        || (part.data && part.data.metadata && part.data.metadata.kagent_type);
-    if (kagentType !== 'function_response') return [];
-
-    const response = part.data && part.data.response;
-    if (!response) return [];
-
-    const structured = response.structuredContent;
-    if (structured && Array.isArray(structured.citations) && structured.citations.length > 0) {
-        return dedupeCitations(structured.citations);
-    }
-
-    return parseLegacySourceCitations(structured);
-}
-
 function sanitizeAnswerText(text) {
     if (!text) return '';
     let cleaned = text;
-    cleaned = cleaned.replace(CITATION_MARKDOWN_LINK_RE, '$1');
-    cleaned = cleaned.replace(CITATION_BARE_URL_RE, '');
+    cleaned = cleaned.replace(new RegExp(CITATION_MARKDOWN_LINK_RE.source, 'gi'), '$1');
+    cleaned = cleaned.replace(new RegExp(CITATION_BARE_URL_RE.source, 'gi'), '');
     cleaned = cleaned.replace(/\[\s*\]\(\s*\)/g, '');
     cleaned = cleaned.replace(/[ \t]+\n/g, '\n');
     cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
     return cleaned.trim();
 }
 
-function formatCitationLabel(citation) {
-    const url = citationUrl(citation);
-    if (!url) return null;
-
-    let title = '';
-    if (citation && typeof citation === 'object') {
-        title = citation.title || citation.section || '';
-        if (!title && citation.file_path) {
-            const cleanPath = String(citation.file_path)
-                .replace(/^content\/[a-z]{2}\/docs\//, '')
-                .replace(/\.md$/, '');
-            const segments = cleanPath.split('/').filter(Boolean);
-            title = segments
-                .map((s) => s.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()))
-                .join(' › ');
-        }
-    }
-
-    if (!title) {
-        try {
-            const u = new URL(url);
-            const pathParts = u.pathname.replace(/^\/docs\//, '').replace(/\/$/, '').split('/').filter(Boolean);
-            title = pathParts.length
-                ? pathParts.map((s) => s.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())).join(' › ')
-                : u.hostname;
-        } catch (_e) {
-            title = url.replace(/^https?:\/\//, '');
-        }
-    }
-
-    let displayText = url.replace(/^https?:\/\//, '');
-    if (displayText.length > 60) {
-        displayText = `${displayText.substring(0, 57)}...`;
-    }
-
-    return { url, title, displayText };
-}
-
 function cloneCitationsForHistory(citations) {
-    return dedupeCitations(citations).map((citation) => {
-        if (typeof citation === 'string') {
-            return { url: citation };
-        }
-        return { ...citation };
-    });
+    const seen = new Set();
+    const out = [];
+    for (const citation of citations || []) {
+        const url = citationUrl(citation);
+        if (!url || seen.has(url)) continue;
+        seen.add(url);
+        out.push(typeof citation === 'string' ? { url: citation } : { ...citation });
+    }
+    return out;
 }
 
 function escapeMarkdownHtml(text) {
-    return String(text).replace(/[&<>"']/g, function(character) {
+    return String(text).replace(/[&<>"']/g, function (character) {
         const entities = {
             '&': '&amp;',
             '<': '&lt;',
@@ -455,9 +375,8 @@ function escapeMarkdownHtml(text) {
     });
 }
 
-// Small, dependency-free Markdown subset used by streamed and completed chat
-// messages. Code is protected before other formatting so YAML and shell
-// snippets are never interpreted as links or replacement-string tokens.
+// Protect fences first, then strip prose URLs. Links belong in Sources, not
+// the bubble — but kubectl/YAML inside ``` must keep their https:// lines.
 function formatChatMarkdown(text, isStreaming = false) {
     if (!text) return '';
 
@@ -475,48 +394,37 @@ function formatChatMarkdown(text, isStreaming = false) {
         return placeholder;
     }
 
-    const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
-    formatted = formatted.replace(codeBlockRegex, function(match, language, code) {
+    formatted = formatted.replace(/```(\w+)?\n([\s\S]*?)```/g, function (match, language, code) {
         return preserveCodeBlock(language, code, !isStreaming);
     });
 
     if (isStreaming) {
         const incompleteCodeRegex = /```(\w+)?\n([\s\S]*)$/;
         if (incompleteCodeRegex.test(formatted) && !formatted.endsWith('```')) {
-            formatted = formatted.replace(incompleteCodeRegex, function(match, language, code) {
+            formatted = formatted.replace(incompleteCodeRegex, function (match, language, code) {
                 return preserveCodeBlock(language, code, false);
             });
         }
     }
 
-    formatted = formatted.replace(/`([^`\n]+)`/g, function(match, code) {
+    formatted = formatted.replace(/`([^`\n]+)`/g, function (match, code) {
         const placeholder = `__INLINE_CODE_${inlineCodePlaceholders.length}__`;
         inlineCodePlaceholders.push(`<code>${escapeMarkdownHtml(code)}</code>`);
         return placeholder;
     });
 
-    // Linkify only explicit http(s) Markdown links. Other schemes remain
-    // visible as text instead of becoming executable browser destinations.
-    formatted = formatted.replace(
-        /\[([^\]\n]+)\]\((https?:\/\/[^\s<>"')]+)\)/gi,
-        function(match, label, url) {
-            return `<a href="${escapeMarkdownHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeMarkdownHtml(label)}</a>`;
-        }
-    );
-
+    formatted = sanitizeAnswerText(formatted);
+    formatted = escapeMarkdownHtml(formatted);
     formatted = formatted.replace(/\n/g, '<br>');
     formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
 
-    inlineCodePlaceholders.forEach(function(inlineCode, index) {
-        formatted = formatted.replace(`__INLINE_CODE_${index}__`, function() {
+    inlineCodePlaceholders.forEach(function (inlineCode, index) {
+        formatted = formatted.replace(`__INLINE_CODE_${index}__`, function () {
             return inlineCode;
         });
     });
-
-    codeBlockPlaceholders.forEach(function(codeBlock, index) {
-        // A function replacement is required: replacement strings interpret
-        // sequences such as $&, $1, and $' that commonly occur in code/YAML.
-        formatted = formatted.replace(`__CODE_BLOCK_${index}__`, function() {
+    codeBlockPlaceholders.forEach(function (codeBlock, index) {
+        formatted = formatted.replace(`__CODE_BLOCK_${index}__`, function () {
             return codeBlock;
         });
     });
@@ -524,10 +432,6 @@ function formatChatMarkdown(text, isStreaming = false) {
     return formatted;
 }
 
-// Incrementally decode Server-Sent Events without assuming that a network
-// chunk ends on a line or event boundary.  `push` returns only complete event
-// payloads; `finish` also flushes one final unterminated frame when the server
-// closes the stream.
 function createSSEFrameParser() {
     let buffer = '';
     let finished = false;
@@ -547,8 +451,6 @@ function createSSEFrameParser() {
             if (field === 'data') {
                 dataLines.push(value);
             } else if (colonIndex === -1) {
-                // Keep compatibility with endpoints that return newline-framed
-                // JSON without the optional SSE `data:` prefix.
                 rawLines.push(line);
             }
         }
@@ -560,15 +462,11 @@ function createSSEFrameParser() {
 
     function drainCompleteFrames(isFinal = false) {
         const payloads = [];
-        // A blank SSE line may use LF, CRLF, or CR. Negative lookahead keeps a
-        // single CRLF from being mistaken for two separate line endings.
         const boundary = /(?:\r\n|\r(?!\n)|\n)(?:\r\n|\r(?!\n)|\n)/;
         let match;
 
         while ((match = boundary.exec(buffer)) !== null) {
             const matchEnd = match.index + match[0].length;
-            // A CR at the current end of the buffer may become the first byte
-            // of CRLF in the next chunk, so defer classifying it until then.
             if (!isFinal && matchEnd === buffer.length && match[0].endsWith('\r')) {
                 break;
             }
@@ -602,7 +500,7 @@ function createSSEFrameParser() {
     };
 }
 
-document.addEventListener('DOMContentLoaded', async function() {
+document.addEventListener('DOMContentLoaded', async function () {
     console.log('Docs Bot Initialized (v1.1.0 - Kagent A2A, configurable URL)');
 
     // Create chatbot HTML structure dynamically and wait for completion
@@ -662,10 +560,10 @@ document.addEventListener('DOMContentLoaded', async function() {
     let isTyping = false;
     let currentMessageDiv = null;
     let currentMessageContent = '';
-    let pendingCitations = [];
-    let currentAbortController = null;
-    let currentReader = null;
-    let currentTaskId = null;
+    let pendingCitations = []; // Citations collected for the current response
+    let currentAbortController = null; // For cancelling in-flight fetch streams
+    let currentReader = null; // Active ReadableStream reader
+    let currentTaskId = null; // Active Kagent task ID
     let messagesHistory = []; // Current chat messages
     let chatsStack = []; // Stack of all chats: [{name: string, messages: array}, ...]
     let currentChatIndex = -1; // Index of current chat in stack, -1 for new unsaved chat
@@ -1121,19 +1019,21 @@ document.addEventListener('DOMContentLoaded', async function() {
             if (currentMessageDiv) {
                 const paragraph = currentMessageDiv.querySelector('p');
                 if (paragraph) {
-                    const formattedText = formatChatMarkdown(sanitizeAnswerText(currentMessageContent.trim()));
+                    const formattedText = formatChatMarkdown(currentMessageContent.trim());
                     paragraph.innerHTML = formattedText + `<div class="interrupted-badge"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg> Response interrupted by user</div>`;
                 }
-                // Render any pending citations that were found before stopping
                 if (pendingCitations.length > 0) {
                     renderCitationsOnDiv(currentMessageDiv, pendingCitations);
                 }
             }
-            // Record in messagesHistory with explicit interruption note
-            messagesHistory.push({
+            const historyEntry = {
                 role: 'assistant',
                 content: currentMessageContent.trim() + ' [Response interrupted by user]'
-            });
+            };
+            if (pendingCitations.length > 0) {
+                historyEntry.citations = cloneCitationsForHistory(pendingCitations);
+            }
+            messagesHistory.push(historyEntry);
         } else if (currentMessageDiv) {
             // Cancelled before any text tokens were generated
             currentMessageDiv.remove();
@@ -1141,6 +1041,7 @@ document.addEventListener('DOMContentLoaded', async function() {
 
         currentMessageDiv = null;
         currentMessageContent = '';
+        pendingCitations = [];
         autoSaveCurrentChat();
         if (userInput) userInput.focus();
     }
@@ -1347,15 +1248,6 @@ document.addEventListener('DOMContentLoaded', async function() {
                         const messageObj = result.message || (result.status && result.status.message);
 
                         if (messageObj && messageObj.parts) {
-                            for (const part of messageObj.parts) {
-                                const foundCitations = extractCitationsFromFunctionResponsePart(part);
-                                if (foundCitations.length > 0) {
-                                    handleAPIResponse({ type: 'citations', citations: foundCitations });
-                                }
-                            }
-                        }
-
-                        if (messageObj && messageObj.parts) {
                             const isUserMessage = messageObj.role === 'user';
                             const isDuplicateFinal = messageObj.metadata && messageObj.metadata.kagent_adk_partial === false && currentMessageContent.length > 0;
 
@@ -1377,12 +1269,16 @@ document.addEventListener('DOMContentLoaded', async function() {
                             return;
                         }
                     } catch (parseError) {
-                        // Ignore malformed event payloads; SSE comments and
-                        // heartbeats are filtered by the frame parser.
+                        // Ignore partial / heartbeat lines
                     }
                 }
 
-                if (done) break;
+                if (done) {
+                    if (currentMessageContent || pendingCitations.length > 0) {
+                        finalizeAssistantTurn(messagesHistory);
+                    }
+                    break;
+                }
             }
 
         } catch (error) {
@@ -1404,32 +1300,6 @@ document.addEventListener('DOMContentLoaded', async function() {
             removeTypingIndicator();
             removeToolStatus();
         }
-    }
-    function finalizeAssistantTurn(messagesHistory) {
-        if (currentMessageDiv && pendingCitations.length > 0) {
-            renderCitationsOnDiv(currentMessageDiv, pendingCitations);
-        }
-
-        const cleanedContent = sanitizeAnswerText(currentMessageContent);
-        if (cleanedContent) {
-            const historyEntry = {
-                role: 'assistant',
-                content: cleanedContent
-            };
-            if (pendingCitations.length > 0) {
-                historyEntry.citations = cloneCitationsForHistory(pendingCitations);
-            }
-            messagesHistory.push(historyEntry);
-        }
-
-        currentMessageDiv = null;
-        currentMessageContent = '';
-        pendingCitations = [];
-        autoSaveCurrentChat();
-        removeTypingIndicator();
-        setStopButtonState(false);
-        isTyping = false;
-        removeToolStatus();
     }
 
     function setToolStatus(text, iconType = 'search') {
@@ -1486,6 +1356,33 @@ document.addEventListener('DOMContentLoaded', async function() {
         activeStatuses.forEach(el => el.remove());
     }
 
+    function finalizeAssistantTurn(messagesHistory) {
+        removeToolStatus();
+        if (currentMessageDiv && pendingCitations.length > 0) {
+            renderCitationsOnDiv(currentMessageDiv, pendingCitations);
+        }
+
+        const rawContent = currentMessageContent.trim();
+        if (rawContent) {
+            const historyEntry = {
+                role: 'assistant',
+                content: rawContent
+            };
+            if (pendingCitations.length > 0) {
+                historyEntry.citations = cloneCitationsForHistory(pendingCitations);
+            }
+            messagesHistory.push(historyEntry);
+        }
+
+        currentMessageDiv = null;
+        currentMessageContent = '';
+        pendingCitations = [];
+        autoSaveCurrentChat();
+        removeTypingIndicator();
+        setStopButtonState(false);
+        isTyping = false;
+    }
+
     function handleAPIResponse(response) {
         // Handle different response types
         if (response.type === 'system') {
@@ -1533,8 +1430,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             currentMessageContent += response.content;
             const paragraph = currentMessageDiv.querySelector('p');
 
-            // URL-free body; source links live in the Sources accordion
-            const formattedText = formatChatMarkdown(sanitizeAnswerText(currentMessageContent), true);
+            const formattedText = formatChatMarkdown(currentMessageContent, true);
             paragraph.innerHTML = formattedText;
 
             // Apply syntax highlighting to any new code blocks
@@ -1553,13 +1449,21 @@ document.addEventListener('DOMContentLoaded', async function() {
 
         // Handle end of message or errors
         if (response.type === 'end') {
-            finalizeAssistantTurn(messagesHistory);
+            // Store the complete bot response in conversation history
+            if (currentMessageContent.trim()) {
+                messagesHistory.push({
+                    role: 'assistant',
+                    content: currentMessageContent.trim()
+                });
+            }
+            currentMessageDiv = null;
+            currentMessageContent = '';
+            autoSaveCurrentChat();
         } else if (response.type === 'error') {
             removeTypingIndicator();
             addMessage('Error: ' + response.content, 'bot');
             currentMessageDiv = null;
             currentMessageContent = '';
-            pendingCitations = [];
         }
     }
 
@@ -1838,6 +1742,10 @@ document.addEventListener('DOMContentLoaded', async function() {
     // Auto-save every 30 seconds
     setInterval(autoSaveCurrentChat, 30000);
 
+    function formatMarkdown(text, isStreaming = false) {
+        return formatChatMarkdown(text, isStreaming);
+    }
+
     function handleSendMessage() {
         const message = userInput.value.trim();
         if (!message || isTyping) return;
@@ -1872,7 +1780,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     function addMessage(text, sender, citations = []) {
         if (!chatMessages) {
             console.error('Cannot add message: chat messages container not found');
-            return null;
+            return;
         }
 
         const messageDiv = document.createElement('div');
@@ -1892,7 +1800,8 @@ document.addEventListener('DOMContentLoaded', async function() {
 
         // Format the text based on sender
         if (sender === 'bot') {
-            paragraph.innerHTML = formatChatMarkdown(sanitizeAnswerText(text));
+            paragraph.innerHTML = formatChatMarkdown(text);
+
             // Apply syntax highlighting after DOM insertion
             setTimeout(() => {
                 if (window.Prism) {
@@ -1978,13 +1887,19 @@ document.addEventListener('DOMContentLoaded', async function() {
     function addCitations(citations) {
         if (!citations || citations.length === 0) return;
 
-        citations.forEach((citation) => {
-            const url = citationUrl(citation);
+        // Add unique citations to pendingCitations buffer (mounted upon turn completion)
+        citations.forEach(c => {
+            if (!c) return;
+            const url = typeof c === 'string' ? c : (c.url || c.link || c.href || '');
             if (!url) return;
 
-            const alreadyExists = pendingCitations.some((existing) => citationUrl(existing) === url);
+            const alreadyExists = pendingCitations.some(existing => {
+                const existingUrl = typeof existing === 'string' ? existing : (existing.url || existing.link || existing.href || '');
+                return existingUrl === url;
+            });
+
             if (!alreadyExists) {
-                pendingCitations.push(citation);
+                pendingCitations.push(c);
             }
         });
     }
@@ -1995,20 +1910,24 @@ document.addEventListener('DOMContentLoaded', async function() {
         const messageContent = botMessageDiv.querySelector('.message-content');
         if (!messageContent) return;
 
+        // Remove any existing citations container in this message to avoid duplicates
         const existingCitations = messageContent.querySelector('.citations-container');
         if (existingCitations) {
             existingCitations.remove();
         }
 
-        const validCitations = dedupeCitations(citations)
+        const validCitations = citations
             .map(formatCitationInfo)
             .filter(Boolean);
 
-        if (validCitations.length === 0) return;
+        if (validCitations.length === 0) {
+            return;
+        }
 
         const citationsDiv = document.createElement('div');
         citationsDiv.className = 'citations-container';
 
+        // Header
         const citationsHeader = document.createElement('div');
         citationsHeader.className = 'citations-header';
 
@@ -2036,6 +1955,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         citationsHeader.appendChild(headerLeft);
         citationsHeader.appendChild(citationsToggle);
 
+        // Content
         const citationsContent = document.createElement('div');
         citationsContent.className = 'citations-content expanded';
 
@@ -2138,6 +2058,12 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (chatMessages) {
             chatMessages.scrollTop = chatMessages.scrollHeight;
         }
+    }
+
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
     }
 
     console.log('Chatbot initialized with chat stack system');
