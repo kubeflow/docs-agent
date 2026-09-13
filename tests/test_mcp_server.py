@@ -87,6 +87,15 @@ class TestInit:
 class TestSearchKubeflowDocs:
     """Tests for the search_kubeflow_docs MCP tool."""
 
+    def test_returns_controlled_error_when_milvus_search_fails(self, inject_mocks):
+        """A vector-search failure should not escape the MCP tool boundary."""
+        mock_client, _ = inject_mocks
+        mock_client.search.side_effect = TimeoutError("vector DB timed out")
+
+        result = server.search_kubeflow_docs("test query")
+
+        assert result == f"Search failed: Milvus search failed for {server.COLLECTION_NAME}: vector DB timed out"
+
     def test_returns_no_results_message_when_empty(self, inject_mocks):
         """Should return 'No results found' when Milvus returns empty."""
         mock_client, _ = inject_mocks
