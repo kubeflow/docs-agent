@@ -1,3 +1,10 @@
+import sys
+from pathlib import Path
+
+_UTILS_DIR = Path(__file__).resolve().parent / "utils"
+if str(_UTILS_DIR) not in sys.path:
+    sys.path.insert(0, str(_UTILS_DIR))
+
 import kfp
 import kfp.kubernetes as k8s
 from kfp import dsl
@@ -537,7 +544,7 @@ def store_code_milvus(
         if not collection.has_index():
             index_params = {
                 "metric_type": "COSINE",
-                "index_type": "IVF_FLAT",
+                "index_type": "FLAT",
                 "params": {"nlist": min(1024, len(records))},
             }
             collection.create_index("vector", index_params, timeout=120)

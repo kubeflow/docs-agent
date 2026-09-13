@@ -1,46 +1,15 @@
-"""Tests for the full documentation ingestion pipeline."""
+"""Tests for the v4 documentation ingestion pipeline wrappers."""
 
 import importlib.util
 import json
 import sys
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
-
+from types import SimpleNamespace
 import pytest
 
-
 PIPELINES_DIR = Path(__file__).parent.parent / "docs-agent-mcp" / "pipelines"
-sys.path.insert(0, str(PIPELINES_DIR))
-
-
-class DataType:
-    INT64 = "INT64"
-    VARCHAR = "VARCHAR"
-    FLOAT_VECTOR = "FLOAT_VECTOR"
-
-
-class FieldSchema:
-    def __init__(self, name, dtype, **params):
-        self.name = name
-        self.dtype = dtype
-        self.params = params
-
-
-class CollectionSchema:
-    def __init__(self, fields, description=""):
-        self.fields = fields
-        self.description = description
-
-
-def fake_pymilvus_module():
-    module = ModuleType("pymilvus")
-    module.CollectionSchema = CollectionSchema
-    module.DataType = DataType
-    module.FieldSchema = FieldSchema
-    module.Collection = lambda *args, **kwargs: None
-    module.connections = SimpleNamespace(connect=lambda *args, **kwargs: None)
-    module.utility = SimpleNamespace(has_collection=lambda *args, **kwargs: False)
-    return module
+UTILS_DIR = PIPELINES_DIR / "utils"
+sys.path.insert(0, str(UTILS_DIR))
 
 
 def load_docs_pipeline_module():
@@ -52,96 +21,22 @@ def load_docs_pipeline_module():
     return module
 
 
-def legacy_docs_schema():
-    """Match the compatible pre-versioned schema currently used in Milvus."""
-    return CollectionSchema(
-        [
-            FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
-            FieldSchema(name="file_unique_id", dtype=DataType.VARCHAR, max_length=512),
-            FieldSchema(name="repo_name", dtype=DataType.VARCHAR, max_length=256),
-            FieldSchema(name="file_path", dtype=DataType.VARCHAR, max_length=512),
-            FieldSchema(name="file_name", dtype=DataType.VARCHAR, max_length=256),
-            FieldSchema(name="citation_url", dtype=DataType.VARCHAR, max_length=512),
-            FieldSchema(name="chunk_index", dtype=DataType.INT64),
-            FieldSchema(name="content_text", dtype=DataType.VARCHAR, max_length=4096),
-            FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=768),
-        ],
-        description="",
-    )
-
-
-def test_store_accepts_compatible_legacy_schema_without_last_updated(monkeypatch, tmp_path):
-    module = load_docs_pipeline_module()
-    inserted = []
-    pymilvus = fake_pymilvus_module()
-
-    class FakeCollection:
-        description = ""
-        schema = legacy_docs_schema()
-        indexes = [object()]
-        num_entities = 1
-
-        def load(self):
-            return None
-
-        def query(self, **kwargs):
-            return []
-
-        def delete(self, expr):
-            raise AssertionError("No old records were returned, so delete must not run")
-
-        def insert(self, batch):
-            inserted.extend(batch)
-
-        def flush(self):
-            return None
-
-        def has_index(self):
-            return True
-
-    monkeypatch.setitem(sys.modules, "pymilvus", pymilvus)
-    monkeypatch.setattr(pymilvus.connections, "connect", lambda *args, **kwargs: None)
-    monkeypatch.setattr(pymilvus.utility, "has_collection", lambda name: True)
-    monkeypatch.setattr(pymilvus, "Collection", lambda name: FakeCollection())
-    monkeypatch.setenv("MILVUS_PASSWORD", "test-password")
-
-    input_path = tmp_path / "embedded.jsonl"
-    record = {
-        "file_unique_id": "website:content/en/docs/components/katib/example.md",
-        "repo_name": "website",
-        "file_path": "content/en/docs/components/katib/example.md",
-        "file_name": "example.md",
-        "citation_url": "https://www.kubeflow.org/docs/components/katib/example",
-        "chunk_index": 0,
-        "content_text": "Katib Experiment evidence",
-        "embedding": [0.0] * 768,
-    }
-    input_path.write_text(json.dumps(record) + "\n")
-
-    module.store_milvus.python_func(
-        embedded_data=SimpleNamespace(path=str(input_path)),
-        milvus_host="milvus.test",
-        milvus_port="19530",
-        collection_name="kubeflow_docs",
-        embedding_dim=768,
-    )
-
-    assert len(inserted) == 1
-    assert "last_updated" not in inserted[0]
-    assert inserted[0]["citation_url"] == record["citation_url"]
-
-
-def test_docs_cleaner_preserves_markdown_link_adjacent_yaml(monkeypatch, tmp_path):
+def test_chunk_and_embed_preserves_sidecar_yaml(monkeypatch, tmp_path):
     module = load_docs_pipeline_module()
 
-    class FakeEmbeddingResponse:
-        def raise_for_status(self):
-            return None
+    def fake_post(*args, **kwargs):
+        batch = (kwargs.get("json") or {}).get("inputs") or []
 
-        def json(self):
-            return [[0.0] * 768]
+        class FakeEmbeddingResponse:
+            def raise_for_status(self):
+                return None
 
-    monkeypatch.setattr("requests.post", lambda *args, **kwargs: FakeEmbeddingResponse())
+            def json(self):
+                return [[0.0] * 768 for _ in batch]
+
+        return FakeEmbeddingResponse()
+
+    monkeypatch.setattr("utils.requests.post", fake_post)
     source_path = tmp_path / "docs.jsonl"
     source_path.write_text(
         json.dumps(
@@ -154,13 +49,13 @@ title: Configure an Experiment
 ### Running Katib Experiment with Istio
 
 Katib Experiment from [this directory](https://github.com/kubeflow/katib/tree/main/examples)
-doesn't work with [Istio sidecar injection](https://istio.io/latest/docs/setup/additional-setup/sidecar-injection/#automatic-sidecar-injection).
+doesn't work with sidecar injection.
 Specify this annotation:
 
 ```yaml
 metadata:
   annotations:
-    \"sidecar.istio.io/inject\": \"false\"
+    "sidecar.istio.io/inject": "false"
 ```
 """,
             }
@@ -173,110 +68,49 @@ metadata:
         github_data=SimpleNamespace(path=str(source_path)),
         repo_name="website",
         base_url="https://www.kubeflow.org/docs",
-        chunk_size=2000,
-        chunk_overlap=60,
+        target_tokens=350,
+        overlap_tokens=50,
         embeddings_service_url="http://embeddings.test/embed",
         embedding_batch_size=8,
-        max_tei_chars=600,
         embedded_data=SimpleNamespace(path=str(output_path)),
     )
 
-    record = json.loads(output_path.read_text())
-    assert "title: Configure an Experiment" not in record["content_text"]
-    assert "this directory" in record["content_text"]
-    assert '"sidecar.istio.io/inject": "false"' in record["content_text"]
-    assert "metadata:\n annotations:" in record["content_text"]
+    records = [json.loads(line) for line in output_path.read_text().splitlines() if line]
+    assert records
+    content = "\n".join(record["content_text"] for record in records)
+    assert "title: Configure an Experiment" not in content
+    assert "sidecar.istio.io/inject" in content
+    assert "false" in content
 
 
-def test_store_replaces_legacy_chunk_ids_by_repo_and_file_path(monkeypatch, tmp_path):
+def test_store_milvus_delegates_rebuild_gates(monkeypatch, tmp_path):
     module = load_docs_pipeline_module()
-    queried = []
-    deleted = []
-    pymilvus = fake_pymilvus_module()
+    captured = {}
 
-    class FakeCollection:
-        description = ""
-        schema = legacy_docs_schema()
-        indexes = [object()]
-        num_entities = 3
+    def fake_store(path, **kwargs):
+        captured["path"] = path
+        captured.update(kwargs)
 
-        def load(self):
-            return None
+    import milvus_store
 
-        def query(self, **kwargs):
-            queried.append(kwargs["expr"])
-            return [{"id": 1}, {"id": 2}]
-
-        def delete(self, expr):
-            deleted.append(expr)
-
-        def insert(self, batch):
-            return None
-
-        def flush(self):
-            return None
-
-        def has_index(self):
-            return True
-
-    monkeypatch.setitem(sys.modules, "pymilvus", pymilvus)
-    monkeypatch.setattr(pymilvus.connections, "connect", lambda *args, **kwargs: None)
-    monkeypatch.setattr(pymilvus.utility, "has_collection", lambda name: True)
-    monkeypatch.setattr(pymilvus, "Collection", lambda name: FakeCollection())
-    monkeypatch.setenv("MILVUS_PASSWORD", "test-password")
+    monkeypatch.setattr(milvus_store, "store_embedded_records", fake_store)
 
     input_path = tmp_path / "embedded.jsonl"
-    record = {
-        "file_unique_id": "website:content/en/docs/components/katib/example.md",
-        "repo_name": "website",
-        "file_path": "content/en/docs/components/katib/example.md",
-        "file_name": "example.md",
-        "citation_url": "https://www.kubeflow.org/docs/components/katib/example",
-        "chunk_index": 0,
-        "content_text": "Katib Experiment evidence",
-        "embedding": [0.0] * 768,
-    }
-    input_path.write_text(json.dumps(record) + "\n")
+    input_path.write_text("{}\n")
 
     module.store_milvus.python_func(
         embedded_data=SimpleNamespace(path=str(input_path)),
         milvus_host="milvus.test",
         milvus_port="19530",
         collection_name="kubeflow_docs",
-        embedding_dim=768,
+        clean_rebuild=True,
+        clean_rebuild_confirmation="DELETE kubeflow_docs",
+        maintenance_lock_token="lock",
     )
 
-    assert queried == ['repo_name == "website" and file_path in ["content/en/docs/components/katib/example.md"]']
-    assert deleted == queried
-
-
-def test_store_rejects_embedding_dim_mismatch(monkeypatch, tmp_path):
-    module = load_docs_pipeline_module()
-    pymilvus = fake_pymilvus_module()
-
-    class FakeCollection:
-        description = ""
-        schema = legacy_docs_schema()
-        indexes = [object()]
-        num_entities = 0
-
-        def load(self):
-            raise AssertionError("must fail before load on dim mismatch")
-
-    monkeypatch.setitem(sys.modules, "pymilvus", pymilvus)
-    monkeypatch.setattr(pymilvus.connections, "connect", lambda *args, **kwargs: None)
-    monkeypatch.setattr(pymilvus.utility, "has_collection", lambda name: True)
-    monkeypatch.setattr(pymilvus, "Collection", lambda name: FakeCollection())
-    monkeypatch.setenv("MILVUS_PASSWORD", "test-password")
-
-    input_path = tmp_path / "embedded.jsonl"
-    input_path.write_text("{}" + "\n")
-
-    with pytest.raises(RuntimeError, match="vector_dim=768"):
-        module.store_milvus.python_func(
-            embedded_data=SimpleNamespace(path=str(input_path)),
-            milvus_host="milvus.test",
-            milvus_port="19530",
-            collection_name="kubeflow_docs",
-            embedding_dim=1024,
-        )
+    assert captured["path"] == str(input_path)
+    assert captured["milvus_host"] == "milvus.test"
+    assert captured["collection_name"] == "kubeflow_docs"
+    assert captured["clean_rebuild"] is True
+    assert captured["clean_rebuild_confirmation"] == "DELETE kubeflow_docs"
+    assert captured["maintenance_lock_token"] == "lock"

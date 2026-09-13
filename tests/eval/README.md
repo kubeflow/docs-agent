@@ -86,6 +86,7 @@ client.create_run_from_pipeline_package(
 Compile if the YAML is not in the directory:
 
 ```bash
+cd docs-agent-mcp/pipelines
 python3 issues-pipeline.py   # writes github_issues_rag_pipeline.yaml
 python3 code-pipeline.py     # writes code_rag_pipeline.yaml
 ```

@@ -61,7 +61,6 @@ spec:
           toolNames:
             - search_kubeflow_docs
             - search_github_issues
-            - search_kubeflow_code
     systemMessage: |-
 {{ .Files.Get "files/docs-system-message.txt" | nindent 6 }}
 ---
