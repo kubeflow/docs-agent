@@ -92,7 +92,7 @@ metadata:
 spec:
   selector:
     matchLabels:
-      serving.kserve.io/inferenceservice: qwen-llm
+      serving.kserve.io/inferenceservice: {{ .Values.meshPolicies.qwenInferenceServiceName }}
   action: ALLOW
   rules:
     - from:

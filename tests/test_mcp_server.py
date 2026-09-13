@@ -237,6 +237,23 @@ class TestSearchKubeflowDocs:
 
         assert mock_client.search.call_args.kwargs["limit"] == 3
 
+    def test_rejects_oversized_query_without_embedding(self, inject_mocks):
+        mock_client, embed_mock = inject_mocks
+
+        result = server.search_kubeflow_docs("x" * (server.MAX_QUERY_CHARS + 1))
+
+        assert "Search rejected" in _tool_text(result)
+        embed_mock.assert_not_called()
+        mock_client.search.assert_not_called()
+
+    def test_clamps_excessive_top_k(self, inject_mocks):
+        mock_client, _ = inject_mocks
+        mock_client.search.return_value = [[]]
+
+        server.search_kubeflow_docs("test", top_k=99)
+
+        assert mock_client.search.call_args.kwargs["limit"] == server.MAX_TOP_K
+
     def test_calls_embeddings_service_for_query(self, inject_mocks):
         mock_client, embed_mock = inject_mocks
         mock_client.search.return_value = [[]]
@@ -1213,6 +1230,17 @@ class TestSearchKubeflowCode:
         server.search_kubeflow_code("test", resource_kind="Deployment")
 
         assert mock_client.search.call_args.kwargs["filter"] == "resource_kind == 'Deployment'"
+
+    def test_filters_by_repo_and_resource_kind(self, inject_mocks):
+        mock_client, _ = inject_mocks
+        mock_client.search.return_value = [[]]
+
+        server.search_kubeflow_code("test", resource_kind="Experiment", repo="kubeflow/katib")
+
+        assert (
+            mock_client.search.call_args.kwargs["filter"]
+            == "resource_kind == 'Experiment' and repo_name == \"kubeflow/katib\""
+        )
 
     def test_no_filter_when_resource_kind_empty(self, inject_mocks):
         """Should not include filter when resource_kind is empty."""

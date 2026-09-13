@@ -1,5 +1,7 @@
 # Test + optional OKE CD. PRs and main always run compile/test/lint.
 # Deploy job runs only when repository variable ENABLE_OKE_DEPLOY=true (set on operator forks).
+# GHCR push uses secrets.GITHUB_TOKEN + packages:write (no custom GHCR_TOKEN required).
+# Optional GHCR_TOKEN / GHCR_USERNAME: only for private package imagePullSecrets on OKE.
 name: Build, Test, and Deploy to OKE
 
 on:
@@ -9,8 +11,12 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      release_version:
+        description: Optional new SemVer MCP image tag (for example 0.2.1); existing tags are rejected, blank uses the commit SHA
+        type: string
+        required: false
       deploy_kserve:
-        description: Deploy/update KServe Qwen (single GPU — recycles revision)
+        description: Helm-upgrade qwen-runtime (single GPU — intentional downtime)
         type: boolean
         default: false
 
@@ -33,6 +39,11 @@ jobs:
         with:
           python-version: "3.10"
 
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.21.0
+
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
@@ -46,6 +57,18 @@ jobs:
           python kubeflow-pipeline.py
           python extra/issues-pipeline.py
           python extra/code-pipeline.py
+
+      - name: Lint and render Helm charts
+        run: |
+          helm lint docs-agent-mcp/charts/docs-agent
+          helm lint docs-agent-mcp/charts/qwen-runtime
+          helm lint docs-agent-mcp/charts/gateway-guardrails
+          helm template docs-agent docs-agent-mcp/charts/docs-agent \
+            --namespace docs-agent --set-string mcp.image.tag=ci-test >/dev/null
+          helm template qwen-runtime docs-agent-mcp/charts/qwen-runtime \
+            --namespace ml-infra >/dev/null
+          helm template gateway-guardrails docs-agent-mcp/charts/gateway-guardrails \
+            --namespace docs-agent >/dev/null
 
       - name: Ruff lint
         run: ruff check docs-agent-mcp/mcp-server docs-agent-mcp/session-issuer tests docs-agent-mcp/pipelines
@@ -64,6 +87,11 @@ jobs:
       (github.event_name == 'workflow_dispatch' || github.event_name == 'push') &&
       vars.ENABLE_OKE_DEPLOY == 'true'
     runs-on: ubuntu-latest
+    # Queue production deployments. In particular, never cancel a first Helm
+    # ownership-transfer run while it is adopting existing cluster resources.
+    concurrency:
+      group: ${{ github.repository }}-oke-production
+      cancel-in-progress: false
     # Secrets are stored under Settings → Environments → kubeflow (not repo secrets)
     environment: kubeflow
     permissions:
@@ -80,9 +108,13 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.21.0
+
       - name: Validate deploy secrets
         env:
-          GHCR_PULL_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GHCR_PULL_TOKEN || secrets.Github_Pat }}
           OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
           OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
           OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
@@ -97,32 +129,61 @@ jobs:
               missing+=("$name")
             fi
           done
-          if [ -z "${GHCR_PULL_TOKEN:-}" ]; then
-            missing+=("GHCR_TOKEN or GHCR_PULL_TOKEN or Github_Pat (needs read:packages for cluster image pull)")
-          fi
           if [ "${#missing[@]}" -gt 0 ]; then
             echo "::error::Missing required GitHub Actions secrets in environment 'kubeflow':"
             printf '  - %s\n' "${missing[@]}"
             echo "Add them under Settings → Environments → kubeflow → Environment secrets."
             exit 1
           fi
+          # GHCR push uses built-in GITHUB_TOKEN (packages: write). No GHCR_TOKEN/USERNAME needed.
+          # Optional GHCR_TOKEN / GHCR_PULL_TOKEN / Github_Pat: only if the package is private
+          # and OKE needs an imagePullSecret. Public packages pull without credentials.
 
       - name: Set image coordinates
+        id: image_coordinates
         env:
-          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          REQUESTED_RELEASE_VERSION: ${{ inputs.release_version }}
         run: |
           owner_lc="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
-          ghcr_user="${GHCR_USERNAME:-$owner_lc}"
+          requested_version="${REQUESTED_RELEASE_VERSION:-}"
+          if [ -n "${requested_version}" ]; then
+            requested_version="${requested_version#v}"
+            if ! [[ "${requested_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error::release_version must be a Docker-compatible SemVer tag (for example 0.2.1 or 0.2.1-rc.1; build metadata is not supported)"
+              exit 1
+            fi
+            image_tag="${requested_version}"
+            release_tag_requested=true
+          else
+            image_tag="${GITHUB_SHA::7}"
+            release_tag_requested=false
+          fi
           echo "IMAGE_REPO=ghcr.io/${owner_lc}/${{ env.IMAGE_NAME }}" >> "$GITHUB_ENV"
-          echo "GHCR_USERNAME=${ghcr_user}" >> "$GITHUB_ENV"
-          echo "tag=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "tag=${image_tag}" >> "$GITHUB_ENV"
+          echo "release_tag_requested=${release_tag_requested}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.repository_owner }}
+          username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Reject an existing SemVer release tag
+        if: steps.image_coordinates.outputs.release_tag_requested == 'true'
+        run: |
+          set -euo pipefail
+          inspect_error="$(mktemp)"
+          if docker manifest inspect "${IMAGE_REPO}:${tag}" >/dev/null 2>"${inspect_error}"; then
+            echo "::error::Release image ${IMAGE_REPO}:${tag} already exists. SemVer release tags are immutable; choose a new version."
+            exit 1
+          fi
+          if ! grep -Eiq 'manifest unknown|no such manifest' "${inspect_error}"; then
+            echo "::error::Could not prove that ${IMAGE_REPO}:${tag} is unused; refusing a potentially destructive tag overwrite."
+            sed 's/^/  /' "${inspect_error}"
+            exit 1
+          fi
+          echo "Confirmed that release tag ${IMAGE_REPO}:${tag} is unused"
 
       - name: Build and Push MCP Image
         uses: docker/build-push-action@v5
@@ -142,52 +203,136 @@ jobs:
         env:
           FULL_IMAGE: ${{ env.IMAGE_REPO }}:${{ env.tag }}
           GHCR_PULL_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GHCR_PULL_TOKEN || secrets.Github_Pat }}
-          GHCR_USERNAME: ${{ env.GHCR_USERNAME }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME || github.repository_owner }}
         run: |
           set -euo pipefail
 
           kubectl create namespace "${{ env.K8S_NAMESPACE }}" --dry-run=client -o yaml | kubectl apply -f -
 
-          kubectl create secret docker-registry ghcrsecret \
-            --namespace "${{ env.K8S_NAMESPACE }}" \
-            --docker-server="${{ env.REGISTRY }}" \
-            --docker-username="${GHCR_USERNAME}" \
-            --docker-password="${GHCR_PULL_TOKEN}" \
-            --docker-email="${GHCR_USERNAME}@users.noreply.github.com" \
-            --dry-run=client -o yaml | kubectl apply -f -
+          HELM_PULL_ARGS=()
 
-          # Replace pinned manifest image with the commit-scoped tag built above.
-          sed "s|ghcr.io/kubeflow/mcp-kubeflow-docs:v0.1.0|${FULL_IMAGE}|g" \
-            docs-agent-mcp/manifests/mcp-server/mcp-server.yaml | kubectl apply -f -
-          kubectl set image deployment/mcp-kubeflow-docs \
-            mcp-server="${FULL_IMAGE}" \
-            -n "${{ env.K8S_NAMESPACE }}" || true
-          kubectl patch deployment/mcp-kubeflow-docs -n "${{ env.K8S_NAMESPACE }}" --type=merge \
-            -p '{"spec":{"template":{"spec":{"imagePullSecrets":[{"name":"ghcrsecret"}]}}}}'
+          if [ -n "${GHCR_PULL_TOKEN:-}" ]; then
+            echo "Optional GHCR pull token present — creating imagePullSecret for private package pulls"
+            kubectl create secret docker-registry ghcrsecret \
+              --namespace "${{ env.K8S_NAMESPACE }}" \
+              --docker-server="${{ env.REGISTRY }}" \
+              --docker-username="${GHCR_USERNAME}" \
+              --docker-password="${GHCR_PULL_TOKEN}" \
+              --docker-email="${GHCR_USERNAME}@users.noreply.github.com" \
+              --dry-run=client -o yaml | kubectl apply -f -
+            HELM_PULL_ARGS=(--set-string 'mcp.imagePullSecrets[0].name=ghcrsecret')
+          else
+            echo "No GHCR pull token — relying on public package visibility (no imagePullSecret)"
+          fi
+
+          DOCS_OWNERSHIP_ARGS=()
+          DOCS_ATOMIC_ARGS=(--atomic --cleanup-on-fail)
+          if ! helm status docs-agent -n "${{ env.K8S_NAMESPACE }}" >/dev/null 2>&1; then
+            echo "First Helm adoption: server-dry-run, then take ownership without uninstall-on-failure"
+            helm template docs-agent docs-agent-mcp/charts/docs-agent \
+              --namespace "${{ env.K8S_NAMESPACE }}" \
+              --set-string "mcp.image.repository=${IMAGE_REPO}" \
+              --set-string "mcp.image.tag=${tag}" \
+              "${HELM_PULL_ARGS[@]}" \
+              | kubectl apply -n "${{ env.K8S_NAMESPACE }}" --dry-run=server -f -
+            DOCS_OWNERSHIP_ARGS=(--take-ownership)
+            DOCS_ATOMIC_ARGS=()
+          fi
+
+          echo "Helm-upgrading docs-agent application release to ${FULL_IMAGE}"
+          helm upgrade --install docs-agent docs-agent-mcp/charts/docs-agent \
+            --namespace "${{ env.K8S_NAMESPACE }}" --create-namespace \
+            --wait --timeout 10m --history-max 10 \
+            --set-string "mcp.image.repository=${IMAGE_REPO}" \
+            --set-string "mcp.image.tag=${tag}" \
+            "${DOCS_OWNERSHIP_ARGS[@]}" \
+            "${DOCS_ATOMIC_ARGS[@]}" \
+            "${HELM_PULL_ARGS[@]}"
+
           kubectl rollout status deployment/mcp-kubeflow-docs \
             -n "${{ env.K8S_NAMESPACE }}" --timeout=600s
-
-          kubectl apply -f docs-agent-mcp/manifests/kagent/setup.yaml
+          helm test docs-agent -n "${{ env.K8S_NAMESPACE }}" --timeout 2m
 
           DEPLOY_KSERVE=false
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.deploy_kserve }}" = "true" ]; then
             DEPLOY_KSERVE=true
-          elif [ "${{ github.event_name }}" = "push" ]; then
-            if git diff --name-only --diff-filter=M "${{ github.event.before }}" "${{ github.sha }}" \
-              | grep -qE '^docs-agent-mcp/manifests/vllm/kserve-qwen\.yaml$'; then
-              DEPLOY_KSERVE=true
-            fi
           fi
 
           if [ "${DEPLOY_KSERVE}" = "true" ]; then
-            echo "Removing legacy docs-agent GPU InferenceService (frees GPU for ml-infra/qwen-llm)"
-            kubectl delete inferenceservice/qwen -n "${{ env.K8S_NAMESPACE }}" --ignore-not-found=true
-            kubectl delete svc/qwen-llm -n "${{ env.K8S_NAMESPACE }}" --ignore-not-found=true
-            echo "Applying ml-infra Qwen KServe manifests"
-            kubectl apply -f docs-agent-mcp/manifests/vllm/kserve-qwen.yaml
-            kubectl rollout status deployment -n ml-infra -l serving.kserve.io/inferenceservice=qwen-llm --timeout=600s 2>/dev/null || true
+            # This intentionally disruptive migration is isolated in a
+            # subshell so every failure path restores the retained Knative
+            # runtime and stable service before the workflow exits.
+            (
+              set -Eeuo pipefail
+              LEGACY_QWEN_PRESENT=false
+
+              recover_legacy_qwen() {
+                failure_status="${1:-1}"
+                trap - ERR
+                set +e
+                echo "::warning::qwen-runtime migration failed; attempting best-effort recovery of legacy ml-infra/qwen-llm"
+                if [ "${LEGACY_QWEN_PRESENT}" = "true" ]; then
+                  kubectl annotate inferenceservice/qwen-llm -n ml-infra \
+                    serving.kserve.io/stop-
+                  kubectl wait --for=condition=Ready=True \
+                    inferenceservice/qwen-llm -n ml-infra --timeout=1800s || \
+                    echo "::warning::Legacy qwen-llm did not report Ready during the recovery window"
+                  if kubectl get service/qwen-llm-stable -n ml-infra >/dev/null 2>&1; then
+                    kubectl patch service/qwen-llm-stable -n ml-infra --type=json \
+                      -p '[{"op":"replace","path":"/spec/selector","value":{"serving.kserve.io/inferenceservice":"qwen-llm"}}]'
+                  else
+                    echo "::warning::qwen-llm-stable is absent; its selector could not be restored"
+                  fi
+                else
+                  echo "::warning::Legacy ml-infra/qwen-llm was absent, so automatic runtime recovery is unavailable"
+                fi
+                exit "${failure_status}"
+              }
+              trap 'recover_legacy_qwen $?' ERR
+
+              echo "Removing legacy docs-agent GPU InferenceService (frees GPU for ml-infra/qwen-llm)"
+              kubectl delete inferenceservice/qwen -n "${{ env.K8S_NAMESPACE }}" --ignore-not-found=true
+              kubectl delete svc/qwen-llm -n "${{ env.K8S_NAMESPACE }}" --ignore-not-found=true
+
+              # Standard mode supports the writable cache PVC without enabling
+              # cluster-wide Knative PVC feature flags. Stop the old Knative
+              # service first so it releases the single GPU while retaining a
+              # reversible rollback definition.
+              if kubectl get inferenceservice/qwen-llm -n ml-infra >/dev/null 2>&1; then
+                LEGACY_QWEN_PRESENT=true
+                echo "Stopping legacy ml-infra/qwen-llm before Standard-mode rollout"
+                kubectl annotate inferenceservice/qwen-llm -n ml-infra \
+                  serving.kserve.io/stop=true --overwrite
+                kubectl wait --for=condition=Stopped=True \
+                  inferenceservice/qwen-llm -n ml-infra --timeout=600s
+              fi
+
+              QWEN_OWNERSHIP_ARGS=()
+              QWEN_ATOMIC_ARGS=(--atomic --cleanup-on-fail)
+              if ! helm status qwen-runtime -n ml-infra >/dev/null 2>&1; then
+                echo "First qwen-runtime adoption: validating before non-destructive ownership transfer"
+                helm template qwen-runtime docs-agent-mcp/charts/qwen-runtime \
+                  --namespace ml-infra --skip-tests \
+                  | kubectl apply -n ml-infra --dry-run=server -f -
+                helm template qwen-runtime docs-agent-mcp/charts/qwen-runtime \
+                  --namespace ml-infra --show-only templates/tests/model-endpoint.yaml \
+                  | kubectl apply -n docs-agent --dry-run=server -f -
+                QWEN_OWNERSHIP_ARGS=(--take-ownership)
+                QWEN_ATOMIC_ARGS=()
+              fi
+
+              echo "Helm-upgrading the separately versioned qwen-runtime release"
+              helm upgrade --install qwen-runtime docs-agent-mcp/charts/qwen-runtime \
+                --namespace ml-infra --create-namespace --timeout 10m --history-max 5 \
+                "${QWEN_OWNERSHIP_ARGS[@]}" \
+                "${QWEN_ATOMIC_ARGS[@]}"
+              kubectl rollout status deployment/qwen-llm-standard-predictor \
+                -n ml-infra --timeout=1800s
+              helm test qwen-runtime -n ml-infra --timeout 3m
+              trap - ERR
+            )
           else
-            echo "Skipping Qwen GPU deploy (no vllm manifest change; use workflow_dispatch to force)"
+            echo "Skipping qwen-runtime Helm upgrade; normal app upgrades do not restart the GPU service"
           fi
 
       - name: Wait for ml-infra dependencies
@@ -217,20 +362,27 @@ jobs:
             python3 /app/smoke_tools.py
           kubectl get agent,modelconfig -n "${{ env.K8S_NAMESPACE }}"
 
-      - name: Smoke test Qwen (non-blocking)
-        continue-on-error: true
+      - name: Smoke test Qwen
         run: |
           set -euo pipefail
-          POD="$(kubectl get pods -n ml-infra -l serving.kserve.io/inferenceservice=qwen-llm \
-            --field-selector=status.phase=Running \
-            -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
-          if [ -z "${POD}" ]; then
-            echo "No running qwen-llm pod in ml-infra — skipping LLM smoke test"
-            exit 0
-          fi
-          kubectl exec -n ml-infra "${POD}" -c kserve-container -- python3 -c "
-          import urllib.request, json
-          p=json.dumps({'model':'qwen2.5-7B','messages':[{'role':'user','content':'ping'}],'max_tokens':8}).encode()
-          r=urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8080/openai/v1/chat/completions',data=p,headers={'Content-Type':'application/json'}), timeout=60)
-          print('kserve ok', r.status)
-          "
+          SMOKE_POD="qwen-stable-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          kubectl delete pod "${SMOKE_POD}" -n "${{ env.K8S_NAMESPACE }}" \
+            --ignore-not-found --wait=false
+          # Exercise the stable service from the agent namespace so this works
+          # in either legacy Knative or Helm-managed Standard runtime mode.
+          kubectl run "${SMOKE_POD}" -n "${{ env.K8S_NAMESPACE }}" \
+            --image=curlimages/curl:8.12.1 --restart=Never --rm --attach \
+            --pod-running-timeout=5m --command -- \
+            curl --fail --silent --show-error --max-time 120 \
+              --header 'Content-Type: application/json' \
+              --data '{"model":"qwen2.5-7B","messages":[{"role":"user","content":"ping"}],"max_tokens":8}' \
+              http://qwen-llm-stable.ml-infra.svc.cluster.local/openai/v1/chat/completions
+
+      - name: Remove pre-Helm MCP canary after functional smoke tests
+        run: |
+          set -euo pipefail
+          # Keep the rollback canary until MCP dependencies and the stable LLM
+          # endpoint have all passed their functional checks.
+          kubectl delete deployment/mcp-kubeflow-docs-canary \
+            service/mcp-kubeflow-docs-canary configmap/mcp-server-canary-code-v7 \
+            -n "${{ env.K8S_NAMESPACE }}" --ignore-not-found

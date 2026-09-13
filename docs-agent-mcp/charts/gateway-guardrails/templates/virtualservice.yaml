@@ -29,6 +29,20 @@ spec:
             port:
               number: 8000
     {{- end }}
+    # A2A streaming. Must precede the catch-all below so the prefix wins, and
+    # must carry its own deadline: the response streams for the whole
+    # generation, which outlives the short cap on ordinary requests.
+    - name: agent-stream
+      match:
+        - uri:
+            prefix: /a2a/
+      {{- include "gateway-guardrails.corsPolicy" . | nindent 6 }}
+      timeout: {{ .Values.routing.streamTimeout }}
+      route:
+        - destination:
+            host: {{ .Values.routing.uiService }}.{{ .Values.namespaces.docsAgent }}.svc.cluster.local
+            port:
+              number: {{ .Values.routing.uiPort }}
     - name: kagent-ui
       {{- include "gateway-guardrails.corsPolicy" . | nindent 6 }}
       timeout: {{ .Values.routing.timeout }}

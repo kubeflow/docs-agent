@@ -762,7 +762,7 @@ Guardrails protecting the publicly shared chatbot, all tunable via `values.yaml`
 ### Pipeline Optimizations (`docs-agent-mcp/pipelines/`)
 The ingestion pipeline was rewritten to maximize efficiency and avoid Kubernetes ephemeral storage eviction:
 *   **Feast Removal**: The pipeline now writes embeddings directly to Milvus using `pymilvus`, dramatically lowering complexity.
-*   **Custom Base Image (`Dockerfile.pipeline`)**: We bake the massive PyTorch library and the Hugging Face `all-mpnet-base-v2` model directly into a custom Docker image. This reduces runtime disk usage from 5.5GB to zero, fixing OKE pod eviction errors, and preventing Hugging Face API rate limits.
+*   **TEI Embeddings**: Chunking components call the in-cluster TEI embeddings service over HTTP instead of loading a model in-process, so `Dockerfile.pipeline` stays a plain `python:3.11-slim` image with no PyTorch/model weights baked in — avoiding both the OKE pod eviction and Hugging Face rate-limit issues without the multi-GB image.
 
 ### GitHub Actions CI/CD (`.github/workflows/`)
 | Workflow | When it runs | Purpose |
@@ -770,4 +770,4 @@ The ingestion pipeline was rewritten to maximize efficiency and avoid Kubernetes
 | **`oke-cicd.yaml`** | Every PR and push to `main` | Compile pipelines, ruff, pytest; build/push MCP image to GHCR and optional OKE deploy when repo var `ENABLE_OKE_DEPLOY=true` |
 | **`tests.yml`** | Every PR and push to `main` | Ruff lint/format + pytest (no cluster) |
 
-Operator forks set `ENABLE_OKE_DEPLOY=true` and configure the `kubeflow` GitHub Environment (OCI + GHCR secrets) for cluster deploy and `smoke_tools.py` validation.
+Operator forks set `ENABLE_OKE_DEPLOY=true` and configure the `kubeflow` GitHub Environment (OCI secrets) for cluster deploy and `smoke_tools.py` validation. GHCR push uses the built-in `GITHUB_TOKEN`; optional `GHCR_TOKEN` / `GHCR_USERNAME` are only needed if the package is private.

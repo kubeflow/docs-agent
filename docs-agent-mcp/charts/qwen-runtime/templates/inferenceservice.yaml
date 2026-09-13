@@ -1,0 +1,47 @@
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: {{ .Values.inferenceService.name }}
+  labels:
+    {{- include "qwen-runtime.labels" . | nindent 4 }}
+  annotations:
+    serving.kserve.io/deploymentMode: {{ .Values.inferenceService.deploymentMode | quote }}
+    serving.kserve.io/storage-initializer-env: '{"HF_HUB_ENABLE_HF_TRANSFER": "0"}'
+    serving.kserve.io/minReplicas: {{ .Values.inferenceService.minReplicas | quote }}
+    serving.kserve.io/deploymentTimeout: {{ .Values.inferenceService.deploymentTimeout | quote }}
+spec:
+  predictor:
+    containerConcurrency: {{ .Values.inferenceService.containerConcurrency }}
+    deploymentStrategy:
+      type: {{ .Values.inferenceService.deploymentStrategy }}
+    securityContext:
+      fsGroup: 1000
+      fsGroupChangePolicy: OnRootMismatch
+    model:
+      modelFormat:
+        name: huggingface
+      runtime: {{ .Values.runtime.name }}
+      env:
+        - name: HF_HOME
+          value: /tmp/huggingface
+        - name: HF_HUB_CACHE
+          value: /tmp/huggingface/hub
+        - name: HF_XET_CACHE
+          value: /tmp/huggingface/xet
+      volumeMounts:
+        - name: huggingface-cache
+          mountPath: /tmp/huggingface
+      args:
+        - --model_name={{ .Values.inferenceService.modelName }}
+        - --model_id={{ .Values.inferenceService.modelId }}
+        {{- toYaml .Values.inferenceService.args | nindent 8 }}
+      resources:
+        {{- toYaml .Values.inferenceService.resources | nindent 8 }}
+    volumes:
+      - name: huggingface-cache
+        persistentVolumeClaim:
+          claimName: {{ .Values.persistence.claimName }}
+    nodeSelector:
+      {{- toYaml .Values.inferenceService.nodeSelector | nindent 6 }}
+    tolerations:
+      {{- toYaml .Values.inferenceService.tolerations | nindent 6 }}

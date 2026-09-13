@@ -19,6 +19,8 @@ from milvus_search import search_collection, search_docs_auto
 import otel_obs
 
 PORT = int(os.getenv("PORT", "8000"))
+MAX_QUERY_CHARS = int(os.getenv("MAX_QUERY_CHARS", "512"))
+MAX_TOP_K = int(os.getenv("MAX_TOP_K", "20"))
 
 SAFE_FILTER = re.compile(r"^[A-Za-z0-9_/.\-]+$")
 
@@ -41,10 +43,27 @@ def _safe_filter_value(name: str, value: str) -> str:
     return value
 
 
+def _search_args(query: str, top_k: int) -> tuple[str, int]:
+    """Normalize bounded tool arguments before spending embedding/vector resources."""
+    if not isinstance(query, str) or not query.strip():
+        raise ValueError("query must be a non-empty string")
+    query = " ".join(query.split())
+    if len(query) > MAX_QUERY_CHARS:
+        raise ValueError(f"query exceeds the {MAX_QUERY_CHARS}-character limit")
+    try:
+        top_k = int(top_k)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("top_k must be an integer") from exc
+    return query, min(MAX_TOP_K, max(1, top_k))
+
+
 @mcp.tool()
 def search_kubeflow_docs(query: str, top_k: int = 5) -> ToolResult:
     """Search Kubeflow documentation. Search mode is chosen here, not by the LLM."""
-    top_k = max(1, min(int(top_k), 20))
+    try:
+        query, top_k = _search_args(query, top_k)
+    except ValueError as exc:
+        return text_tool_result(f"Search rejected: {exc}")
     with otel_obs.mcp_tool_span("search_kubeflow_docs", query=query, top_k=top_k) as span:
         try:
             if milvus_search.SEARCH_MODE == "auto":
@@ -79,7 +98,10 @@ def search_kubeflow_docs(query: str, top_k: int = 5) -> ToolResult:
 @mcp.tool()
 def search_github_issues(query: str, top_k: int = 5, repo: str = "", state: str = "") -> ToolResult:
     """Search Kubeflow GitHub issues."""
-    top_k = max(1, min(int(top_k), 20))
+    try:
+        query, top_k = _search_args(query, top_k)
+    except ValueError as exc:
+        return text_tool_result(f"Search rejected: {exc}")
     filters = []
     if repo:
         repo = _safe_filter_value("repo", repo)
@@ -117,15 +139,25 @@ def search_github_issues(query: str, top_k: int = 5, repo: str = "", state: str 
 
 
 @mcp.tool()
-def search_kubeflow_code(query: str, top_k: int = 5, resource_kind: str = "") -> ToolResult:
+def search_kubeflow_code(
+    query: str, top_k: int = 5, resource_kind: str = "", repo: str = ""
+) -> ToolResult:
     """Search Kubeflow code and YAML manifests."""
-    top_k = max(1, min(int(top_k), 20))
+    try:
+        query, top_k = _search_args(query, top_k)
+    except ValueError as exc:
+        return text_tool_result(f"Search rejected: {exc}")
+    filters = []
     if resource_kind:
         resource_kind = _safe_filter_value("resource_kind", resource_kind)
-    filter_expr = f"resource_kind == '{resource_kind}'" if resource_kind else ""
+        filters.append(f"resource_kind == '{resource_kind}'")
+    if repo:
+        repo = _safe_filter_value("repo", repo)
+        filters.append(f'repo_name == "{repo}"')
+    filter_expr = " and ".join(filters)
 
     with otel_obs.mcp_tool_span(
-        "search_kubeflow_code", query=query, top_k=top_k, resource_kind=resource_kind
+        "search_kubeflow_code", query=query, top_k=top_k, resource_kind=resource_kind, repo=repo
     ) as span:
         try:
             hits = search_collection(

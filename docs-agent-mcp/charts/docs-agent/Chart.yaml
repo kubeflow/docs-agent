@@ -1,0 +1,11 @@
+apiVersion: v2
+name: docs-agent
+description: Kubeflow Docs Agent application release (MCP server and Kagent resources)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - kubeflow
+  - rag
+  - mcp
+  - kagent

@@ -1,0 +1,17 @@
+apiVersion: serving.kserve.io/v1alpha1
+kind: ServingRuntime
+metadata:
+  name: {{ .Values.runtime.name }}
+  labels:
+    {{- include "qwen-runtime.labels" . | nindent 4 }}
+spec:
+  supportedModelFormats:
+    - name: huggingface
+      version: "1"
+      autoSelect: true
+  containers:
+    - name: kserve-container
+      image: {{ .Values.runtime.image }}
+      command: ["python", "-m", "huggingfaceserver"]
+      resources:
+        {{- toYaml .Values.runtime.resources | nindent 8 }}

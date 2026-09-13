@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "docs-agent.mcpName" . }}
+  labels:
+    {{- include "docs-agent.labels" . | nindent 4 }}
+    {{- include "docs-agent.mcpSelectorLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.mcp.replicaCount }}
+  strategy:
+    {{- toYaml .Values.mcp.strategy | nindent 4 }}
+  selector:
+    matchLabels:
+      app: {{ include "docs-agent.mcpName" . }}
+  template:
+    metadata:
+      labels:
+        {{- include "docs-agent.mcpSelectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      {{- with .Values.mcp.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: mcp-server
+          image: "{{ .Values.mcp.image.repository }}:{{ .Values.mcp.image.tag }}"
+          imagePullPolicy: {{ .Values.mcp.image.pullPolicy }}
+          ports:
+            - name: mcp
+              containerPort: {{ .Values.mcp.service.port }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: mcp-server-config
+          env:
+            - name: MILVUS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.mcp.milvusAuth.existingSecret }}
+                  key: {{ .Values.mcp.milvusAuth.passwordKey }}
+          readinessProbe:
+            tcpSocket:
+              port: mcp
+            initialDelaySeconds: {{ .Values.mcp.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.mcp.readinessProbe.periodSeconds }}
+          livenessProbe:
+            tcpSocket:
+              port: mcp
+            initialDelaySeconds: {{ .Values.mcp.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.mcp.livenessProbe.periodSeconds }}
+          resources:
+            {{- toYaml .Values.mcp.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.mcp.securityContext | nindent 12 }}

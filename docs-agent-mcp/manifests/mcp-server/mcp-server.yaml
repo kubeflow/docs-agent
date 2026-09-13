@@ -1,3 +1,4 @@
+# Legacy direct-apply manifest. The docs-agent Helm chart is the CD source of truth.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -37,8 +38,8 @@ spec:
       labels:
         app: mcp-kubeflow-docs
     spec:
-      imagePullSecrets:
-        - name: ghcrsecret
+      # imagePullSecrets omitted: package is expected public under ghcr.io/kubeflow/...
+      # OKE CD adds ghcrsecret only when an optional GHCR pull PAT is configured.
       containers:
         - name: mcp-server
           # Official/CI image placeholder. oke-cicd.yaml sed-replaces this tag on deploy.
