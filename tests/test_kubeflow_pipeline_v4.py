@@ -8,7 +8,8 @@ from unittest.mock import MagicMock
 import pytest
 
 PIPELINES_DIR = Path(__file__).parent.parent / "docs-agent-mcp" / "pipelines"
-sys.path.insert(0, str(PIPELINES_DIR))
+UTILS_DIR = PIPELINES_DIR / "utils"
+sys.path.insert(0, str(UTILS_DIR))
 
 import canonical_rag_ingest  # noqa: E402
 import hugo_ingest  # noqa: E402

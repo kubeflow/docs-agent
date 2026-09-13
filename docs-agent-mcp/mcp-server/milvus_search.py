@@ -8,7 +8,6 @@ import threading
 from pymilvus import AnnSearchRequest, MilvusClient, RRFRanker, WeightedRanker
 
 from embeddings_client import embed_query
-import otel_obs
 from intent_router import (
     downgrade_plan_for_collection,
     pick_search_plan,
@@ -24,17 +23,21 @@ from rag_collections import (
     SPARSE_FIELD,
 )
 
-CLUSTER_MILVUS_URI = "http://milvus-milvus.ml-infra.svc.cluster.local:19530"
-LOCAL_MILVUS_URI = "http://127.0.0.1:19530"
+def _env(name: str, default: str) -> str:
+    return (os.getenv(name) or "").strip() or default
+
+
+CLUSTER_MILVUS_URI = _env("CLUSTER_MILVUS_URI", "http://milvus-milvus.ml-infra.svc.cluster.local:19530")
+LOCAL_MILVUS_URI = _env("LOCAL_MILVUS_URI", "http://127.0.0.1:19530")
 
 MILVUS_LOCAL_MODE = os.getenv("MILVUS_LOCAL_MODE", "").lower() in ("1", "true", "yes")
-MILVUS_URI = os.getenv(
-    "MILVUS_URI",
-    LOCAL_MILVUS_URI if MILVUS_LOCAL_MODE else CLUSTER_MILVUS_URI,
-)
-MILVUS_USER = os.getenv("MILVUS_USER", "root")
+MILVUS_URI = _env("MILVUS_URI", LOCAL_MILVUS_URI if MILVUS_LOCAL_MODE else CLUSTER_MILVUS_URI)
+MILVUS_USER = _env("MILVUS_USER", "root")
 MILVUS_PASSWORD = os.getenv("MILVUS_PASSWORD", "")
-EMBEDDINGS_URL = os.getenv("EMBEDDINGS_URL", "")
+EMBEDDINGS_URL = _env(
+    "EMBEDDINGS_URL",
+    "http://embeddings-service-predictor.ml-infra.svc.cluster.local/embed",
+)
 
 SEARCH_MODE = os.getenv("SEARCH_MODE", "dense").strip().lower()
 ISSUES_SEARCH_MODE = os.getenv("ISSUES_SEARCH_MODE", "dense").strip().lower()
@@ -204,84 +207,65 @@ def search_docs_auto(
 ) -> tuple[list[dict], dict]:
     """Plan → search → rerank. Used when SEARCH_MODE=auto."""
     plan = pick_search_plan(query)
-    with otel_obs.retrieval_span(
-        "retrieval.docs_auto",
-        query=query,
-        collection=COLLECTION_NAME,
-        mode=plan.retrieval_mode,
-        extra={
-            otel_obs.ATTR_RETRIEVAL_INTENT: plan.intent,
-            f"{otel_obs.ATTR_LANGFUSE_META}intent": plan.intent,
-            f"{otel_obs.ATTR_LANGFUSE_META}reason": plan.reason,
-        },
-    ) as span:
-        _load(COLLECTION_NAME)
-        plan = downgrade_plan_for_collection(
-            plan,
-            has_bm25=collection_has_bm25(COLLECTION_NAME),
-            has_release_fields=collection_has_release_fields(COLLECTION_NAME),
-        )
-        if span is not None:
-            span.set_attribute(otel_obs.ATTR_RETRIEVAL_MODE, plan.retrieval_mode)
-            span.set_attribute(otel_obs.ATTR_RETRIEVAL_INTENT, plan.intent)
+    _load(COLLECTION_NAME)
+    plan = downgrade_plan_for_collection(
+        plan,
+        has_bm25=collection_has_bm25(COLLECTION_NAME),
+        has_release_fields=collection_has_release_fields(COLLECTION_NAME),
+    )
 
-        fetch_limit = plan.candidate_depth or top_k
-        filter_expr = plan.filter_expr
-        filter_fallback = False
-        embedding = None
-        if plan.retrieval_mode in ("dense", "hybrid"):
-            embedding = _require_embedding(query)
+    fetch_limit = plan.candidate_depth or top_k
+    filter_expr = plan.filter_expr
+    filter_fallback = False
+    embedding = None
+    if plan.retrieval_mode in ("dense", "hybrid"):
+        embedding = _require_embedding(query)
 
-        try:
-            if plan.retrieval_mode == "bm25":
-                hits = bm25_search(
-                    COLLECTION_NAME, query, fetch_limit, output_fields, filter_expr=filter_expr
-                )
-                if not hits and filter_expr:
-                    hits = bm25_search(
-                        COLLECTION_NAME, query, fetch_limit, output_fields, filter_expr=""
-                    )
-                    filter_fallback = True
-            elif plan.retrieval_mode == "hybrid":
-                hits = hybrid_search(
-                    COLLECTION_NAME,
-                    query,
-                    embedding,
-                    top_k,
-                    output_fields,
-                    filter_expr=filter_expr,
-                    candidate_depth=plan.candidate_depth,
-                )
-            else:
-                hits = dense_search(
-                    COLLECTION_NAME, embedding, top_k, output_fields, filter_expr=filter_expr
-                )
-        except Exception as exc:
-            kind = "hybrid_search" if plan.retrieval_mode == "hybrid" else "search"
-            raise RuntimeError(f"Milvus {kind} failed for {COLLECTION_NAME}: {exc}") from exc
-
+    try:
         if plan.retrieval_mode == "bm25":
-            hits = rerank_hits_after_search(plan, hits, query, top_k)
-            meta = retrieval_metadata(
-                plan,
-                candidate_depth=fetch_limit,
-                filter_expr=filter_expr or None,
-                filter_fallback=filter_fallback,
+            hits = bm25_search(
+                COLLECTION_NAME, query, fetch_limit, output_fields, filter_expr=filter_expr
             )
-            otel_obs.finish_retrieval_span(
-                span, hits, intent=plan.intent, filter_fallback=filter_fallback
+            if not hits and filter_expr:
+                hits = bm25_search(
+                    COLLECTION_NAME, query, fetch_limit, output_fields, filter_expr=""
+                )
+                filter_fallback = True
+        elif plan.retrieval_mode == "hybrid":
+            hits = hybrid_search(
+                COLLECTION_NAME,
+                query,
+                embedding,
+                top_k,
+                output_fields,
+                filter_expr=filter_expr,
+                candidate_depth=plan.candidate_depth,
             )
-            return hits, meta
-        if plan.retrieval_mode == "hybrid":
-            meta = retrieval_metadata(
-                plan,
-                candidate_depth=plan.candidate_depth or top_k,
-                filter_expr=filter_expr or None,
+        else:
+            hits = dense_search(
+                COLLECTION_NAME, embedding, top_k, output_fields, filter_expr=filter_expr
             )
-            otel_obs.finish_retrieval_span(span, hits, intent=plan.intent)
-            return hits, meta
-        otel_obs.finish_retrieval_span(span, hits, intent=plan.intent)
-        return hits, retrieval_metadata(plan)
+    except Exception as exc:
+        kind = "hybrid_search" if plan.retrieval_mode == "hybrid" else "search"
+        raise RuntimeError(f"Milvus {kind} failed for {COLLECTION_NAME}: {exc}") from exc
+
+    if plan.retrieval_mode == "bm25":
+        hits = rerank_hits_after_search(plan, hits, query, top_k)
+        meta = retrieval_metadata(
+            plan,
+            candidate_depth=fetch_limit,
+            filter_expr=filter_expr or None,
+            filter_fallback=filter_fallback,
+        )
+        return hits, meta
+    if plan.retrieval_mode == "hybrid":
+        meta = retrieval_metadata(
+            plan,
+            candidate_depth=plan.candidate_depth or top_k,
+            filter_expr=filter_expr or None,
+        )
+        return hits, meta
+    return hits, retrieval_metadata(plan)
 
 
 def search_collection(
@@ -297,31 +281,24 @@ def search_collection(
         if _search_mode_for(collection_name) == "hybrid" and collection_has_bm25(collection_name)
         else "dense"
     )
-    with otel_obs.retrieval_span(
-        "retrieval.search_collection",
-        query=query,
-        collection=collection_name,
-        mode=mode,
-    ) as span:
-        _load(collection_name)
-        embedding = _require_embedding(query)
-        use_hybrid = mode == "hybrid"
-        try:
-            if use_hybrid:
-                hits = hybrid_search(
-                    collection_name,
-                    query,
-                    embedding,
-                    top_k,
-                    output_fields,
-                    filter_expr=filter_expr,
-                )
-            else:
-                hits = dense_search(
-                    collection_name, embedding, top_k, output_fields, filter_expr=filter_expr
-                )
-        except Exception as exc:
-            kind = "hybrid_search" if use_hybrid else "search"
-            raise RuntimeError(f"Milvus {kind} failed for {collection_name}: {exc}") from exc
-        otel_obs.finish_retrieval_span(span, hits)
-        return hits
+    _load(collection_name)
+    embedding = _require_embedding(query)
+    use_hybrid = mode == "hybrid"
+    try:
+        if use_hybrid:
+            hits = hybrid_search(
+                collection_name,
+                query,
+                embedding,
+                top_k,
+                output_fields,
+                filter_expr=filter_expr,
+            )
+        else:
+            hits = dense_search(
+                collection_name, embedding, top_k, output_fields, filter_expr=filter_expr
+            )
+    except Exception as exc:
+        kind = "hybrid_search" if use_hybrid else "search"
+        raise RuntimeError(f"Milvus {kind} failed for {collection_name}: {exc}") from exc
+    return hits

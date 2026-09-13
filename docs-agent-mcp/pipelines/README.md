@@ -7,12 +7,11 @@ Kubeflow Pipelines (KFP) definitions for indexing Kubeflow documentation and rel
 | Path | Role |
 |------|------|
 | **`kubeflow-pipeline.py`** | Production **docs v4** pipeline: GitHub docs download → chunk/embed → Milvus store |
-| **`milvus_store.py`** | Schema, safety gates, and store helpers imported by the ingest image |
-| **`Dockerfile.pipeline`** | Slim ingest image (`docs-rag-ingest`) that copies the `.py` modules above |
-| **`canonical_rag_ingest.py`**, **`hugo_ingest.py`**, **`utils.py`** | Ingest and embedding utilities used by the docs pipeline and tests |
+| **`issues-pipeline.py`** | GitHub **issues** RAG pipeline |
+| **`code-pipeline.py`** | GitHub **code/manifests** RAG pipeline |
+| **`utils/`** | Shared helpers used by the live pipelines: ingest, parsers, Milvus store, TEI |
+| **`Dockerfile.pipeline`** | Slim ingest image (`docs-rag-ingest`) that copies docs helpers from `utils/` as flat `/app` modules |
 | **`github_rag_pipeline.yaml`** | Compiled docs pipeline (regenerate via `python kubeflow-pipeline.py`) |
-| **`extra/issues-pipeline.py`** | GitHub **issues** RAG pipeline (+ `issues_utils.py`) |
-| **`extra/code-pipeline.py`** | GitHub **code/manifests** RAG pipeline (+ `code_utils.py`) |
 | **`legacy/pipelines/`** (repo root) | Older pipelines, including **incremental** docs ingest — **not** the live v4 docs path |
 
 ## Docs pipeline (core)
@@ -34,16 +33,16 @@ python kubeflow-pipeline.py
 
 Key defaults: `target_tokens=350`, `overlap_tokens=50`, 768-d dense vectors, explicit `clean_rebuild` confirmation for destructive drops.
 
-## Extra pipelines
+## Issues and code pipelines
 
 Compile from the pipelines directory (same as CI):
 
 ```bash
-python extra/issues-pipeline.py
-python extra/code-pipeline.py
+python issues-pipeline.py
+python code-pipeline.py
 ```
 
-These pipelines are self-contained KFP components with helpers in `extra/*_utils.py` for unit tests.
+These pipelines are self-contained KFP components. Parsers and test helpers live in `utils/issues_utils.py` and `utils/code_utils.py`.
 
 ## Incremental docs ingest
 

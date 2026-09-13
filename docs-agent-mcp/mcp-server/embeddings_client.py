@@ -7,8 +7,6 @@ from typing import Sequence
 
 import requests
 
-import otel_obs
-
 DEFAULT_EMBEDDINGS_URL = "http://embeddings-service-predictor.ml-infra.svc.cluster.local/embed"
 DEFAULT_TIMEOUT_SEC = int(os.getenv("EMBEDDINGS_TIMEOUT_SEC", "60"))
 # TEI all-mpnet-base-v2: each input must be <384 tokens.
@@ -55,13 +53,4 @@ def embed_texts(
 
 def embed_query(query: str, **kwargs) -> list[float]:
     """Embed a single search query."""
-    url = kwargs.get("url") or os.getenv("EMBEDDINGS_URL") or DEFAULT_EMBEDDINGS_URL
-    model = os.getenv("EMBEDDINGS_MODEL", "sentence-transformers/all-mpnet-base-v2")
-    with otel_obs.embedding_span(query, url=str(url or ""), model=model) as span:
-        vector = embed_texts([query], **kwargs)[0]
-        if span is not None:
-            span.set_attribute("embedding.dimension", len(vector))
-            otel_obs.set_span_attributes(
-                span, {otel_obs.ATTR_LANGFUSE_OUTPUT: f'{{"dimension": {len(vector)}}}'}
-            )
-        return vector
+    return embed_texts([query], **kwargs)[0]

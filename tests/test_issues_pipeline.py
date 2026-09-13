@@ -1,4 +1,4 @@
-"""Tests for GitHub issues pipeline utilities (docs-agent-mcp/pipelines/issues_utils.py).
+"""Tests for GitHub issues pipeline utilities (docs-agent-mcp/pipelines/utils/issues_utils.py).
 
 Tests the pure-Python metadata parsing and chunking logic extracted
 from the chunk_and_embed_issues KFP component for testability.
@@ -7,8 +7,9 @@ from the chunk_and_embed_issues KFP component for testability.
 import sys
 from pathlib import Path
 
-PIPELINES_DIR = Path(__file__).parent.parent / "docs-agent-mcp" / "pipelines" / "extra"
-sys.path.insert(0, str(PIPELINES_DIR))
+PIPELINES_DIR = Path(__file__).parent.parent / "docs-agent-mcp" / "pipelines"
+UTILS_DIR = PIPELINES_DIR / "utils"
+sys.path.insert(0, str(UTILS_DIR))
 
 from issues_utils import (
     build_issue_record,

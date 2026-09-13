@@ -28,6 +28,19 @@ spec:
   model: qwen2.5-7B
   openAI:
     baseUrl: "http://qwen-llm-stable.ml-infra.svc.cluster.local/openai/v1"
+    # Left unset, vLLM falls back to Qwen's packaged generation config
+    # (temperature 0.7 / top_p 0.8), which is tuned for conversational variety.
+    # At that setting the model drifted mid-sentence into Chinese inside a code
+    # block and asserted Katib is not part of Kubeflow. Retrieval-grounded
+    # answers want near-greedy decoding instead.
+    temperature: "0.1"
+    topP: "0.9"
+    # Bound anonymous/public generations even if a prompt asks for excessive output.
+    maxTokens: 1024
+    # Generation of a long grounded answer on a 7B model runs past the client's
+    # default deadline, which cut the stream mid-token and left the turn with no
+    # final aggregated message. Matches the Knative revision timeout upstream.
+    timeout: 300
 
 ---
 apiVersion: kagent.dev/v1alpha2

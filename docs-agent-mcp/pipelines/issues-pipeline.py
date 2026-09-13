@@ -10,15 +10,15 @@ and only regex-parses markdown as a legacy fallback.
 
 Components are self-contained per KFP convention (KFP @dsl.component
 functions cannot import sibling modules). Keep the mirrored helpers in
-issues_utils.py in sync for unit tests.
+utils/issues_utils.py in sync for unit tests.
 """
 
 import sys
 from pathlib import Path
 
-_PIPELINES_DIR = Path(__file__).resolve().parent.parent
-if str(_PIPELINES_DIR) not in sys.path:
-    sys.path.insert(0, str(_PIPELINES_DIR))
+_UTILS_DIR = Path(__file__).resolve().parent / "utils"
+if str(_UTILS_DIR) not in sys.path:
+    sys.path.insert(0, str(_UTILS_DIR))
 
 import kfp
 import kfp.kubernetes as k8s

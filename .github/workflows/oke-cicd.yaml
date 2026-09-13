@@ -55,8 +55,8 @@ jobs:
         working-directory: docs-agent-mcp/pipelines
         run: |
           python kubeflow-pipeline.py
-          python extra/issues-pipeline.py
-          python extra/code-pipeline.py
+          python issues-pipeline.py
+          python code-pipeline.py
 
       - name: Lint and render Helm charts
         run: |

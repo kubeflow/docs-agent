@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 
 PIPELINES_DIR = Path(__file__).parent.parent / "docs-agent-mcp" / "pipelines"
-sys.path.insert(0, str(PIPELINES_DIR))
+UTILS_DIR = PIPELINES_DIR / "utils"
+sys.path.insert(0, str(UTILS_DIR))
 
 from canonical_rag_ingest import (  # noqa: E402
     PARSER_VERSION,

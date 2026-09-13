@@ -2,7 +2,7 @@ import pytest
 import sys
 import os
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '../docs-agent-mcp/pipelines'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '../docs-agent-mcp/pipelines/utils'))
 from hugo_ingest import clean_hugo_markdown, parse_frontmatter, process_html_table
 
 def test_frontmatter_extraction():
