@@ -97,7 +97,10 @@ def _search_collection(
     }
     if filter_expr:
         search_params["filter"] = filter_expr
-    return client.search(**search_params)[0]
+    try:
+        return client.search(**search_params)[0]
+    except Exception as e:
+        raise RuntimeError(f"Milvus search failed for {collection_name}: {e}") from e
 
 
 def _safe_filter_value(name: str, value: str) -> str:
