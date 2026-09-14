@@ -1009,7 +1009,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             if (currentMessageDiv) {
                 const paragraph = currentMessageDiv.querySelector('p');
                 if (paragraph) {
-                    const formattedText = formatMarkdown(currentMessageContent.trim());
+                    const formattedText = formatChatMarkdown(currentMessageContent.trim());
                     paragraph.innerHTML = formattedText + `<div class="interrupted-badge"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg> Response interrupted by user</div>`;
                 }
                 // Render any pending citations that were found before stopping
@@ -1330,7 +1330,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         const pillHtml = `
             <div class="flo-tool-status" id="active-tool-status">
                 <div class="flo-tool-status-icon">${iconSvg}</div>
-                <span class="flo-tool-status-text">${escapeHtml(text)}</span>
+                <span class="flo-tool-status-text">${escapeMarkdownHtml(text)}</span>
             </div>
         `;
 
@@ -1955,8 +1955,8 @@ document.addEventListener('DOMContentLoaded', async function() {
                         </svg>
                     </div>
                     <div class="citation-pill-text">
-                        <span class="citation-pill-title">${escapeHtml(info.title)}</span>
-                        <span class="citation-pill-sub">${escapeHtml(info.domain)}</span>
+                        <span class="citation-pill-title">${escapeMarkdownHtml(info.title)}</span>
+                        <span class="citation-pill-sub">${escapeMarkdownHtml(info.domain)}</span>
                     </div>
                 </div>
                 <span class="citation-external-icon">
