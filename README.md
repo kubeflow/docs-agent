@@ -313,14 +313,6 @@ kubectl create rolebinding kfp-to-milvus-editor \
 
 **Note**: Without these permissions, you'll encounter RBAC errors during the embedding phase.
 
-#### Future Improvements
-
-A better improvement would be using the embedding model as a service where users could call the service instead of installing heavy sentence transformers package every time. This would:
-
-- Reduce pipeline execution time
-- Lower resource requirements
-- Enable better caching and optimization
-- Improve scalability
 
 ### API Server
 
@@ -430,10 +422,10 @@ data: {"type": "done"}
 3. **Start the API Server**:
    ```bash
    # WebSocket API
-   python server/app.py
+   python legacy/server/app.py
 
    # HTTPS API
-   python server-https/app.py
+   python legacy/server-https/app.py
    ```
 
 ### API Usage Examples
@@ -641,7 +633,7 @@ if data.get('citations'):
 </tr>
 <tr>
 <td><code>milvus_host</code></td>
-<td><code>milvus-standalone-final.docs-agent.svc.cluster.local</code></td>
+<td><code>my-release-milvus.docs-agent.svc.cluster.local</code></td>
 <td>Milvus host (used by <code>kubeflow-pipeline.py</code> and <code>incremental-pipeline.py</code>)</td>
 </tr>
 </tbody>
