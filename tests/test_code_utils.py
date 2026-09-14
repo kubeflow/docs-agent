@@ -27,10 +27,12 @@ def load_code_pipeline_module():
 
 
 class FakeResponse:
-    def __init__(self, payload):
+    def __init__(self, payload=None, text="", status_code=200, headers=None):
         self.payload = payload
-        self.status_code = 200
-        self.headers = {}
+        self.text = text
+        self.content = text.encode("utf-8")
+        self.status_code = status_code
+        self.headers = headers or {}
 
     def json(self):
         return self.payload
@@ -45,6 +47,7 @@ def test_code_pipeline_preserves_github_canonical_citation_url(monkeypatch, tmp_
     source_url = "https://github.com/kubeflow/katib/blob/master/examples/v1beta1/hp-tuning/random.yaml"
     contents_url = "https://api.github.com/repos/kubeflow/katib/contents/examples/v1beta1/hp-tuning"
     file_api_url = "https://api.github.com/repos/kubeflow/katib/contents/random.yaml"
+    raw_url = "https://raw.githubusercontent.com/kubeflow/katib/master/examples/v1beta1/hp-tuning/random.yaml"
     yaml_text = "apiVersion: kubeflow.org/v1beta1\nkind: Experiment\nmetadata:\n  name: random\n"
 
     def fake_get(url, params=None, headers=None):
@@ -56,6 +59,7 @@ def test_code_pipeline_preserves_github_canonical_citation_url(monkeypatch, tmp_
                         "name": "random.yaml",
                         "path": "examples/v1beta1/hp-tuning/random.yaml",
                         "url": file_api_url,
+                        "download_url": raw_url,
                         "html_url": source_url,
                     }
                 ]
@@ -67,6 +71,8 @@ def test_code_pipeline_preserves_github_canonical_citation_url(monkeypatch, tmp_
                     "html_url": source_url,
                 }
             )
+        if url == raw_url:
+            return FakeResponse(text=yaml_text)
         raise AssertionError(f"Unexpected GitHub URL: {url}")
 
     monkeypatch.setattr("requests.get", fake_get)
@@ -267,3 +273,140 @@ class TestChunkCodeFile:
             assert chunk["resource_name"] == "large-config"
             assert chunk["resource_namespace"] == "kubeflow"
             assert chunk["file_type"] == "yaml"
+
+
+def test_code_pipeline_downloads_files_over_the_contents_api_size_cap(monkeypatch, tmp_path):
+    """Above 1 MiB the Contents API returns no content, so the raw URL must be used."""
+    module = load_code_pipeline_module()
+    contents_url = "https://api.github.com/repos/kubeflow/manifests/contents/applications/kserve"
+    file_api_url = "https://api.github.com/repos/kubeflow/manifests/contents/kserve.yaml"
+    raw_url = "https://raw.githubusercontent.com/kubeflow/manifests/master/applications/kserve/kserve.yaml"
+    html_url = "https://github.com/kubeflow/manifests/blob/master/applications/kserve/kserve.yaml"
+    yaml_text = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: kserve\n" + ("# padding\n" * 2000)
+
+    def fake_get(url, params=None, headers=None):
+        if url == contents_url:
+            return FakeResponse(
+                [
+                    {
+                        "type": "file",
+                        "name": "kserve.yaml",
+                        "path": "applications/kserve/kserve.yaml",
+                        "size": 7051337,
+                        "url": file_api_url,
+                        "download_url": raw_url,
+                        "html_url": html_url,
+                    }
+                ]
+            )
+        if url == file_api_url:
+            # What GitHub actually answers for a blob over the cap.
+            return FakeResponse({"encoding": "none", "content": "", "html_url": html_url})
+        if url == raw_url:
+            return FakeResponse(text=yaml_text)
+        raise AssertionError(f"Unexpected GitHub URL: {url}")
+
+    monkeypatch.setattr("requests.get", fake_get)
+    downloaded_path = tmp_path / "downloaded.jsonl"
+    module.download_github_code.python_func(
+        repos="kubeflow/manifests",
+        directory_paths="applications/kserve",
+        file_extensions="yaml,yml",
+        github_token="test-token",
+        code_data=SimpleNamespace(path=str(downloaded_path)),
+    )
+
+    downloaded = json.loads(downloaded_path.read_text())
+    assert downloaded["content"] == yaml_text
+    assert downloaded["citation_url"] == html_url
+
+
+def test_code_pipeline_fails_when_a_configured_directory_is_missing(monkeypatch, tmp_path):
+    """A directory that 404s must end the run, not report zero files and succeed."""
+    module = load_code_pipeline_module()
+
+    monkeypatch.setattr("requests.get", lambda url, params=None, headers=None: FakeResponse(status_code=404))
+    monkeypatch.setattr("time.sleep", lambda seconds: None)
+
+    with pytest.raises(RuntimeError, match="HTTP 404"):
+        module.download_github_code.python_func(
+            repos="kubeflow/manifests",
+            directory_paths="apps/katib",
+            file_extensions="yaml,yml",
+            github_token="test-token",
+            code_data=SimpleNamespace(path=str(tmp_path / "downloaded.jsonl")),
+        )
+
+
+def test_code_pipeline_rejects_a_short_embeddings_response(monkeypatch, tmp_path):
+    """A truncated batch would otherwise leave records with no embedding at all."""
+    module = load_code_pipeline_module()
+    source_path = tmp_path / "downloaded.jsonl"
+    source_path.write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "path": f"applications/katib/manifest-{index}.yaml",
+                    "content": f"apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm-{index}\n",
+                    "file_name": f"manifest-{index}.yaml",
+                    "repo": "kubeflow/manifests",
+                    "citation_url": f"https://github.com/kubeflow/manifests/blob/master/m-{index}.yaml",
+                }
+            )
+            for index in range(3)
+        )
+        + "\n"
+    )
+
+    monkeypatch.setattr("requests.post", lambda *args, **kwargs: FakeResponse([[0.1, 0.2]]))
+
+    with pytest.raises(RuntimeError, match="vectors for batch of 3"):
+        module.chunk_and_embed_code.python_func(
+            code_data=SimpleNamespace(path=str(source_path)),
+            chunk_size=1000,
+            chunk_overlap=100,
+            embeddings_service_url="http://embeddings.test/embed",
+            embedding_batch_size=8,
+            embedded_data=SimpleNamespace(path=str(tmp_path / "embedded.jsonl")),
+        )
+
+
+def test_code_pipeline_waits_out_a_secondary_rate_limit(monkeypatch, tmp_path):
+    """A secondary rate limit answers 429 with Retry-After and must be waited out."""
+    module = load_code_pipeline_module()
+    contents_url = "https://api.github.com/repos/kubeflow/manifests/contents/common/istio"
+    raw_url = "https://raw.githubusercontent.com/kubeflow/manifests/master/common/istio/base.yaml"
+    listing = [
+        {
+            "type": "file",
+            "name": "base.yaml",
+            "path": "common/istio/base.yaml",
+            "download_url": raw_url,
+            "html_url": "https://github.com/kubeflow/manifests/blob/master/common/istio/base.yaml",
+        }
+    ]
+    attempts = []
+    waited = []
+
+    def fake_get(url, params=None, headers=None):
+        attempts.append(url)
+        if url == contents_url and attempts.count(contents_url) == 1:
+            return FakeResponse(status_code=429, headers={"Retry-After": "7"})
+        if url == contents_url:
+            return FakeResponse(listing)
+        return FakeResponse(text="apiVersion: v1\nkind: Namespace\nmetadata:\n  name: istio-system\n")
+
+    monkeypatch.setattr("requests.get", fake_get)
+    monkeypatch.setattr("time.sleep", lambda seconds: waited.append(seconds))
+
+    downloaded_path = tmp_path / "downloaded.jsonl"
+    module.download_github_code.python_func(
+        repos="kubeflow/manifests",
+        directory_paths="common/istio",
+        file_extensions="yaml,yml",
+        github_token="test-token",
+        code_data=SimpleNamespace(path=str(downloaded_path)),
+    )
+
+    assert waited == [7]
+    assert json.loads(downloaded_path.read_text())["file_name"] == "base.yaml"
