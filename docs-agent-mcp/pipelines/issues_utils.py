@@ -9,6 +9,9 @@ download_github_issues emits JSONL records that carry both:
 from __future__ import annotations
 
 import re
+import sys
+
+from utils import MAX_TEI_INPUT_CHARS
 from typing import Any
 
 
@@ -154,7 +157,7 @@ def parse_issue_metadata(content: str) -> dict:
     labels_match = re.search(r'\*\*Labels:\*\*[ \t]*(.*)', content)
     state_match = re.search(r'\*\*State:\*\*\s*(\w+)', content)
 
-    return {
+    metadata = {
         "title": title_match.group(1).strip() if title_match else "",
         "repo_name": repo_match.group(1).strip() if repo_match else "",
         "issue_number": int(number_match.group(1)) if number_match else 0,
@@ -162,6 +165,17 @@ def parse_issue_metadata(content: str) -> dict:
         "issue_labels": labels_match.group(1).strip() if labels_match else "",
         "citation_url": url_match.group(1).strip() if url_match else "",
     }
+
+    if metadata["issue_number"] == 0 and not any(
+        v for k, v in metadata.items() if k != "issue_number"
+    ):
+        print(
+            "WARNING: Failed to parse GitHub issue metadata. "
+            "Upstream markdown format may have changed.",
+            file=sys.stderr,
+        )
+
+    return metadata
 
 
 def resolve_issue_metadata(record: dict[str, Any] | str) -> dict[str, Any]:
@@ -274,7 +288,7 @@ def issue_content_segments(record: dict[str, Any]) -> list[str]:
 def split_issue_into_chunks(
     content: str,
     metadata_prefix: str,
-    chunk_size: int = 1500,
+    chunk_size: int = 1000,
     chunk_overlap: int = 150,
 ) -> list[str]:
     """Split issue content into chunks at comment boundaries.
@@ -288,7 +302,9 @@ def split_issue_into_chunks(
     Args:
         content: Full issue content string.
         metadata_prefix: Prefix to prepend to each chunk.
-        chunk_size: Maximum chunk size in characters.
+        chunk_size: Maximum chunk size in characters. Clamped to
+            MAX_TEI_INPUT_CHARS so every chunk is short enough that its
+            full text is actually embedded, not silently truncated by TEI.
         chunk_overlap: Overlap between subdivided chunks.
 
     Returns:
@@ -313,7 +329,10 @@ def split_segments_into_chunks(
     """Chunk pre-split body/comment segments, prefixing each chunk."""
     from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-    effective_size = chunk_size - len(metadata_prefix)
+    # Available space for content after prefix. Clamp chunk_size to the TEI
+    # embedding limit so the embedding step (which truncates at
+    # MAX_TEI_INPUT_CHARS) never sees less text than what's actually stored.
+    effective_size = min(chunk_size, MAX_TEI_INPUT_CHARS) - len(metadata_prefix)
     if effective_size < 100:
         effective_size = 100
 

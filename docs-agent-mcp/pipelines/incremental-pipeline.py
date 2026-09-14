@@ -3,12 +3,11 @@ from kfp import dsl
 from kfp.dsl import *
 from typing import *
 
+from utils import DEFAULT_EMBEDDING_BATCH_SIZE, DOCS_COLLECTION
 try:
     import kfp.kubernetes as k8s
 except ImportError:  # pragma: no cover - optional at compile time
     k8s = None
-
-from utils import DEFAULT_EMBEDDING_BATCH_SIZE, DOCS_COLLECTION
 
 @dsl.component(
     base_image="docker.io/library/python:3.9",
