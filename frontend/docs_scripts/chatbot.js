@@ -343,6 +343,10 @@ function escapeMarkdownHtml(text) {
     });
 }
 
+function isSessionEndpointUnsupported(status) {
+    return status === 404 || status === 405;
+}
+
 // Small, dependency-free Markdown subset used by streamed and completed chat
 // messages. Code is protected before other formatting so YAML and shell
 // snippets are never interpreted as links or replacement-string tokens.
@@ -910,15 +914,19 @@ document.addEventListener('DOMContentLoaded', async function() {
             const requestedAt = Date.now();
             const response = await fetch(getSessionUrl(), { method: 'POST' });
             if (!response.ok) {
-                sessionEndpointAvailable = false;
+                if (isSessionEndpointUnsupported(response.status)) {
+                    sessionEndpointAvailable = false;
+                }
                 return null;
             }
             const data = await response.json();
-            sessionToken = data.access_token;
+            if (!data || typeof data.access_token !== 'string' || !data.access_token.trim()) {
+                return null;
+            }
+            sessionToken = data.access_token.trim();
             sessionExpiresAt = computeSessionExpiry(data, requestedAt);
             return sessionToken;
         } catch (e) {
-            sessionEndpointAvailable = false; // Mark unavailable for rest of session
             return null;
         }
     }
@@ -934,11 +942,12 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (isSessionTokenFresh()) {
             return sessionToken;
         }
+        const fallbackToken = isSessionTokenUsable() ? sessionToken : null;
 
         if (!sessionFetch) {
             sessionFetch = fetchSessionToken().finally(() => { sessionFetch = null; });
         }
-        return await sessionFetch;
+        return (await sessionFetch) || fallbackToken;
     }
 
     // POST to the agent with a session token attached.
@@ -960,7 +969,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         } catch (error) {}
 
         let response = await send(token);
-        if (token && (response.status === 401 || response.status === 403)) {
+        if (sessionEndpointAvailable && (response.status === 401 || response.status === 403)) {
             response = await send(await getSessionToken({ forceRefresh: true }));
         }
         return response;

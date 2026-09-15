@@ -38,6 +38,30 @@ process.stdout.write(context.formatChatMarkdown(
     return completed.stdout
 
 
+def session_endpoint_is_unsupported(status: int) -> bool:
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for widget session tests")
+
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const source = fs.readFileSync({json.dumps(str(CHATBOT_JS))}, 'utf8');
+const prelude = source.split("document.addEventListener('DOMContentLoaded'")[0];
+const context = {{}};
+vm.createContext(context);
+vm.runInContext(prelude, context);
+process.stdout.write(String(context.isSessionEndpointUnsupported({status})));
+"""
+    completed = subprocess.run(
+        [node, "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout == "true"
+
+
 def run_sse_parser(chunks: list[str]) -> dict:
     node = shutil.which("node")
     if not node:
@@ -79,6 +103,16 @@ def test_linkifies_only_http_sources_with_safe_anchor_attributes():
         'target="_blank" rel="noopener noreferrer">Katib Experiment</a>'
     )
     assert run_formatter("[unsafe](javascript:alert(1))") == ("[unsafe](javascript:alert(1))")
+
+
+@pytest.mark.parametrize("status", [404, 405])
+def test_session_endpoint_disables_only_when_unsupported(status):
+    assert session_endpoint_is_unsupported(status)
+
+
+@pytest.mark.parametrize("status", [0, 400, 401, 403, 408, 429, 500, 502, 503, 504])
+def test_session_endpoint_keeps_retrying_after_transient_failures(status):
+    assert not session_endpoint_is_unsupported(status)
 
 
 def test_escapes_markdown_link_label_and_query_delimiter():
