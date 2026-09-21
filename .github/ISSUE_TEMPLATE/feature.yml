@@ -1,0 +1,50 @@
+name: Feature request
+description: Propose a change to the docs-agent stack
+title: "feat(<area>): "
+labels: ["kind/feature", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Title format is `feat(<area>): <summary>`.
+
+        Areas: `mcp`, `pipelines`, `frontend`, `kagent`, `gateway`, `terraform`, `embeddings`, `ci`, `tests`, `docs`, `infra`.
+
+        Router, MCP tool contracts, kagent system prompts, and golden-dataset
+        design are maintainer-owned. Open a discussion issue first.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - mcp
+        - pipelines
+        - frontend
+        - kagent
+        - gateway
+        - terraform
+        - embeddings
+        - ci
+        - tests
+        - docs
+        - infra
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is missing or painful today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: Desired outcome and a rough file-level scope.
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: Definition of done

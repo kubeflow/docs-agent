@@ -1,0 +1,56 @@
+name: Bug report
+description: Report a bug in the docs-agent stack
+title: "bug(<area>): "
+labels: ["kind/bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Title format is `bug(<area>): <summary>`.
+
+        Areas: `mcp`, `pipelines`, `frontend`, `kagent`, `gateway`, `terraform`, `embeddings`, `ci`, `tests`, `docs`, `infra`.
+
+        Examples: `bug(mcp): search_github_issues ignores state filter`, `bug(frontend): widget drops citations`.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - mcp
+        - pipelines
+        - frontend
+        - kagent
+        - gateway
+        - terraform
+        - embeddings
+        - ci
+        - tests
+        - docs
+        - infra
+    validations:
+      required: true
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened
+      description: Actual behavior. Paste errors and logs.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Steps, environment (cluster / local), and versions.
+    validations:
+      required: true
+  - type: input
+    id: files
+    attributes:
+      label: Suspected files
+      description: Paths from docs/agents/architecture.md if you know them.

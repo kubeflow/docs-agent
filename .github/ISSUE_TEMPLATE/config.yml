@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Architecture map
+    url: https://github.com/kubeflow/docs-agent/blob/main/docs/agents/architecture.md
+    about: Layer and file map used by issue triage (area/mcp, area/pipelines, …)
+  - name: GSoC 2026 spec
+    url: https://github.com/kubeflow/docs-agent/blob/main/gsoc2026_agentic_rag.md
+    about: Target architecture and graduation criteria

@@ -1,0 +1,205 @@
+{
+  "title_pattern": "^(bug|chore|feat|docs|test|ci|security)\\(([a-z0-9-]+)\\):\\s*(\\S.*)$",
+  "always_read": [
+    "docs/agents/architecture.md",
+    "docs/agents/triage-labels.md",
+    "gsoc2026_agentic_rag.md"
+  ],
+  "types": {
+    "bug": {"kind_label": "kind/bug"},
+    "feat": {"kind_label": "kind/feature"},
+    "chore": {"kind_label": "kind/chore"},
+    "docs": {"kind_label": "kind/docs"},
+    "test": {"kind_label": "kind/chore", "extra_labels": ["area/tests"]},
+    "ci": {"kind_label": "kind/chore", "extra_labels": ["area/ci"]},
+    "security": {"kind_label": "kind/security"}
+  },
+  "aliases": {
+    "mcp-server": "mcp",
+    "fastmcp": "mcp",
+    "retrieval": "mcp",
+    "kfp": "pipelines",
+    "ingestion": "pipelines",
+    "etl": "pipelines",
+    "chatbot": "frontend",
+    "widget": "frontend",
+    "ingress": "gateway",
+    "istio": "gateway",
+    "helm": "gateway",
+    "session": "gateway",
+    "jwt": "gateway",
+    "tei": "embeddings",
+    "embedding": "embeddings",
+    "vector": "embeddings",
+    "milvus": "infra",
+    "kserve": "infra",
+    "vllm": "infra",
+    "terraform": "terraform",
+    "tf": "terraform",
+    "iac": "terraform",
+    "github-actions": "ci",
+    "workflow": "ci",
+    "readme": "docs"
+  },
+  "areas": {
+    "mcp": {
+      "label": "area/mcp",
+      "layer": "4. Middle Agent and Router",
+      "notes": "FastMCP tools, Streamable HTTP /mcp, read-only retrieval, citation formatting.",
+      "files": [
+        "docs-agent-mcp/mcp-server/server.py",
+        "docs-agent-mcp/mcp-server/embeddings_client.py",
+        "docs-agent-mcp/mcp-server/rag_collections.py",
+        "docs-agent-mcp/mcp-server/smoke_tools.py",
+        "docs-agent-mcp/mcp-server/Dockerfile",
+        "docs-agent-mcp/manifests/mcp-server/mcp-server.yaml"
+      ]
+    },
+    "pipelines": {
+      "label": "area/pipelines",
+      "layer": "2. Ingestion Pipelines",
+      "notes": "KFP docs/issues/code/incremental ETL into Milvus. Delete-by-id, schema version guard.",
+      "files": [
+        "docs-agent-mcp/pipelines/kubeflow-pipeline.py",
+        "docs-agent-mcp/pipelines/issues-pipeline.py",
+        "docs-agent-mcp/pipelines/code-pipeline.py",
+        "docs-agent-mcp/pipelines/incremental-pipeline.py",
+        "docs-agent-mcp/pipelines/utils.py",
+        "docs-agent-mcp/pipelines/issues_utils.py",
+        "docs-agent-mcp/pipelines/code_utils.py",
+        "docs-agent-mcp/pipelines/README.md"
+      ]
+    },
+    "frontend": {
+      "label": "area/frontend",
+      "layer": "5. Frontend and Interface",
+      "notes": "Docs-site chat widget. Citations, session JWT client, no golden-dataset feedback yet.",
+      "files": [
+        "frontend/docs_scripts/chatbot.js",
+        "frontend/docs_styles/chatbot.css",
+        "frontend/README.md"
+      ]
+    },
+    "kagent": {
+      "label": "area/kagent",
+      "layer": "4. Middle Agent and Router",
+      "notes": "Agent, ModelConfig, RemoteMCPServer CRDs. Prompt-level routing, not a semantic router.",
+      "files": [
+        "docs-agent-mcp/manifests/kagent/setup.yaml",
+        "docs-agent-mcp/terraform/kagent.tf"
+      ]
+    },
+    "gateway": {
+      "label": "area/gateway",
+      "layer": "5. Frontend and Interface",
+      "notes": "Istio edge: TLS, CORS, 60 req/min, 30s timeout, anonymous session JWTs.",
+      "files": [
+        "docs-agent-mcp/charts/gateway-guardrails/README.md",
+        "docs-agent-mcp/charts/gateway-guardrails/values.yaml",
+        "docs-agent-mcp/charts/gateway-guardrails/Chart.yaml",
+        "docs-agent-mcp/terraform/gateway_guardrails.tf",
+        "docs-agent-mcp/session-issuer/main.py",
+        "docs-agent-mcp/session-issuer/issuer_core.py"
+      ]
+    },
+    "terraform": {
+      "label": "area/terraform",
+      "layer": "1. Infrastructure and Deployments",
+      "notes": "Idempotent platform stack: namespaces, Knative/KServe, Milvus, TEI, KFP, kagent, edge chart.",
+      "files": [
+        "docs-agent-mcp/terraform/variables.tf",
+        "docs-agent-mcp/terraform/namespaces.tf",
+        "docs-agent-mcp/terraform/knative.tf",
+        "docs-agent-mcp/terraform/milvus.tf",
+        "docs-agent-mcp/terraform/embeddings.tf",
+        "docs-agent-mcp/terraform/kubeflow_pipelines.tf",
+        "docs-agent-mcp/terraform/kagent.tf",
+        "docs-agent-mcp/terraform/gateway_guardrails.tf"
+      ]
+    },
+    "embeddings": {
+      "label": "area/embeddings",
+      "layer": "3. Backend Vector Database",
+      "notes": "Shared TEI InferenceService, 768-d all-mpnet-base-v2. Character vs token truncation is a live gap.",
+      "files": [
+        "docs-agent-mcp/mcp-server/embeddings_client.py",
+        "docs-agent-mcp/pipelines/utils.py",
+        "docs-agent-mcp/terraform/embeddings.tf"
+      ]
+    },
+    "ci": {
+      "label": "area/ci",
+      "layer": "CI/CD",
+      "notes": "PR safety plus optional OKE deploy. Pipeline is not yet the only way to ship cluster changes.",
+      "files": [
+        ".github/workflows/tests.yml",
+        ".github/workflows/oke-cicd.yaml"
+      ]
+    },
+    "tests": {
+      "label": "area/tests",
+      "layer": "Tests",
+      "notes": "pytest for MCP, pipelines, session issuer. No golden-dataset regression suite yet.",
+      "files": [
+        "tests/test_mcp_server.py",
+        "tests/test_mcp_smoke_tools.py",
+        "tests/test_pipeline_utils.py",
+        "tests/test_issues_pipeline.py",
+        "tests/test_code_utils.py",
+        "tests/test_session_issuer.py"
+      ]
+    },
+    "docs": {
+      "label": "area/docs",
+      "layer": "Repository documentation",
+      "notes": "Root README still mixes legacy FastAPI with the MCP/kagent path.",
+      "files": [
+        "README.md",
+        "CONTRIBUTING.md",
+        "docs-agent-mcp/README.md",
+        "gsoc2026_agentic_rag.md"
+      ]
+    },
+    "infra": {
+      "label": "area/infra",
+      "layer": "1. Infrastructure and Deployments",
+      "notes": "Milvus, KServe/vLLM, Istio mesh policies, namespace split (ml-infra / docs-agent / kubeflow).",
+      "files": [
+        "docs-agent-mcp/terraform/milvus.tf",
+        "docs-agent-mcp/terraform/knative.tf",
+        "docs-agent-mcp/terraform/namespaces.tf",
+        "docs-agent-mcp/manifests/vllm/kserve-qwen.yaml",
+        "docs-agent-mcp/manifests/istio/allow-milvus-standalone.yaml",
+        "docs-agent-mcp/charts/gateway-guardrails/templates/mesh-authz.yaml"
+      ]
+    }
+  },
+  "allowed_labels": [
+    "kind/bug",
+    "kind/feature",
+    "kind/chore",
+    "kind/docs",
+    "kind/security",
+    "area/mcp",
+    "area/pipelines",
+    "area/frontend",
+    "area/kagent",
+    "area/gateway",
+    "area/terraform",
+    "area/embeddings",
+    "area/ci",
+    "area/tests",
+    "area/docs",
+    "area/infra",
+    "needs-triage",
+    "needs-info",
+    "good first issue",
+    "help wanted",
+    "maintainer-only",
+    "gsoc-2026",
+    "priority/p0",
+    "priority/p1",
+    "priority/p2",
+    "duplicate"
+  ]
+}

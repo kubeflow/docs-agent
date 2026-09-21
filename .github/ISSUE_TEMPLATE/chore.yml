@@ -1,0 +1,35 @@
+name: Chore or docs
+description: Cleanup, CI, tests, or documentation
+title: "chore(<area>): "
+labels: ["kind/chore", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use `chore(<area>):`, `docs(<area>):`, `test(<area>):`, or `ci(<area>):`
+        in the title. Areas match `docs/agents/triage-labels.md`.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - mcp
+        - pipelines
+        - frontend
+        - kagent
+        - gateway
+        - terraform
+        - embeddings
+        - ci
+        - tests
+        - docs
+        - infra
+    validations:
+      required: true
+  - type: textarea
+    id: work
+    attributes:
+      label: Work
+      description: What should change, and which files?
+    validations:
+      required: true

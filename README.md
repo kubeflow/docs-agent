@@ -26,6 +26,7 @@ The official LLM implementation of the Kubeflow Documentation Assistant powered 
 | Path | Purpose |
 |------|---------|
 | `docs-agent-mcp/` | MCP server, Kagent manifests, RAG pipelines, and Terraform platform stack |
+| `docs/agents/` | Issue-triage instruction Markdown, labels (`area/mcp`, …), architecture map |
 | `legacy/` | Historical FastAPI servers, older manifests, and Feast-era pipeline copies |
 | `frontend/` | Docs site chatbot assets (`docs_scripts/`, `docs_styles/`) |
 | `.github/workflows/` | CI/CD (`oke-cicd.yaml` builds MCP, runs tests, deploys to OKE) |
