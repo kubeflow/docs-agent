@@ -38,6 +38,30 @@ process.stdout.write(context.formatChatMarkdown(
     return completed.stdout
 
 
+def normalize_citation_url(url) -> str:
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for widget citation tests")
+
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const source = fs.readFileSync({json.dumps(str(CHATBOT_JS))}, 'utf8');
+const prelude = source.split("document.addEventListener('DOMContentLoaded'")[0];
+const context = {{ URL }};
+vm.createContext(context);
+vm.runInContext(prelude, context);
+process.stdout.write(context.normalizeCitationUrl({json.dumps(url)}));
+"""
+    completed = subprocess.run(
+        [node, "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout
+
+
 def run_sse_parser(chunks: list[str]) -> dict:
     node = shutil.which("node")
     if not node:
@@ -79,6 +103,30 @@ def test_linkifies_only_http_sources_with_safe_anchor_attributes():
         'target="_blank" rel="noopener noreferrer">Katib Experiment</a>'
     )
     assert run_formatter("[unsafe](javascript:alert(1))") == ("[unsafe](javascript:alert(1))")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "javascript:alert(1)",
+        "data:text/html,<script>alert(1)</script>",
+        "file:///etc/passwd",
+        "blob:https://example.test/id",
+        "//example.test/docs",
+        "not a URL",
+        "",
+        None,
+    ],
+)
+def test_rejects_unsafe_or_malformed_citation_urls(url):
+    assert normalize_citation_url(url) == ""
+
+
+@pytest.mark.parametrize("scheme", ["http", "https"])
+def test_accepts_absolute_http_citation_urls(scheme):
+    url = f"{scheme}://www.kubeflow.org/docs/components/katib/?q=search#result"
+
+    assert normalize_citation_url(url) == url
 
 
 def test_escapes_markdown_link_label_and_query_delimiter():

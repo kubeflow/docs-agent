@@ -343,6 +343,17 @@ function escapeMarkdownHtml(text) {
     });
 }
 
+function normalizeCitationUrl(value) {
+    if (typeof value !== 'string' || !value.trim()) return '';
+
+    try {
+        const parsed = new URL(value.trim());
+        return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : '';
+    } catch (error) {
+        return '';
+    }
+}
+
 // Small, dependency-free Markdown subset used by streamed and completed chat
 // messages. Code is protected before other formatting so YAML and shell
 // snippets are never interpreted as links or replacement-string tokens.
@@ -1819,6 +1830,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             title = citation.title || '';
         }
 
+        url = normalizeCitationUrl(url);
         if (!url && !rawFile) return null;
 
         // Friendly title calculation
