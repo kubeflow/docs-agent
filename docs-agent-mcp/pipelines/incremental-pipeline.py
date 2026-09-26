@@ -1,3 +1,10 @@
+import sys
+from pathlib import Path
+
+_UTILS_DIR = Path(__file__).resolve().parent / "utils"
+if str(_UTILS_DIR) not in sys.path:
+    sys.path.insert(0, str(_UTILS_DIR))
+
 import kfp
 from kfp import dsl
 from kfp.dsl import *

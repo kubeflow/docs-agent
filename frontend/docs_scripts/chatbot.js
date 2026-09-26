@@ -330,8 +330,40 @@ function createChatbotElements() {
     }
 }
 
+const CITATION_MARKDOWN_LINK_RE = /\[([^\]]*)\]\(\s*https?:\/\/[^\s)]+\s*\)/gi;
+const CITATION_BARE_URL_RE = /https?:\/\/[^\s<>)\]]+/gi;
+
+function citationUrl(citation) {
+    if (!citation) return '';
+    if (typeof citation === 'string') return citation.trim();
+    return String(citation.url || citation.link || citation.href || '').trim();
+}
+
+function sanitizeAnswerText(text) {
+    if (!text) return '';
+    let cleaned = text;
+    cleaned = cleaned.replace(new RegExp(CITATION_MARKDOWN_LINK_RE.source, 'gi'), '$1');
+    cleaned = cleaned.replace(new RegExp(CITATION_BARE_URL_RE.source, 'gi'), '');
+    cleaned = cleaned.replace(/\[\s*\]\(\s*\)/g, '');
+    cleaned = cleaned.replace(/[ \t]+\n/g, '\n');
+    cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+    return cleaned.trim();
+}
+
+function cloneCitationsForHistory(citations) {
+    const seen = new Set();
+    const out = [];
+    for (const citation of citations || []) {
+        const url = citationUrl(citation);
+        if (!url || seen.has(url)) continue;
+        seen.add(url);
+        out.push(typeof citation === 'string' ? { url: citation } : { ...citation });
+    }
+    return out;
+}
+
 function escapeMarkdownHtml(text) {
-    return String(text).replace(/[&<>"']/g, function(character) {
+    return String(text).replace(/[&<>"']/g, function (character) {
         const entities = {
             '&': '&amp;',
             '<': '&lt;',
@@ -343,9 +375,8 @@ function escapeMarkdownHtml(text) {
     });
 }
 
-// Small, dependency-free Markdown subset used by streamed and completed chat
-// messages. Code is protected before other formatting so YAML and shell
-// snippets are never interpreted as links or replacement-string tokens.
+// Protect fences first, then strip prose URLs. Links belong in Sources, not
+// the bubble — but kubectl/YAML inside ``` must keep their https:// lines.
 function formatChatMarkdown(text, isStreaming = false) {
     if (!text) return '';
 
@@ -363,48 +394,37 @@ function formatChatMarkdown(text, isStreaming = false) {
         return placeholder;
     }
 
-    const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
-    formatted = formatted.replace(codeBlockRegex, function(match, language, code) {
+    formatted = formatted.replace(/```(\w+)?\n([\s\S]*?)```/g, function (match, language, code) {
         return preserveCodeBlock(language, code, !isStreaming);
     });
 
     if (isStreaming) {
         const incompleteCodeRegex = /```(\w+)?\n([\s\S]*)$/;
         if (incompleteCodeRegex.test(formatted) && !formatted.endsWith('```')) {
-            formatted = formatted.replace(incompleteCodeRegex, function(match, language, code) {
+            formatted = formatted.replace(incompleteCodeRegex, function (match, language, code) {
                 return preserveCodeBlock(language, code, false);
             });
         }
     }
 
-    formatted = formatted.replace(/`([^`\n]+)`/g, function(match, code) {
+    formatted = formatted.replace(/`([^`\n]+)`/g, function (match, code) {
         const placeholder = `__INLINE_CODE_${inlineCodePlaceholders.length}__`;
         inlineCodePlaceholders.push(`<code>${escapeMarkdownHtml(code)}</code>`);
         return placeholder;
     });
 
-    // Linkify only explicit http(s) Markdown links. Other schemes remain
-    // visible as text instead of becoming executable browser destinations.
-    formatted = formatted.replace(
-        /\[([^\]\n]+)\]\((https?:\/\/[^\s<>"')]+)\)/gi,
-        function(match, label, url) {
-            return `<a href="${escapeMarkdownHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeMarkdownHtml(label)}</a>`;
-        }
-    );
-
+    formatted = sanitizeAnswerText(formatted);
+    formatted = escapeMarkdownHtml(formatted);
     formatted = formatted.replace(/\n/g, '<br>');
     formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
 
-    inlineCodePlaceholders.forEach(function(inlineCode, index) {
-        formatted = formatted.replace(`__INLINE_CODE_${index}__`, function() {
+    inlineCodePlaceholders.forEach(function (inlineCode, index) {
+        formatted = formatted.replace(`__INLINE_CODE_${index}__`, function () {
             return inlineCode;
         });
     });
-
-    codeBlockPlaceholders.forEach(function(codeBlock, index) {
-        // A function replacement is required: replacement strings interpret
-        // sequences such as $&, $1, and $' that commonly occur in code/YAML.
-        formatted = formatted.replace(`__CODE_BLOCK_${index}__`, function() {
+    codeBlockPlaceholders.forEach(function (codeBlock, index) {
+        formatted = formatted.replace(`__CODE_BLOCK_${index}__`, function () {
             return codeBlock;
         });
     });
@@ -412,10 +432,6 @@ function formatChatMarkdown(text, isStreaming = false) {
     return formatted;
 }
 
-// Incrementally decode Server-Sent Events without assuming that a network
-// chunk ends on a line or event boundary.  `push` returns only complete event
-// payloads; `finish` also flushes one final unterminated frame when the server
-// closes the stream.
 function createSSEFrameParser() {
     let buffer = '';
     let finished = false;
@@ -435,8 +451,6 @@ function createSSEFrameParser() {
             if (field === 'data') {
                 dataLines.push(value);
             } else if (colonIndex === -1) {
-                // Keep compatibility with endpoints that return newline-framed
-                // JSON without the optional SSE `data:` prefix.
                 rawLines.push(line);
             }
         }
@@ -448,15 +462,11 @@ function createSSEFrameParser() {
 
     function drainCompleteFrames(isFinal = false) {
         const payloads = [];
-        // A blank SSE line may use LF, CRLF, or CR. Negative lookahead keeps a
-        // single CRLF from being mistaken for two separate line endings.
         const boundary = /(?:\r\n|\r(?!\n)|\n)(?:\r\n|\r(?!\n)|\n)/;
         let match;
 
         while ((match = boundary.exec(buffer)) !== null) {
             const matchEnd = match.index + match[0].length;
-            // A CR at the current end of the buffer may become the first byte
-            // of CRLF in the next chunk, so defer classifying it until then.
             if (!isFinal && matchEnd === buffer.length && match[0].endsWith('\r')) {
                 break;
             }
@@ -490,7 +500,7 @@ function createSSEFrameParser() {
     };
 }
 
-document.addEventListener('DOMContentLoaded', async function() {
+document.addEventListener('DOMContentLoaded', async function () {
     console.log('Docs Bot Initialized (v1.1.0 - Kagent A2A, configurable URL)');
 
     // Create chatbot HTML structure dynamically and wait for completion
@@ -768,7 +778,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             if (msg.role === 'user') {
                 addMessage(msg.content, 'user');
             } else if (msg.role === 'assistant') {
-                addMessage(msg.content, 'bot');
+                addMessage(msg.content, 'bot', msg.citations || []);
             }
         });
 
@@ -1009,19 +1019,21 @@ document.addEventListener('DOMContentLoaded', async function() {
             if (currentMessageDiv) {
                 const paragraph = currentMessageDiv.querySelector('p');
                 if (paragraph) {
-                    const formattedText = formatMarkdown(currentMessageContent.trim());
+                    const formattedText = formatChatMarkdown(currentMessageContent.trim());
                     paragraph.innerHTML = formattedText + `<div class="interrupted-badge"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg> Response interrupted by user</div>`;
                 }
-                // Render any pending citations that were found before stopping
                 if (pendingCitations.length > 0) {
                     renderCitationsOnDiv(currentMessageDiv, pendingCitations);
                 }
             }
-            // Record in messagesHistory with explicit interruption note
-            messagesHistory.push({
+            const historyEntry = {
                 role: 'assistant',
                 content: currentMessageContent.trim() + ' [Response interrupted by user]'
-            });
+            };
+            if (pendingCitations.length > 0) {
+                historyEntry.citations = cloneCitationsForHistory(pendingCitations);
+            }
+            messagesHistory.push(historyEntry);
         } else if (currentMessageDiv) {
             // Cancelled before any text tokens were generated
             currentMessageDiv.remove();
@@ -1029,6 +1041,7 @@ document.addEventListener('DOMContentLoaded', async function() {
 
         currentMessageDiv = null;
         currentMessageContent = '';
+        pendingCitations = [];
         autoSaveCurrentChat();
         if (userInput) userInput.focus();
     }
@@ -1146,21 +1159,7 @@ document.addEventListener('DOMContentLoaded', async function() {
 
                     try {
                         if (dataStr === '[DONE]') {
-                            if (currentMessageDiv && pendingCitations.length > 0) {
-                                renderCitationsOnDiv(currentMessageDiv, pendingCitations);
-                            }
-                            if (currentMessageContent.trim()) {
-                                messagesHistory.push({
-                                    role: 'assistant',
-                                    content: currentMessageContent.trim()
-                                });
-                            }
-                            currentMessageDiv = null;
-                            currentMessageContent = '';
-                            autoSaveCurrentChat();
-                            removeTypingIndicator();
-                            setStopButtonState(false);
-                            isTyping = false;
+                            finalizeAssistantTurn(messagesHistory);
                             return;
                         }
 
@@ -1266,31 +1265,20 @@ document.addEventListener('DOMContentLoaded', async function() {
                         const turnComplete = messageObj && messageObj.metadata && messageObj.metadata.turn_complete;
 
                         if (isFinal || turnComplete) {
-                            removeToolStatus();
-                            if (currentMessageDiv && pendingCitations.length > 0) {
-                                renderCitationsOnDiv(currentMessageDiv, pendingCitations);
-                            }
-                            if (currentMessageContent.trim()) {
-                                messagesHistory.push({
-                                    role: 'assistant',
-                                    content: currentMessageContent.trim()
-                                });
-                            }
-                            currentMessageDiv = null;
-                            currentMessageContent = '';
-                            autoSaveCurrentChat();
-                            removeTypingIndicator();
-                            setStopButtonState(false);
-                            isTyping = false;
+                            finalizeAssistantTurn(messagesHistory);
                             return;
                         }
                     } catch (parseError) {
-                        // Ignore malformed event payloads; SSE comments and
-                        // heartbeats are filtered by the frame parser.
+                        // Ignore partial / heartbeat lines
                     }
                 }
 
-                if (done) break;
+                if (done) {
+                    if (currentMessageContent || pendingCitations.length > 0) {
+                        finalizeAssistantTurn(messagesHistory);
+                    }
+                    break;
+                }
             }
 
         } catch (error) {
@@ -1368,6 +1356,33 @@ document.addEventListener('DOMContentLoaded', async function() {
         activeStatuses.forEach(el => el.remove());
     }
 
+    function finalizeAssistantTurn(messagesHistory) {
+        removeToolStatus();
+        if (currentMessageDiv && pendingCitations.length > 0) {
+            renderCitationsOnDiv(currentMessageDiv, pendingCitations);
+        }
+
+        const rawContent = currentMessageContent.trim();
+        if (rawContent) {
+            const historyEntry = {
+                role: 'assistant',
+                content: rawContent
+            };
+            if (pendingCitations.length > 0) {
+                historyEntry.citations = cloneCitationsForHistory(pendingCitations);
+            }
+            messagesHistory.push(historyEntry);
+        }
+
+        currentMessageDiv = null;
+        currentMessageContent = '';
+        pendingCitations = [];
+        autoSaveCurrentChat();
+        removeTypingIndicator();
+        setStopButtonState(false);
+        isTyping = false;
+    }
+
     function handleAPIResponse(response) {
         // Handle different response types
         if (response.type === 'system') {
@@ -1415,7 +1430,6 @@ document.addEventListener('DOMContentLoaded', async function() {
             currentMessageContent += response.content;
             const paragraph = currentMessageDiv.querySelector('p');
 
-            // Format streaming content
             const formattedText = formatChatMarkdown(currentMessageContent, true);
             paragraph.innerHTML = formattedText;
 
@@ -1728,6 +1742,10 @@ document.addEventListener('DOMContentLoaded', async function() {
     // Auto-save every 30 seconds
     setInterval(autoSaveCurrentChat, 30000);
 
+    function formatMarkdown(text, isStreaming = false) {
+        return formatChatMarkdown(text, isStreaming);
+    }
+
     function handleSendMessage() {
         const message = userInput.value.trim();
         if (!message || isTyping) return;
@@ -1759,7 +1777,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         autoSaveCurrentChat();
     }
 
-    function addMessage(text, sender) {
+    function addMessage(text, sender, citations = []) {
         if (!chatMessages) {
             console.error('Cannot add message: chat messages container not found');
             return;
@@ -1783,6 +1801,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         // Format the text based on sender
         if (sender === 'bot') {
             paragraph.innerHTML = formatChatMarkdown(text);
+
             // Apply syntax highlighting after DOM insertion
             setTimeout(() => {
                 if (window.Prism) {
@@ -1803,7 +1822,13 @@ document.addEventListener('DOMContentLoaded', async function() {
         messageDiv.appendChild(contentDiv);
 
         chatMessages.appendChild(messageDiv);
+
+        if (sender === 'bot' && citations && citations.length > 0) {
+            renderCitationsOnDiv(messageDiv, citations);
+        }
+
         scrollToBottom();
+        return messageDiv;
     }
 
     function formatCitationInfo(citation) {
@@ -1815,8 +1840,8 @@ document.addEventListener('DOMContentLoaded', async function() {
             url = citation;
         } else if (citation && typeof citation === 'object') {
             url = citation.url || citation.link || citation.href || '';
-            rawFile = citation.file || citation.filepath || '';
-            title = citation.title || '';
+            rawFile = citation.file_path || citation.file || citation.filepath || '';
+            title = citation.title || citation.section || '';
         }
 
         if (!url && !rawFile) return null;
@@ -1895,7 +1920,9 @@ document.addEventListener('DOMContentLoaded', async function() {
             .map(formatCitationInfo)
             .filter(Boolean);
 
-        if (validCitations.length === 0) return;
+        if (validCitations.length === 0) {
+            return;
+        }
 
         const citationsDiv = document.createElement('div');
         citationsDiv.className = 'citations-container';
@@ -2031,6 +2058,12 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (chatMessages) {
             chatMessages.scrollTop = chatMessages.scrollHeight;
         }
+    }
+
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
     }
 
     console.log('Chatbot initialized with chat stack system');

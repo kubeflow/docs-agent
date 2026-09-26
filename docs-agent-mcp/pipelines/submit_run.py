@@ -2,7 +2,14 @@
 Submit and run the github_rag_pipeline on the local KFP API server.
 Port-forward must be active: kubectl port-forward svc/ml-pipeline 8888:8888 -n kubeflow
 """
+import sys
+from pathlib import Path
+
 import kfp
+
+_UTILS_DIR = Path(__file__).resolve().parent / "utils"
+if str(_UTILS_DIR) not in sys.path:
+    sys.path.insert(0, str(_UTILS_DIR))
 
 from utils import (
     DEFAULT_DOCS_CHUNK_OVERLAP,

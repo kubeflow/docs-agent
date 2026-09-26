@@ -3,8 +3,15 @@ from kfp import dsl
 from kfp.dsl import *
 from typing import *
 
+try:
+    import kfp.kubernetes as k8s
+except ImportError:  # pragma: no cover - optional at compile time
+    k8s = None
+
+from utils import DOCS_COLLECTION
+
 @dsl.component(
-    base_image="python:3.9",
+    base_image="docker.io/library/python:3.9",
     packages_to_install=["requests", "beautifulsoup4"]
 )
 def download_specific_files(
@@ -17,7 +24,20 @@ def download_specific_files(
     import requests
     import json
     import base64
+    import os
     from bs4 import BeautifulSoup
+
+    def resolve_github_token(token):
+        for candidate in (token, os.environ.get("Github_Pat"), os.environ.get("GITHUB_TOKEN")):
+            if candidate and str(candidate).strip():
+                return str(candidate).strip()
+        return ""
+
+    github_token = resolve_github_token(github_token)
+    if github_token:
+        print("Using authenticated GitHub API requests")
+    else:
+        print("WARNING: No github_token or Github_Pat env set; rate limits will be low (60 req/hr)")
 
     headers = {"Authorization": f"token {github_token}"} if github_token else {}
     
@@ -73,7 +93,7 @@ def download_specific_files(
 
 
 @dsl.component(
-    base_image="python:3.9",
+    base_image="docker.io/library/python:3.9",
     packages_to_install=["pymilvus"]
 )
 def delete_old_vectors(
@@ -85,10 +105,22 @@ def delete_old_vectors(
 ):
     from pymilvus import connections, Collection
     import json
-    
+    import os
+
+    milvus_user = os.environ.get("MILVUS_USER", "root")
+    milvus_password = os.environ.get("MILVUS_PASSWORD", "")
+    if not milvus_password:
+        raise RuntimeError("MILVUS_PASSWORD must be set via pipeline secret (not in source code)")
+
     # Connect to Milvus
-    connections.connect("default", host=milvus_host, port=milvus_port)
-    
+    connections.connect(
+        "default",
+        host=milvus_host,
+        port=milvus_port,
+        user=milvus_user,
+        password=milvus_password,
+    )
+
     # Parse file paths
     try:
         file_paths_list = json.loads(file_paths)
@@ -139,8 +171,12 @@ def delete_old_vectors(
 
 
 @dsl.component(
-    base_image="pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime",
-    packages_to_install=["sentence-transformers", "langchain"]
+    base_image="docker.io/pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime",
+    packages_to_install=[
+        "sentence-transformers==3.3.1",
+        "transformers==4.44.2",
+        "langchain-text-splitters",
+    ],
 )
 def chunk_and_embed_incremental(
     github_data: dsl.Input[dsl.Dataset],
@@ -155,11 +191,12 @@ def chunk_and_embed_incremental(
     import re
     import torch
     from sentence_transformers import SentenceTransformer
-    from langchain.text_splitter import RecursiveCharacterTextSplitter
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model = SentenceTransformer('sentence-transformers/all-mpnet-base-v2', device=device)
     print(f"Model loaded on {device}")
+    EMBED_BATCH_SIZE = 32
 
     records = []
 
@@ -222,9 +259,13 @@ def chunk_and_embed_incremental(
 
             print(f"File: {file_data['path']} -> {len(chunks)} chunks (avg: {sum(len(c) for c in chunks)/len(chunks):.0f} chars)")
 
-            # Create embeddings
-            for chunk_idx, chunk in enumerate(chunks):
-                embedding = model.encode(chunk).tolist()
+            # Create embeddings in batches to avoid per-chunk model overhead.
+            embeddings = model.encode(
+                chunks,
+                batch_size=EMBED_BATCH_SIZE,
+                show_progress_bar=False,
+            )
+            for chunk_idx, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
                 records.append({
                     'file_unique_id': file_unique_id,
                     'repo_name': repo_name,
@@ -233,7 +274,7 @@ def chunk_and_embed_incremental(
                     'citation_url': citation_url[:1024],
                     'chunk_index': chunk_idx,
                     'content_text': chunk[:2000],
-                    'embedding': embedding
+                    'embedding': embedding.tolist()
                 })
 
     print(f"Created {len(records)} total chunks for incremental update")
@@ -244,7 +285,7 @@ def chunk_and_embed_incremental(
 
 
 @dsl.component(
-    base_image="python:3.9",
+    base_image="docker.io/library/python:3.9",
     packages_to_install=["pymilvus", "numpy"]
 )
 def store_milvus_incremental(
@@ -255,9 +296,21 @@ def store_milvus_incremental(
 ):
     from pymilvus import connections, utility, FieldSchema, CollectionSchema, DataType, Collection
     import json
+    import os
     from datetime import datetime
 
-    connections.connect("default", host=milvus_host, port=milvus_port)
+    milvus_user = os.environ.get("MILVUS_USER", "root")
+    milvus_password = os.environ.get("MILVUS_PASSWORD", "")
+    if not milvus_password:
+        raise RuntimeError("MILVUS_PASSWORD must be set via pipeline secret (not in source code)")
+
+    connections.connect(
+        "default",
+        host=milvus_host,
+        port=milvus_port,
+        user=milvus_user,
+        password=milvus_password,
+    )
 
     # Check if collection exists, if not create it
     if not utility.has_collection(collection_name):
@@ -284,9 +337,6 @@ def store_milvus_incremental(
         collection = Collection(collection_name)
         print(f"Using existing collection: {collection_name}")
 
-    # Load collection
-    collection.load()
-
     # Prepare records for insertion
     records = []
     timestamp = int(datetime.now().timestamp())
@@ -307,6 +357,9 @@ def store_milvus_incremental(
             })
 
     if records:
+        if len(collection.indexes) > 0:
+            collection.load()
+
         # Insert new records
         batch_size = 1000
         for i in range(0, len(records), batch_size):
@@ -326,7 +379,7 @@ def store_milvus_incremental(
                     "index_type": "IVF_FLAT", 
                     "params": {"nlist": min(1024, max(100, len(records)))}
                 }
-                collection.create_index("vector", index_params)
+                collection.create_index("vector", index_params, timeout=120)
                 collection.load()
                 print("Index created successfully")
             else:
@@ -351,9 +404,9 @@ def github_rag_incremental_pipeline(
     base_url: str = "https://www.kubeflow.org/docs",
     chunk_size: int = 1200,
     chunk_overlap: int = 100,
-    milvus_host: str = "milvus-standalone-final.docs-agent.svc.cluster.local",
+    milvus_host: str = "milvus-milvus.ml-infra.svc.cluster.local",
     milvus_port: str = "19530",
-    collection_name: str = "docs_rag"
+    collection_name: str = DOCS_COLLECTION
 ):
     # Step 1: Delete old vectors for changed files
     delete_task = delete_old_vectors(
@@ -363,7 +416,17 @@ def github_rag_incremental_pipeline(
         milvus_port=milvus_port,
         collection_name=collection_name
     )
-    
+
+    if k8s is not None:
+        k8s.use_secret_as_env(
+            delete_task,
+            secret_name="milvus-auth",
+            secret_key_to_env={
+                "MILVUS_USER": "MILVUS_USER",
+                "MILVUS_PASSWORD": "MILVUS_PASSWORD",
+            },
+        )
+
     # Step 2: Download only the changed files
     download_task = download_specific_files(
         repo_owner=repo_owner,
@@ -389,6 +452,16 @@ def github_rag_incremental_pipeline(
         collection_name=collection_name
     )
     
+    if k8s is not None:
+        k8s.use_secret_as_env(
+            store_task,
+            secret_name="milvus-auth",
+            secret_key_to_env={
+                "MILVUS_USER": "MILVUS_USER",
+                "MILVUS_PASSWORD": "MILVUS_PASSWORD",
+            },
+        )
+
     # Ensure deletion happens before insertion
     store_task.after(delete_task)
 

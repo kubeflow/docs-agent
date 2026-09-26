@@ -60,7 +60,7 @@ variable "kfp_version" {
 variable "milvus_version" {
   description = "Milvus standalone container image version (used in Milvus CR)"
   type        = string
-  default     = "v2.4.15"
+  default     = "v2.6.22"
 }
 
 # --- Ingress & Routing ---------------------------------------------------------

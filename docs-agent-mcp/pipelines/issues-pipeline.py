@@ -10,8 +10,15 @@ and only regex-parses markdown as a legacy fallback.
 
 Components are self-contained per KFP convention (KFP @dsl.component
 functions cannot import sibling modules). Keep the mirrored helpers in
-issues_utils.py in sync for unit tests.
+utils/issues_utils.py in sync for unit tests.
 """
+
+import sys
+from pathlib import Path
+
+_UTILS_DIR = Path(__file__).resolve().parent / "utils"
+if str(_UTILS_DIR) not in sys.path:
+    sys.path.insert(0, str(_UTILS_DIR))
 
 import kfp
 import kfp.kubernetes as k8s
@@ -577,7 +584,7 @@ def store_issues_milvus(
             nlist = max(16, min(1024, collection.num_entities))
             index_params = {
                 "metric_type": "COSINE",
-                "index_type": "IVF_FLAT",
+                "index_type": "FLAT",
                 "params": {"nlist": nlist}
             }
             collection.create_index("vector", index_params, timeout=120)

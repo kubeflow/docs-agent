@@ -7,7 +7,6 @@ from typing import Sequence
 
 import requests
 
-DEFAULT_EMBEDDINGS_URL = "http://embeddings-service-predictor.ml-infra.svc.cluster.local/embed"
 DEFAULT_TIMEOUT_SEC = int(os.getenv("EMBEDDINGS_TIMEOUT_SEC", "60"))
 # TEI all-mpnet-base-v2: each input must be <384 tokens.
 MAX_TEI_INPUT_CHARS = int(os.getenv("MAX_TEI_INPUT_CHARS", "1000"))
@@ -24,7 +23,7 @@ def embed_texts(
     if not texts:
         return []
 
-    service_url = (url or os.getenv("EMBEDDINGS_URL") or DEFAULT_EMBEDDINGS_URL).strip()
+    service_url = (url or os.getenv("EMBEDDINGS_URL") or "").strip()
     if not service_url:
         raise ValueError("EMBEDDINGS_URL is not configured")
 
