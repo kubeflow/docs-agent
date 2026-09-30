@@ -12,6 +12,9 @@ import pytest
 
 PIPELINES_DIR = Path(__file__).parent.parent / "docs-agent-mcp" / "pipelines"
 sys.path.insert(0, str(PIPELINES_DIR))
+# utils.py lives in pipelines/utils/ since #249; the sibling directory of the
+# same name shadows it as a namespace package unless it is on the path too.
+sys.path.insert(0, str(PIPELINES_DIR / "utils"))
 
 from code_utils import chunk_code_file, parse_json_file, parse_python_ast, parse_yaml_documents
 
