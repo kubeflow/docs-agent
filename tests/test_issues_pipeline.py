@@ -9,6 +9,9 @@ from pathlib import Path
 
 PIPELINES_DIR = Path(__file__).parent.parent / "docs-agent-mcp" / "pipelines"
 sys.path.insert(0, str(PIPELINES_DIR))
+# utils.py lives in pipelines/utils/ since #249; the sibling directory of the
+# same name shadows it as a namespace package unless it is on the path too.
+sys.path.insert(0, str(PIPELINES_DIR / "utils"))
 
 from issues_utils import (
     build_issue_record,
