@@ -40,6 +40,22 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.mcp.milvusAuth.existingSecret }}
                   key: {{ .Values.mcp.milvusAuth.passwordKey }}
+            {{- with .Values.mcp.langfuse }}
+            {{- if .existingSecret }}
+            - name: LANGFUSE_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .existingSecret }}
+                  key: {{ .publicKeyKey }}
+                  optional: true
+            - name: LANGFUSE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .existingSecret }}
+                  key: {{ .secretKeyKey }}
+                  optional: true
+            {{- end }}
+            {{- end }}
           readinessProbe:
             tcpSocket:
               port: mcp

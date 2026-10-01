@@ -1,0 +1,19 @@
+# OKE production overrides. Pins the MCP image that is live today so a manual
+# `helm upgrade -f values-prod.yaml` cannot roll prod back. CI overrides the
+# image with --set-string after building from this commit.
+mcp:
+  image:
+    repository: docker.io/santhoshtoorpu/mcp-kubeflow-docs
+    tag: otel-flo@sha256:24eb19bd6f45e3b62ece9cb5ddad8469c7684368334fd7671080a4ca2a15a457
+
+toolChoiceProxy:
+  # Keep CPU-only pods off the single GPU node.
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: NotIn
+                values:
+                  - 10.0.10.102

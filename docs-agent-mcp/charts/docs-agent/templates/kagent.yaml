@@ -23,7 +23,11 @@ spec:
   apiKeySecretKey: {{ .Values.kagent.model.apiKeySecret.key }}
   model: {{ .Values.kagent.model.model }}
   openAI:
+    {{- if .Values.toolChoiceProxy.enabled }}
+    baseUrl: {{ printf "http://tool-choice-proxy.%s.svc.cluster.local/openai/v1" .Release.Namespace | quote }}
+    {{- else }}
     baseUrl: {{ .Values.kagent.model.baseUrl | quote }}
+    {{- end }}
     temperature: {{ .Values.kagent.model.temperature | quote }}
     topP: {{ .Values.kagent.model.topP | quote }}
     maxTokens: {{ .Values.kagent.model.maxTokens }}
@@ -59,9 +63,7 @@ spec:
           name: {{ .Values.kagent.remoteMcp.name }}
           kind: RemoteMCPServer
           toolNames:
-            - search_kubeflow_docs
-            - search_github_issues
-            - search_kubeflow_code
+            {{- toYaml .Values.kagent.agents.docs.toolNames | nindent 12 }}
     systemMessage: |-
 {{ .Files.Get "files/docs-system-message.txt" | nindent 6 }}
 ---
@@ -85,9 +87,7 @@ spec:
           name: {{ .Values.kagent.remoteMcp.name }}
           kind: RemoteMCPServer
           toolNames:
-            - search_kubeflow_code
-            - search_github_issues
-            - search_kubeflow_docs
+            {{- toYaml .Values.kagent.agents.debug.toolNames | nindent 12 }}
     systemMessage: |-
 {{ .Files.Get "files/debug-system-message.txt" | nindent 6 }}
 {{- end }}

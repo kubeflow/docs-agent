@@ -21,9 +21,22 @@ mcp:
     maxQueryChars: 512
     maxTopK: 10
     maxCandidateHits: 40
+    # auto = intent router picks bm25/hybrid/dense per query (needs the v4 hybrid collection).
+    searchMode: auto
+    autoBm25CandidateDepth: 30
+    autoTemporalCandidateDepth: 50
+    hybridRanker: rrf
+    hybridRrfK: 60
+    hybridDenseWeight: "0.7"
+    hybridSparseWeight: "0.3"
   milvusAuth:
     existingSecret: mcp-server-secret
     passwordKey: MILVUS_PASSWORD
+  # Tracing stays off when the secret is absent; the keys are optional refs.
+  langfuse:
+    existingSecret: mcp-langfuse-keys
+    publicKeyKey: LANGFUSE_PUBLIC_KEY
+    secretKeyKey: LANGFUSE_SECRET_KEY
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -50,12 +63,30 @@ mcp:
     enabled: false
     minAvailable: 1
 
+# Forces tool_choice=required for in-scope user turns (none for chit-chat)
+# before requests reach Qwen. When enabled, the ModelConfig points here.
+toolChoiceProxy:
+  enabled: true
+  # Empty reuses the MCP image (python + stdlib is all the proxy needs).
+  image: ""
+  upstream: http://qwen-llm-stable.ml-infra.svc.cluster.local
+  port: 8080
+  affinity: {}
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
 kagent:
   enabled: true
   model:
     name: kserve-qwen
     provider: OpenAI
     model: qwen2.5-7B
+    # Used only when toolChoiceProxy is disabled.
     baseUrl: http://qwen-llm-stable.ml-infra.svc.cluster.local/openai/v1
     temperature: "0.1"
     topP: "0.9"
@@ -74,9 +105,16 @@ kagent:
     docs:
       name: kubeflow-docs-agent
       enabled: true
+      toolNames:
+        - search_kubeflow_docs
+        - search_github_issues
     debug:
       name: kubeflow-debug-agent
       enabled: true
+      toolNames:
+        - search_kubeflow_code
+        - search_github_issues
+        - search_kubeflow_docs
 
 tests:
   enabled: true
