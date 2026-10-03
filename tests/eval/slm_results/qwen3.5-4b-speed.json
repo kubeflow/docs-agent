@@ -1,0 +1,53 @@
+{
+  "name": "qwen3.5-4b",
+  "model": "qwen3.5-4b",
+  "prompt_tokens": 4832,
+  "output_tokens": 256,
+  "single": {
+    "ttft_s_median": 0.775,
+    "decode_tps_median": 49.1,
+    "runs": [
+      {
+        "ttft_s": 0.775,
+        "total_s": 5.978,
+        "prompt_tokens": 4832,
+        "completion_tokens": 256,
+        "decode_tps": 49.0
+      },
+      {
+        "ttft_s": 0.773,
+        "total_s": 5.965,
+        "prompt_tokens": 4832,
+        "completion_tokens": 256,
+        "decode_tps": 49.1
+      },
+      {
+        "ttft_s": 0.777,
+        "total_s": 5.968,
+        "prompt_tokens": 4832,
+        "completion_tokens": 256,
+        "decode_tps": 49.1
+      },
+      {
+        "ttft_s": 0.772,
+        "total_s": 5.966,
+        "prompt_tokens": 4832,
+        "completion_tokens": 256,
+        "decode_tps": 49.1
+      },
+      {
+        "ttft_s": 0.78,
+        "total_s": 5.975,
+        "prompt_tokens": 4832,
+        "completion_tokens": 256,
+        "decode_tps": 49.1
+      }
+    ]
+  },
+  "concurrent": {
+    "concurrency": 4,
+    "ttft_s_median": 0.834,
+    "per_stream_tps_median": 45.6,
+    "aggregate_tps": 159.1
+  }
+}

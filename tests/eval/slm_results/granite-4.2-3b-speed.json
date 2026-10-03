@@ -1,0 +1,53 @@
+{
+  "name": "granite-4.2-3b",
+  "model": "granite-4.2-3b",
+  "prompt_tokens": 4689,
+  "output_tokens": 256,
+  "single": {
+    "ttft_s_median": 0.745,
+    "decode_tps_median": 56.0,
+    "runs": [
+      {
+        "ttft_s": 0.748,
+        "total_s": 5.297,
+        "prompt_tokens": 4689,
+        "completion_tokens": 256,
+        "decode_tps": 56.0
+      },
+      {
+        "ttft_s": 0.745,
+        "total_s": 5.296,
+        "prompt_tokens": 4689,
+        "completion_tokens": 256,
+        "decode_tps": 56.0
+      },
+      {
+        "ttft_s": 0.743,
+        "total_s": 5.294,
+        "prompt_tokens": 4689,
+        "completion_tokens": 256,
+        "decode_tps": 56.0
+      },
+      {
+        "ttft_s": 0.739,
+        "total_s": 5.29,
+        "prompt_tokens": 4689,
+        "completion_tokens": 256,
+        "decode_tps": 56.0
+      },
+      {
+        "ttft_s": 0.745,
+        "total_s": 5.297,
+        "prompt_tokens": 4689,
+        "completion_tokens": 256,
+        "decode_tps": 56.0
+      }
+    ]
+  },
+  "concurrent": {
+    "concurrency": 4,
+    "ttft_s_median": 0.767,
+    "per_stream_tps_median": 50.8,
+    "aggregate_tps": 176.7
+  }
+}
