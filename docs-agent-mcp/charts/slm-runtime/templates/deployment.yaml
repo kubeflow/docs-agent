@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.service.name }}
+  labels:
+    {{- include "slm-runtime.labels" . | nindent 4 }}
+    {{- toYaml .Values.selectorLabels | nindent 4 }}
+spec:
+  replicas: 1
+  # One GPU: the old pod must release it before the new one can start.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- toYaml .Values.selectorLabels | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- toYaml .Values.selectorLabels | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      nodeSelector:
+        {{- toYaml .Values.nodeSelector | nindent 8 }}
+      tolerations:
+        {{- toYaml .Values.tolerations | nindent 8 }}
+      containers:
+        - name: vllm
+          image: "{{ .Values.image.repository }}@{{ .Values.image.digest }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --model
+            - {{ .Values.model.id }}
+            - --revision
+            - {{ .Values.model.revision | quote }}
+            - --served-model-name
+            - {{ .Values.model.servedName }}
+            - --port
+            - {{ .Values.service.port | quote }}
+            - --max-model-len
+            - {{ .Values.model.maxModelLen | quote }}
+            - --gpu-memory-utilization
+            - {{ .Values.model.gpuMemoryUtilization | quote }}
+            {{- range .Values.model.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+          env:
+            - name: HF_HOME
+              value: /cache
+          ports:
+            - containerPort: {{ .Values.service.port }}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.service.port }}
+            periodSeconds: {{ .Values.startupProbe.periodSeconds }}
+            failureThreshold: {{ .Values.startupProbe.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.service.port }}
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: cache
+              mountPath: /cache
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: cache
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.claimName }}
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.shmSize }}

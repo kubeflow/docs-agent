@@ -64,7 +64,8 @@ mcp:
     minAvailable: 1
 
 # Forces tool_choice=required for in-scope user turns (none for chit-chat)
-# before requests reach Qwen. When enabled, the ModelConfig points here.
+# before requests reach Qwen. When enabled, kagent.model points here;
+# kagent.directModel never does.
 toolChoiceProxy:
   enabled: true
   # Empty reuses the MCP image (python + stdlib is all the proxy needs).
@@ -98,19 +99,34 @@ kagent:
       create: true
       # The in-cluster KServe endpoint does not authenticate this dummy value.
       value: local-kserve
+  # Second ModelConfig that talks to the slm-runtime chart directly. It never
+  # goes through toolChoiceProxy: vLLM ignores tool_choice=required for Gemma 4,
+  # and Gemma routes tools correctly on auto (tests/eval/SLM_EVALS.md).
+  directModel:
+    enabled: true
+    name: slm-gemma
+    model: gemma-4-e4b
+    baseUrl: http://slm.slm-eval.svc.cluster.local:8000/v1
+    temperature: "0.1"
+    topP: "0.9"
+    maxTokens: 1024
+    timeout: 300
   remoteMcp:
     name: kubeflow-docs-mcp
     timeout: 30s
   agents:
+    # modelConfig empty = kagent.model.name.
     docs:
       name: kubeflow-docs-agent
       enabled: true
+      modelConfig: slm-gemma
       toolNames:
         - search_kubeflow_docs
         - search_github_issues
     debug:
       name: kubeflow-debug-agent
       enabled: true
+      modelConfig: ""
       toolNames:
         - search_kubeflow_code
         - search_github_issues

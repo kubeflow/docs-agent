@@ -62,11 +62,14 @@ jobs:
         run: |
           helm lint docs-agent-mcp/charts/docs-agent
           helm lint docs-agent-mcp/charts/qwen-runtime
+          helm lint docs-agent-mcp/charts/slm-runtime
           helm lint docs-agent-mcp/charts/gateway-guardrails
           helm template docs-agent docs-agent-mcp/charts/docs-agent \
             --namespace docs-agent --set-string mcp.image.tag=ci-test >/dev/null
           helm template qwen-runtime docs-agent-mcp/charts/qwen-runtime \
             --namespace ml-infra >/dev/null
+          helm template slm-runtime docs-agent-mcp/charts/slm-runtime \
+            --namespace slm-eval >/dev/null
           helm template gateway-guardrails docs-agent-mcp/charts/gateway-guardrails \
             --namespace docs-agent >/dev/null
 

@@ -33,6 +33,28 @@ spec:
     maxTokens: {{ .Values.kagent.model.maxTokens }}
     timeout: {{ .Values.kagent.model.timeout }}
 ---
+{{- with .Values.kagent.directModel }}
+{{- if .enabled }}
+apiVersion: kagent.dev/v1alpha2
+kind: ModelConfig
+metadata:
+  name: {{ .name }}
+  labels:
+    {{- include "docs-agent.labels" $ | nindent 4 }}
+spec:
+  provider: OpenAI
+  apiKeySecret: {{ $.Values.kagent.model.apiKeySecret.name }}
+  apiKeySecretKey: {{ $.Values.kagent.model.apiKeySecret.key }}
+  model: {{ .model }}
+  openAI:
+    baseUrl: {{ .baseUrl | quote }}
+    temperature: {{ .temperature | quote }}
+    topP: {{ .topP | quote }}
+    maxTokens: {{ .maxTokens }}
+    timeout: {{ .timeout }}
+---
+{{- end }}
+{{- end }}
 apiVersion: kagent.dev/v1alpha2
 kind: RemoteMCPServer
 metadata:
@@ -55,7 +77,7 @@ spec:
   description: Kubeflow documentation assistant
   type: Declarative
   declarative:
-    modelConfig: {{ .Values.kagent.model.name }}
+    modelConfig: {{ .Values.kagent.agents.docs.modelConfig | default .Values.kagent.model.name }}
     stream: true
     tools:
       - type: McpServer
@@ -79,7 +101,7 @@ spec:
   description: Kubeflow debugging and code assistant
   type: Declarative
   declarative:
-    modelConfig: {{ .Values.kagent.model.name }}
+    modelConfig: {{ .Values.kagent.agents.debug.modelConfig | default .Values.kagent.model.name }}
     stream: true
     tools:
       - type: McpServer
