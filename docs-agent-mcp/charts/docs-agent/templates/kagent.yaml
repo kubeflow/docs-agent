@@ -23,12 +23,38 @@ spec:
   apiKeySecretKey: {{ .Values.kagent.model.apiKeySecret.key }}
   model: {{ .Values.kagent.model.model }}
   openAI:
+    {{- if .Values.toolChoiceProxy.enabled }}
+    baseUrl: {{ printf "http://tool-choice-proxy.%s.svc.cluster.local/openai/v1" .Release.Namespace | quote }}
+    {{- else }}
     baseUrl: {{ .Values.kagent.model.baseUrl | quote }}
+    {{- end }}
     temperature: {{ .Values.kagent.model.temperature | quote }}
     topP: {{ .Values.kagent.model.topP | quote }}
     maxTokens: {{ .Values.kagent.model.maxTokens }}
     timeout: {{ .Values.kagent.model.timeout }}
 ---
+{{- with .Values.kagent.directModel }}
+{{- if .enabled }}
+apiVersion: kagent.dev/v1alpha2
+kind: ModelConfig
+metadata:
+  name: {{ .name }}
+  labels:
+    {{- include "docs-agent.labels" $ | nindent 4 }}
+spec:
+  provider: OpenAI
+  apiKeySecret: {{ $.Values.kagent.model.apiKeySecret.name }}
+  apiKeySecretKey: {{ $.Values.kagent.model.apiKeySecret.key }}
+  model: {{ .model }}
+  openAI:
+    baseUrl: {{ .baseUrl | quote }}
+    temperature: {{ .temperature | quote }}
+    topP: {{ .topP | quote }}
+    maxTokens: {{ .maxTokens }}
+    timeout: {{ .timeout }}
+---
+{{- end }}
+{{- end }}
 apiVersion: kagent.dev/v1alpha2
 kind: RemoteMCPServer
 metadata:
@@ -51,7 +77,7 @@ spec:
   description: Kubeflow documentation assistant
   type: Declarative
   declarative:
-    modelConfig: {{ .Values.kagent.model.name }}
+    modelConfig: {{ .Values.kagent.agents.docs.modelConfig | default .Values.kagent.model.name }}
     stream: true
     tools:
       - type: McpServer
@@ -59,9 +85,7 @@ spec:
           name: {{ .Values.kagent.remoteMcp.name }}
           kind: RemoteMCPServer
           toolNames:
-            - search_kubeflow_docs
-            - search_github_issues
-            - search_kubeflow_code
+            {{- toYaml .Values.kagent.agents.docs.toolNames | nindent 12 }}
     systemMessage: |-
 {{ .Files.Get "files/docs-system-message.txt" | nindent 6 }}
 ---
@@ -77,7 +101,7 @@ spec:
   description: Kubeflow debugging and code assistant
   type: Declarative
   declarative:
-    modelConfig: {{ .Values.kagent.model.name }}
+    modelConfig: {{ .Values.kagent.agents.debug.modelConfig | default .Values.kagent.model.name }}
     stream: true
     tools:
       - type: McpServer
@@ -85,9 +109,7 @@ spec:
           name: {{ .Values.kagent.remoteMcp.name }}
           kind: RemoteMCPServer
           toolNames:
-            - search_kubeflow_code
-            - search_github_issues
-            - search_kubeflow_docs
+            {{- toYaml .Values.kagent.agents.debug.toolNames | nindent 12 }}
     systemMessage: |-
 {{ .Files.Get "files/debug-system-message.txt" | nindent 6 }}
 {{- end }}

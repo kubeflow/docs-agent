@@ -1,0 +1,53 @@
+{
+  "name": "gemma-4-e4b",
+  "model": "gemma-4-e4b",
+  "prompt_tokens": 4559,
+  "output_tokens": 256,
+  "single": {
+    "ttft_s_median": 0.774,
+    "decode_tps_median": 42.0,
+    "runs": [
+      {
+        "ttft_s": 0.774,
+        "total_s": 6.85,
+        "prompt_tokens": 4559,
+        "completion_tokens": 256,
+        "decode_tps": 42.0
+      },
+      {
+        "ttft_s": 0.813,
+        "total_s": 6.878,
+        "prompt_tokens": 4559,
+        "completion_tokens": 256,
+        "decode_tps": 42.0
+      },
+      {
+        "ttft_s": 0.77,
+        "total_s": 6.859,
+        "prompt_tokens": 4559,
+        "completion_tokens": 256,
+        "decode_tps": 41.9
+      },
+      {
+        "ttft_s": 0.772,
+        "total_s": 6.849,
+        "prompt_tokens": 4559,
+        "completion_tokens": 256,
+        "decode_tps": 42.0
+      },
+      {
+        "ttft_s": 0.774,
+        "total_s": 6.852,
+        "prompt_tokens": 4559,
+        "completion_tokens": 256,
+        "decode_tps": 42.0
+      }
+    ]
+  },
+  "concurrent": {
+    "concurrency": 4,
+    "ttft_s_median": 0.808,
+    "per_stream_tps_median": 40.7,
+    "aggregate_tps": 144.5
+  }
+}

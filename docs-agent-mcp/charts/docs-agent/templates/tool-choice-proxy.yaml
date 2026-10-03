@@ -1,0 +1,79 @@
+{{- if .Values.toolChoiceProxy.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tool-choice-proxy
+  labels:
+    {{- include "docs-agent.labels" . | nindent 4 }}
+data:
+  proxy.py: |-
+{{ .Files.Get "files/tool-choice-proxy.py" | indent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tool-choice-proxy
+  labels:
+    {{- include "docs-agent.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: tool-choice-proxy
+  ports:
+    - port: 80
+      targetPort: {{ .Values.toolChoiceProxy.port }}
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tool-choice-proxy
+  labels:
+    {{- include "docs-agent.labels" . | nindent 4 }}
+    app: tool-choice-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tool-choice-proxy
+  template:
+    metadata:
+      labels:
+        app: tool-choice-proxy
+      annotations:
+        checksum/proxy: {{ .Files.Get "files/tool-choice-proxy.py" | sha256sum }}
+    spec:
+      {{- with .Values.mcp.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.toolChoiceProxy.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: proxy
+          image: {{ .Values.toolChoiceProxy.image | default (printf "%s:%s" .Values.mcp.image.repository .Values.mcp.image.tag) | quote }}
+          imagePullPolicy: {{ .Values.mcp.image.pullPolicy }}
+          command: ["python", "/proxy/proxy.py"]
+          env:
+            - name: UPSTREAM
+              value: {{ .Values.toolChoiceProxy.upstream | quote }}
+            - name: PORT
+              value: {{ .Values.toolChoiceProxy.port | quote }}
+          ports:
+            - containerPort: {{ .Values.toolChoiceProxy.port }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.toolChoiceProxy.port }}
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.toolChoiceProxy.resources | nindent 12 }}
+          volumeMounts:
+            - name: proxy
+              mountPath: /proxy
+      volumes:
+        - name: proxy
+          configMap:
+            name: tool-choice-proxy
+{{- end }}

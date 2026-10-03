@@ -1,0 +1,6 @@
+This release owns the single-GPU {{ .Values.model.servedName }} server; upgrades that change the pod restart it (Recreate).
+
+  kubectl rollout status deployment/{{ .Values.service.name }} -n {{ .Release.Namespace }} --timeout=1800s
+  helm test {{ .Release.Name }} -n {{ .Release.Namespace }}
+
+OpenAI-compatible endpoint: http://{{ .Values.service.name }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/v1

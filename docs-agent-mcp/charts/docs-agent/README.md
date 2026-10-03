@@ -1,8 +1,20 @@
 # docs-agent chart
 
 Helm release for the application layer: the MCP Deployment/Service/ConfigMap,
-Kagent ModelConfig, RemoteMCPServer, and the Docs/Debug Agents. It intentionally
-does not own the public gateway or the GPU InferenceService.
+the tool-choice proxy in front of Qwen, Kagent ModelConfig, RemoteMCPServer, and
+the Docs/Debug Agents. It intentionally does not own the public gateway or the
+GPU InferenceService.
+
+`values-prod.yaml` holds the OKE overrides (pinned live image, node affinity):
+
+```bash
+helm upgrade --install docs-agent ./docs-agent-mcp/charts/docs-agent \
+  --namespace docs-agent -f docs-agent-mcp/charts/docs-agent/values-prod.yaml
+```
+
+Langfuse tracing reads `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` from the
+optional `mcp-langfuse-keys` secret; without it tracing is off. The OTel
+collector that forwards kagent traces lives in `manifests/observability/`.
 
 ## Install or upgrade
 

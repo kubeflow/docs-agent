@@ -1,0 +1,10 @@
+apiVersion: v2
+name: slm-runtime
+description: Single-GPU vLLM OpenAI server for the Kubeflow Docs Agent small model
+type: application
+version: 0.1.0
+appVersion: "gemma-4-E4B-it"
+keywords:
+  - vllm
+  - gemma
+  - gpu

@@ -1,0 +1,76 @@
+# Gemma 4 E4B on the second A10 (24 GB), chosen by tests/eval/SLM_EVALS.md.
+# Plain vLLM rather than KServe: the KServe huggingfaceserver image ships
+# vLLM 0.8.5, which predates the Gemma 4 tool/reasoning parsers.
+
+image:
+  # Pinned by digest; v0.30.0 contains the Gemma 4 parser fixes (vllm#45553, #45832).
+  repository: docker.io/vllm/vllm-openai
+  digest: sha256:8a69ffad015f138d7170c4ddc429e230a3bc1c1719f67e14324749df200a4b90
+  pullPolicy: IfNotPresent
+
+model:
+  id: google/gemma-4-E4B-it
+  revision: ee0ef6023621cff504d758262d4e04895a5af4a2
+  servedName: gemma-4-e4b
+  maxModelLen: 32768
+  gpuMemoryUtilization: "0.90"
+  # Kagent cannot send chat_template_kwargs, so the server default decides
+  # thinking. Off: 255/291 at ~1.3s p50; on: 270/291 at ~2.9s p50.
+  extraArgs:
+    - --enable-auto-tool-choice
+    - --tool-call-parser
+    - gemma4
+    - --reasoning-parser
+    - gemma4
+    - --default-chat-template-kwargs
+    - '{"enable_thinking": false}'
+    - --limit-mm-per-prompt
+    - '{"image": 0, "audio": 0}'
+
+# Selector is immutable, and changing pod labels/annotations restarts the
+# single-GPU pod; both match the Deployment created during the eval.
+selectorLabels:
+  app: slm
+podAnnotations:
+  slm/candidate: gemma-4-e4b
+
+resources:
+  requests:
+    cpu: "4"
+    memory: 24Gi
+    nvidia.com/gpu: "1"
+  limits:
+    memory: 48Gi
+    nvidia.com/gpu: "1"
+
+nodeSelector:
+  kubernetes.io/hostname: 10.0.10.59
+tolerations:
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: NoSchedule
+
+shmSize: 8Gi
+
+startupProbe:
+  # First start downloads ~15 GB of weights; allow 30 minutes.
+  periodSeconds: 10
+  failureThreshold: 180
+
+persistence:
+  create: true
+  claimName: hf-cache
+  accessMode: ReadWriteOnce
+  size: 50Gi
+  storageClassName: oci-bv
+  keepOnDelete: true
+
+service:
+  name: slm
+  port: 8000
+
+tests:
+  enabled: true
+  # Exercise the same namespace-to-model path as Kagent.
+  namespace: docs-agent
+  image: curlimages/curl:8.12.1
