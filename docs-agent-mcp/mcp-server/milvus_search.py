@@ -58,9 +58,7 @@ def connect() -> None:
         if not MILVUS_URI:
             raise RuntimeError("MILVUS_URI is required")
         if not MILVUS_PASSWORD and not MILVUS_LOCAL_MODE:
-            raise RuntimeError(
-                "MILVUS_PASSWORD is required (set via Kubernetes secret, not ConfigMap)"
-            )
+            raise RuntimeError("MILVUS_PASSWORD is required (set via Kubernetes secret, not ConfigMap)")
         client = MilvusClient(uri=MILVUS_URI, user=MILVUS_USER, password=MILVUS_PASSWORD)
 
 
@@ -98,9 +96,7 @@ def _require_embedding(query: str) -> list[float]:
     except Exception as exc:
         raise RuntimeError(f"Embeddings service request failed: {exc}") from exc
     if len(embedding) != DENSE_DIM:
-        raise RuntimeError(
-            f"Embedding dimension mismatch: expected {DENSE_DIM}, got {len(embedding)}"
-        )
+        raise RuntimeError(f"Embedding dimension mismatch: expected {DENSE_DIM}, got {len(embedding)}")
     return embedding
 
 
@@ -215,34 +211,31 @@ def search_docs_auto(
 
     try:
         if plan.retrieval_mode == "bm25":
-            hits = bm25_search(
-                COLLECTION_NAME, query, fetch_limit, output_fields, filter_expr=filter_expr
-            )
+            hits = bm25_search(COLLECTION_NAME, query, fetch_limit, output_fields, filter_expr=filter_expr)
             if not hits and filter_expr:
-                hits = bm25_search(
-                    COLLECTION_NAME, query, fetch_limit, output_fields, filter_expr=""
-                )
+                hits = bm25_search(COLLECTION_NAME, query, fetch_limit, output_fields, filter_expr="")
                 filter_fallback = True
         elif plan.retrieval_mode == "hybrid":
             hits = hybrid_search(
                 COLLECTION_NAME,
                 query,
                 embedding,
-                top_k,
+                fetch_limit,
                 output_fields,
                 filter_expr=filter_expr,
                 candidate_depth=plan.candidate_depth,
             )
         else:
-            hits = dense_search(
-                COLLECTION_NAME, embedding, top_k, output_fields, filter_expr=filter_expr
-            )
+            hits = dense_search(COLLECTION_NAME, embedding, fetch_limit, output_fields, filter_expr=filter_expr)
     except Exception as exc:
         kind = "hybrid_search" if plan.retrieval_mode == "hybrid" else "search"
         raise RuntimeError(f"Milvus {kind} failed for {COLLECTION_NAME}: {exc}") from exc
 
+    import reranker_client
+
     if plan.retrieval_mode == "bm25":
-        hits = rerank_hits_after_search(plan, hits, query, top_k)
+        hits = rerank_hits_after_search(plan, hits, query, fetch_limit)
+        hits = reranker_client.rerank_hits(query, hits)[:top_k]
         meta = retrieval_metadata(
             plan,
             candidate_depth=fetch_limit,
@@ -251,12 +244,15 @@ def search_docs_auto(
         )
         return hits, meta
     if plan.retrieval_mode == "hybrid":
+        hits = reranker_client.rerank_hits(query, hits)[:top_k]
         meta = retrieval_metadata(
             plan,
-            candidate_depth=plan.candidate_depth or top_k,
+            candidate_depth=fetch_limit,
             filter_expr=filter_expr or None,
         )
         return hits, meta
+
+    hits = reranker_client.rerank_hits(query, hits)[:top_k]
     return hits, retrieval_metadata(plan)
 
 
@@ -269,9 +265,7 @@ def search_collection(
 ) -> list[dict]:
     """Embed the query and search (dense, or hybrid when that collection's mode is hybrid)."""
     mode = (
-        "hybrid"
-        if _search_mode_for(collection_name) == "hybrid" and collection_has_bm25(collection_name)
-        else "dense"
+        "hybrid" if _search_mode_for(collection_name) == "hybrid" and collection_has_bm25(collection_name) else "dense"
     )
     _load(collection_name)
     embedding = _require_embedding(query)
@@ -287,9 +281,7 @@ def search_collection(
                 filter_expr=filter_expr,
             )
         else:
-            hits = dense_search(
-                collection_name, embedding, top_k, output_fields, filter_expr=filter_expr
-            )
+            hits = dense_search(collection_name, embedding, top_k, output_fields, filter_expr=filter_expr)
     except Exception as exc:
         kind = "hybrid_search" if use_hybrid else "search"
         raise RuntimeError(f"Milvus {kind} failed for {collection_name}: {exc}") from exc

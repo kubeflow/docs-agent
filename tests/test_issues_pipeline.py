@@ -9,6 +9,7 @@ from pathlib import Path
 
 PIPELINES_DIR = Path(__file__).parent.parent / "docs-agent-mcp" / "pipelines"
 sys.path.insert(0, str(PIPELINES_DIR))
+sys.path.insert(0, str(PIPELINES_DIR / "utils"))
 
 from issues_utils import (
     build_issue_record,

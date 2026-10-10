@@ -16,9 +16,11 @@ mcp:
     issuesCollection: issues_rag
     codeCollection: code_rag
     embeddingsUrl: http://embeddings-service-predictor.ml-infra.svc.cluster.local/embed
+    rerankerUrl: http://reranker-service-predictor.ml-infra.svc.cluster.local/rerank
     milvusUri: http://milvus-milvus.ml-infra.svc.cluster.local:19530
     milvusUser: root
     maxQueryChars: 512
+    docsContextMaxChars: 2000
     maxTopK: 10
     maxCandidateHits: 40
   milvusAuth:
