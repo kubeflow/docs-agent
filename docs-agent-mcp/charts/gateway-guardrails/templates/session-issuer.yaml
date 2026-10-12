@@ -19,6 +19,10 @@ spec:
       labels:
         app: session-issuer
     spec:
+      {{- with .Values.sessionAuth.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: session-issuer
           image: {{ .Values.sessionAuth.image }}

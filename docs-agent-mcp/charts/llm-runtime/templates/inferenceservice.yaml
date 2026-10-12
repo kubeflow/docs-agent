@@ -1,0 +1,77 @@
+{{- $p := include "llm-runtime.profile" . | fromYaml -}}
+{{- $isvc := .Values.inferenceService -}}
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: {{ $isvc.name }}
+  labels:
+    {{- include "llm-runtime.labels" . | nindent 4 }}
+    llm-runtime/model: {{ .Values.model | quote }}
+  annotations:
+    serving.kserve.io/deploymentMode: {{ $isvc.deploymentMode | quote }}
+    serving.kserve.io/minReplicas: {{ $isvc.minReplicas | quote }}
+    serving.kserve.io/deploymentTimeout: {{ $isvc.deploymentTimeout | quote }}
+spec:
+  predictor:
+    containerConcurrency: {{ $isvc.concurrency }}
+    deploymentStrategy:
+      type: {{ $isvc.deploymentStrategy }}
+    securityContext:
+      fsGroup: 1000
+      fsGroupChangePolicy: OnRootMismatch
+    containers:
+      - name: kserve-container
+        image: {{ $p.image }}
+        args:
+          {{- include "llm-runtime.args" . | nindent 10 }}
+        env:
+          - name: HF_HOME
+            value: /tmp/huggingface
+          - name: HF_HUB_CACHE
+            value: /tmp/huggingface/hub
+          - name: HF_XET_CACHE
+            value: /tmp/huggingface/xet
+          {{- with .Values.hfToken.existingSecret }}
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: {{ . }}
+                key: {{ $.Values.hfToken.key }}
+          {{- end }}
+        ports:
+          - containerPort: {{ .Values.service.targetPort }}
+            protocol: TCP
+        startupProbe:
+          httpGet:
+            path: /health
+            port: {{ .Values.service.targetPort }}
+          periodSeconds: {{ $isvc.startupProbe.periodSeconds }}
+          failureThreshold: {{ $isvc.startupProbe.failureThreshold }}
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: {{ .Values.service.targetPort }}
+          periodSeconds: 10
+        volumeMounts:
+          - name: huggingface-cache
+            mountPath: /tmp/huggingface
+          {{- if $p.resources.shm }}
+          - name: shm
+            mountPath: /dev/shm
+          {{- end }}
+        resources:
+          {{- include "llm-runtime.resources" . | nindent 10 }}
+    volumes:
+      - name: huggingface-cache
+        persistentVolumeClaim:
+          claimName: {{ .Values.cache.claimName }}
+      {{- with $p.resources.shm }}
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: {{ . }}
+      {{- end }}
+    nodeSelector:
+      {{- toYaml .Values.placement.nodeSelector | nindent 6 }}
+    tolerations:
+      {{- toYaml .Values.placement.tolerations | nindent 6 }}

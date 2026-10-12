@@ -165,16 +165,24 @@ helm install kagent oci://ghcr.io/kagent-dev/kagent/helm/kagent \
   --set agents.observability-agent.enabled=false \
   --set agents.promql-agent.enabled=false \
   --set tools.grafana-mcp.enabled=false \
-  --set tools.querydoc.enabled=false
+  --set tools.querydoc.enabled=false \
+  --set kagent-tools.enabled=false
 ```
 
-Before configuring kagent, make sure you have the Standard-mode local Qwen model (`qwen-llm-standard`) running on KServe and the stable service (`qwen-llm-stable`) created.
+`kagent-tools` runs as cluster-admin and the docs agents don't use it, so keep it disabled.
 
-Apply the custom agent configuration:
+Before configuring kagent, deploy the LLM with the `llm-runtime` chart
+([charts/llm-runtime/README.md](charts/llm-runtime/README.md)).
+
+Install the agents, ModelConfigs and MCP server with the `docs-agent` chart
+([charts/docs-agent/README.md](charts/docs-agent/README.md)):
 
 ```bash
-kubectl apply -f manifests/kagent/setup.yaml
+helm upgrade --install docs-agent ./charts/docs-agent -n <YOUR_NAMESPACE>
 ```
+
+`manifests/kagent/setup.yaml` is the legacy Qwen setup. Don't apply it to a
+Helm-managed install: it overwrites the agents and points them at Qwen.
 
 Verify:
 

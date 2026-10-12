@@ -59,10 +59,10 @@ variables. The `gateway-guardrails` chart is installed by
 | KFP | `docs-agent-mcp/terraform/kubeflow_pipelines.tf` |
 | kagent | `docs-agent-mcp/terraform/kagent.tf` |
 | Edge | `docs-agent-mcp/terraform/gateway_guardrails.tf` |
-| LLM serve | `docs-agent-mcp/manifests/vllm/kserve-qwen.yaml` |
+| LLM serve | `docs-agent-mcp/charts/llm-runtime` |
 
 Gap: no KEDA ScaledObject (Issue #47). The LLM is a resident GPU pod. CD does
-not redeploy KServe on every push — only when `kserve-qwen.yaml` changes.
+not redeploy the model on every push — only on a manual `deploy_llm` dispatch.
 
 ### 2. Ingestion pipelines — `area/pipelines`
 

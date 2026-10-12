@@ -30,8 +30,9 @@ from typing import Any
 SOURCE_RE = re.compile(r"^\*\*Source:\*\*\s+(https?://\S+)\s*$", re.MULTILINE)
 MARKDOWN_URL_RE = re.compile(r"\[[^\]\n]+\]\((https?://[^\s)]+)\)")
 BARE_URL_RE = re.compile(r"https?://[^\s<>\"'\]]+")
-DEFAULT_AGENT_URL = "https://agent.santhoshtoorpu.com/a2a/docs-agent/kubeflow-docs-agent"
-DEFAULT_SESSION_URL = "https://agent.santhoshtoorpu.com/api/session"
+AGENT_BASE = os.environ.get("FLO_AGENT_BASE", "https://agent.example.com").rstrip("/")
+DEFAULT_AGENT_URL = f"{AGENT_BASE}/a2a/docs-agent/kubeflow-docs-agent"
+DEFAULT_SESSION_URL = f"{AGENT_BASE}/api/session"
 DEFAULT_ORIGIN = "https://kubeflowdemochatbot.netlify.app"
 
 

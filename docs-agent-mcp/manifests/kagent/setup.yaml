@@ -1,5 +1,6 @@
-# Kagent + MCP setup for docs-agent namespace.
-# LLM: in-cluster KServe Qwen (OpenAI-compatible). MCP: GHCR image from CD pipeline.
+# LEGACY: pre-Helm Kagent + MCP setup on in-cluster KServe Qwen. The agents are
+# now managed by charts/docs-agent (LLM: charts/llm-runtime). Applying this to a
+# Helm-managed install overwrites the agents and points them at Qwen.
 
 ---
 # Dummy API key for local KServe (no auth required on in-cluster predictor)
@@ -22,7 +23,7 @@ spec:
   provider: OpenAI
   apiKeySecret: kagent-kserve
   apiKeySecretKey: OPENAI_API_KEY
-  # Must match --model_name in manifests/vllm/kserve-qwen.yaml. vLLM's
+  # Must match the served model name of the Qwen InferenceService. vLLM's
   # OpenAI-compatible endpoint rejects an unknown model name with a 404, so a
   # mismatch here silently breaks every agent request.
   model: qwen2.5-7B

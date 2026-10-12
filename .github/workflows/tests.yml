@@ -65,17 +65,24 @@ jobs:
       - name: Lint charts
         run: |
           helm lint docs-agent-mcp/charts/docs-agent
-          helm lint docs-agent-mcp/charts/qwen-runtime
-          helm lint docs-agent-mcp/charts/gateway-guardrails
+          helm lint docs-agent-mcp/charts/gateway-guardrails \
+            --set domain=agent.example.org --set gateway.tls.acme.email=ci@example.org
+          # Every catalog profile must lint, not just the active one.
+          for profile in $(helm show values docs-agent-mcp/charts/llm-runtime | yq '.catalog | keys | .[]'); do
+            helm lint docs-agent-mcp/charts/llm-runtime --set "model=${profile}"
+          done
 
       - name: Render charts
         run: |
           helm template docs-agent docs-agent-mcp/charts/docs-agent \
             --namespace docs-agent --set-string mcp.image.tag=ci-test >/dev/null
-          helm template qwen-runtime docs-agent-mcp/charts/qwen-runtime \
-            --namespace ml-infra >/dev/null
+          for profile in $(helm show values docs-agent-mcp/charts/llm-runtime | yq '.catalog | keys | .[]'); do
+            helm template llm-runtime docs-agent-mcp/charts/llm-runtime \
+              --namespace ml-infra --set "model=${profile}" >/dev/null
+          done
           helm template gateway-guardrails docs-agent-mcp/charts/gateway-guardrails \
-            --namespace docs-agent >/dev/null
+            --namespace docs-agent \
+            --set domain=agent.example.org --set gateway.tls.acme.email=ci@example.org >/dev/null
 
   test:
     name: Pytest

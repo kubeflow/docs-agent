@@ -17,6 +17,11 @@ corsPolicy:
   maxAge: {{ .Values.routing.cors.maxAge | quote }}
 {{- end }}
 
+{{/* Public FQDN. No usable default: a wrong host would silently move the live gateway. */}}
+{{- define "gateway-guardrails.domain" -}}
+{{- required "domain is required (e.g. --set domain=agent.example.org)" .Values.domain -}}
+{{- end }}
+
 {{/* FQDN of the session issuer service. */}}
 {{- define "gateway-guardrails.issuerHost" -}}
 session-issuer.{{ .Values.namespaces.docsAgent }}.svc.cluster.local

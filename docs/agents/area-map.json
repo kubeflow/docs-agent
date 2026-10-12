@@ -168,7 +168,7 @@
         "docs-agent-mcp/terraform/milvus.tf",
         "docs-agent-mcp/terraform/knative.tf",
         "docs-agent-mcp/terraform/namespaces.tf",
-        "docs-agent-mcp/manifests/vllm/kserve-qwen.yaml",
+        "docs-agent-mcp/charts/llm-runtime/templates/inferenceservice.yaml",
         "docs-agent-mcp/manifests/istio/allow-milvus-standalone.yaml",
         "docs-agent-mcp/charts/gateway-guardrails/templates/mesh-authz.yaml"
       ]

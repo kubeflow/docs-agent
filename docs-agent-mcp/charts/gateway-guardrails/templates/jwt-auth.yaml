@@ -18,7 +18,7 @@ spec:
     - issuer: {{ .Values.sessionAuth.issuer | quote }}
       jwksUri: http://{{ include "gateway-guardrails.issuerHost" . }}:8000/.well-known/jwks.json
       forwardOriginalToken: true
-{{- if .Values.sessionAuth.enforce }}
+{{- if and .Values.sessionAuth.enforce .Values.gateway.enabled }}
 ---
 # DENY requests to the protected paths that carry no valid session principal.
 # OPTIONS is exempt so CORS preflights (which never carry Authorization)
@@ -42,8 +42,8 @@ spec:
       to:
         - operation:
             hosts:
-              - {{ .Values.domain | quote }}
-              - "{{ .Values.domain }}:*"
+              - {{ include "gateway-guardrails.domain" . | quote }}
+              - "{{ include "gateway-guardrails.domain" . }}:*"
             paths:
               {{- toYaml .Values.sessionAuth.protectedPaths | nindent 14 }}
             notMethods: ["OPTIONS"]

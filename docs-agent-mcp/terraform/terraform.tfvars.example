@@ -1,9 +1,11 @@
 # Copy to terraform.tfvars and adjust before: terraform apply
 
-# --- Optional public Kagent UI (Istio + Let's Encrypt) ---
+# --- Optional public chatbot gateway (Istio + Let's Encrypt) ---
+# With enable_kagent_ingress = true, the domain and ACME email are required
+# (Let's Encrypt rejects example.com addresses).
 # enable_kagent_ingress     = true
 # kagent_domain_name        = "agent.your-domain.example"
-# kagent_acme_email         = "you@example.com"
+# kagent_acme_email         = "you@your-domain.example"
 # kagent_cors_allow_origin_regexes = [
 #   "https://.*\\.vercel\\.app",
 #   "https://www\\.kubeflow\\.org",

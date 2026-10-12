@@ -7,7 +7,7 @@ blast radius:
 |---|---|---:|---|
 | `docs-agent` | MCP Deployment/Service/ConfigMap and Kagent resources | Yes | None; MCP uses maxUnavailable=0 |
 | `gateway-guardrails` | Istio routing, TLS, auth, rate limits, mesh policy | No | Normally none; promote separately |
-| `qwen-runtime` | PVC, ServingRuntime, InferenceService, stable Service | **No** | Expected; single GPU uses Recreate |
+| `llm-runtime` | PVC, InferenceService, stable Service (model picked by one value) | **No** | Expected; single GPU uses Recreate |
 
 KFP ingestion remains a separate operator-approved data operation. No Helm
 install or upgrade submits a pipeline run.
@@ -20,7 +20,7 @@ install or upgrade submits a pipeline run.
 3. Production SemVer promotion: dispatch the workflow with
    `release_version=X.Y.Z`; the image is tagged with that version and installed
    through the same chart.
-4. GPU runtime: dispatch separately with `deploy_kserve=true` during an approved
+4. GPU runtime: dispatch separately with `deploy_llm=true` during an approved
    downtime window. An ordinary merge cannot enter this path.
 
 Use SemVer independently for each chart:
@@ -72,7 +72,7 @@ helm test docs-agent -n docs-agent
 
 ## Rollback
 
-Application rollback never touches Qwen:
+Application rollback never touches the model:
 
 ```bash
 helm history docs-agent -n docs-agent

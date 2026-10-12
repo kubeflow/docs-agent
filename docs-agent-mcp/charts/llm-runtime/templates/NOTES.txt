@@ -1,0 +1,8 @@
+{{- $p := include "llm-runtime.profile" . | fromYaml -}}
+Serving catalog profile "{{ .Values.model }}" ({{ $p.id }}) as "{{ .Values.servedModelName }}" on one GPU; upgrades restart it (intentional downtime).
+
+OpenAI base URL: http://{{ .Values.service.name }}.{{ .Release.Namespace }}.svc.cluster.local/v1
+
+Wait for KServe's generated Deployment (Helm does not wait on custom conditions):
+  kubectl rollout status deployment/{{ .Values.inferenceService.name }}-predictor -n {{ .Release.Namespace }} --timeout=1800s
+  helm test {{ .Release.Name }} -n {{ .Release.Namespace }}

@@ -1015,6 +1015,11 @@
     opacity: 1;
 }
 
+.persona-pill.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 .mascot-badge svg {
     flex-shrink: 0;
 }

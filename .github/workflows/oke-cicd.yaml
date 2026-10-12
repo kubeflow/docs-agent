@@ -15,8 +15,8 @@ on:
         description: Optional new SemVer MCP image tag (for example 0.2.1); existing tags are rejected, blank uses the commit SHA
         type: string
         required: false
-      deploy_kserve:
-        description: Helm-upgrade qwen-runtime (single GPU — intentional downtime)
+      deploy_llm:
+        description: Helm-upgrade llm-runtime (restarts the model — intentional downtime)
         type: boolean
         default: false
 
@@ -61,14 +61,19 @@ jobs:
       - name: Lint and render Helm charts
         run: |
           helm lint docs-agent-mcp/charts/docs-agent
-          helm lint docs-agent-mcp/charts/qwen-runtime
-          helm lint docs-agent-mcp/charts/gateway-guardrails
+          helm lint docs-agent-mcp/charts/gateway-guardrails \
+            --set domain=agent.example.org --set gateway.tls.acme.email=ci@example.org
           helm template docs-agent docs-agent-mcp/charts/docs-agent \
             --namespace docs-agent --set-string mcp.image.tag=ci-test >/dev/null
-          helm template qwen-runtime docs-agent-mcp/charts/qwen-runtime \
-            --namespace ml-infra >/dev/null
+          # Every catalog profile must lint and render, not just the active one.
+          for profile in $(helm show values docs-agent-mcp/charts/llm-runtime | yq '.catalog | keys | .[]'); do
+            helm lint docs-agent-mcp/charts/llm-runtime --set "model=${profile}"
+            helm template llm-runtime docs-agent-mcp/charts/llm-runtime \
+              --namespace ml-infra --set "model=${profile}" >/dev/null
+          done
           helm template gateway-guardrails docs-agent-mcp/charts/gateway-guardrails \
-            --namespace docs-agent >/dev/null
+            --namespace docs-agent \
+            --set domain=agent.example.org --set gateway.tls.acme.email=ci@example.org >/dev/null
 
       - name: Ruff lint
         run: ruff check docs-agent-mcp/mcp-server docs-agent-mcp/session-issuer tests docs-agent-mcp/pipelines
@@ -253,86 +258,26 @@ jobs:
             -n "${{ env.K8S_NAMESPACE }}" --timeout=600s
           helm test docs-agent -n "${{ env.K8S_NAMESPACE }}" --timeout 2m
 
-          DEPLOY_KSERVE=false
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.deploy_kserve }}" = "true" ]; then
-            DEPLOY_KSERVE=true
+          LLM_DEPLOY=false
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.deploy_llm }}" = "true" ]; then
+            LLM_DEPLOY=true
+          elif ! helm status llm-runtime -n ml-infra >/dev/null 2>&1; then
+            echo "llm-runtime is not installed; the docs-agent ModelConfigs need it"
+            LLM_DEPLOY=true
           fi
-
-          if [ "${DEPLOY_KSERVE}" = "true" ]; then
-            # This intentionally disruptive migration is isolated in a
-            # subshell so every failure path restores the retained Knative
-            # runtime and stable service before the workflow exits.
-            (
-              set -Eeuo pipefail
-              LEGACY_QWEN_PRESENT=false
-
-              recover_legacy_qwen() {
-                failure_status="${1:-1}"
-                trap - ERR
-                set +e
-                echo "::warning::qwen-runtime migration failed; attempting best-effort recovery of legacy ml-infra/qwen-llm"
-                if [ "${LEGACY_QWEN_PRESENT}" = "true" ]; then
-                  kubectl annotate inferenceservice/qwen-llm -n ml-infra \
-                    serving.kserve.io/stop-
-                  kubectl wait --for=condition=Ready=True \
-                    inferenceservice/qwen-llm -n ml-infra --timeout=1800s || \
-                    echo "::warning::Legacy qwen-llm did not report Ready during the recovery window"
-                  if kubectl get service/qwen-llm-stable -n ml-infra >/dev/null 2>&1; then
-                    kubectl patch service/qwen-llm-stable -n ml-infra --type=json \
-                      -p '[{"op":"replace","path":"/spec/selector","value":{"serving.kserve.io/inferenceservice":"qwen-llm"}}]'
-                  else
-                    echo "::warning::qwen-llm-stable is absent; its selector could not be restored"
-                  fi
-                else
-                  echo "::warning::Legacy ml-infra/qwen-llm was absent, so automatic runtime recovery is unavailable"
-                fi
-                exit "${failure_status}"
-              }
-              trap 'recover_legacy_qwen $?' ERR
-
-              echo "Removing legacy docs-agent GPU InferenceService (frees GPU for ml-infra/qwen-llm)"
-              kubectl delete inferenceservice/qwen -n "${{ env.K8S_NAMESPACE }}" --ignore-not-found=true
-              kubectl delete svc/qwen-llm -n "${{ env.K8S_NAMESPACE }}" --ignore-not-found=true
-
-              # Standard mode supports the writable cache PVC without enabling
-              # cluster-wide Knative PVC feature flags. Stop the old Knative
-              # service first so it releases the single GPU while retaining a
-              # reversible rollback definition.
-              if kubectl get inferenceservice/qwen-llm -n ml-infra >/dev/null 2>&1; then
-                LEGACY_QWEN_PRESENT=true
-                echo "Stopping legacy ml-infra/qwen-llm before Standard-mode rollout"
-                kubectl annotate inferenceservice/qwen-llm -n ml-infra \
-                  serving.kserve.io/stop=true --overwrite
-                kubectl wait --for=condition=Stopped=True \
-                  inferenceservice/qwen-llm -n ml-infra --timeout=600s
-              fi
-
-              QWEN_OWNERSHIP_ARGS=()
-              QWEN_ATOMIC_ARGS=(--atomic --cleanup-on-fail)
-              if ! helm status qwen-runtime -n ml-infra >/dev/null 2>&1; then
-                echo "First qwen-runtime adoption: validating before non-destructive ownership transfer"
-                helm template qwen-runtime docs-agent-mcp/charts/qwen-runtime \
-                  --namespace ml-infra --skip-tests \
-                  | kubectl apply -n ml-infra --dry-run=server -f -
-                helm template qwen-runtime docs-agent-mcp/charts/qwen-runtime \
-                  --namespace ml-infra --show-only templates/tests/model-endpoint.yaml \
-                  | kubectl apply -n docs-agent --dry-run=server -f -
-                QWEN_OWNERSHIP_ARGS=(--take-ownership)
-                QWEN_ATOMIC_ARGS=()
-              fi
-
-              echo "Helm-upgrading the separately versioned qwen-runtime release"
-              helm upgrade --install qwen-runtime docs-agent-mcp/charts/qwen-runtime \
-                --namespace ml-infra --create-namespace --timeout 10m --history-max 5 \
-                "${QWEN_OWNERSHIP_ARGS[@]}" \
-                "${QWEN_ATOMIC_ARGS[@]}"
-              kubectl rollout status deployment/qwen-llm-standard-predictor \
-                -n ml-infra --timeout=1800s
-              helm test qwen-runtime -n ml-infra --timeout 3m
-              trap - ERR
-            )
+          if [ "${LLM_DEPLOY}" = "true" ]; then
+            # Restarts the model (one GPU, Recreate). Which model runs is the
+            # chart's `model` value; this step never changes it.
+            LLM_ISVC="$(helm show values docs-agent-mcp/charts/llm-runtime | yq '.inferenceService.name')"
+            echo "Helm-upgrading the llm-runtime release"
+            helm upgrade --install llm-runtime docs-agent-mcp/charts/llm-runtime \
+              --namespace ml-infra --create-namespace --timeout 10m --history-max 5 \
+              --atomic --cleanup-on-fail
+            kubectl rollout status "deployment/${LLM_ISVC}-predictor" \
+              -n ml-infra --timeout=1800s
+            helm test llm-runtime -n ml-infra --timeout 3m
           else
-            echo "Skipping qwen-runtime Helm upgrade; normal app upgrades do not restart the GPU service"
+            echo "Skipping llm-runtime Helm upgrade; normal app upgrades do not restart the model"
           fi
 
       - name: Wait for ml-infra dependencies
@@ -362,21 +307,23 @@ jobs:
             python3 /app/smoke_tools.py
           kubectl get agent,modelconfig -n "${{ env.K8S_NAMESPACE }}"
 
-      - name: Smoke test Qwen
+      - name: Smoke test LLM
         run: |
           set -euo pipefail
-          SMOKE_POD="qwen-stable-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          LLM_SVC="$(helm show values docs-agent-mcp/charts/llm-runtime | yq '.service.name')"
+          LLM_MODEL="$(helm show values docs-agent-mcp/charts/llm-runtime | yq '.servedModelName')"
+          SMOKE_POD="llm-stable-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           kubectl delete pod "${SMOKE_POD}" -n "${{ env.K8S_NAMESPACE }}" \
             --ignore-not-found --wait=false
-          # Exercise the stable service from the agent namespace so this works
-          # in either legacy Knative or Helm-managed Standard runtime mode.
+          # Exercise the stable service from the agent namespace, the same
+          # mesh path kagent uses.
           kubectl run "${SMOKE_POD}" -n "${{ env.K8S_NAMESPACE }}" \
-            --image=curlimages/curl:8.12.1 --restart=Never --rm --attach \
+            --image=docker.io/curlimages/curl:8.12.1 --restart=Never --rm --attach \
             --pod-running-timeout=5m --command -- \
             curl --fail --silent --show-error --max-time 120 \
               --header 'Content-Type: application/json' \
-              --data '{"model":"qwen2.5-7B","messages":[{"role":"user","content":"ping"}],"max_tokens":8}' \
-              http://qwen-llm-stable.ml-infra.svc.cluster.local/openai/v1/chat/completions
+              --data "{\"model\":\"${LLM_MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":8}" \
+              "http://${LLM_SVC}.ml-infra.svc.cluster.local/v1/chat/completions"
 
       - name: Remove pre-Helm MCP canary after functional smoke tests
         run: |

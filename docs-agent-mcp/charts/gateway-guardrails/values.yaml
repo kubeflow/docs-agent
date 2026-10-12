@@ -5,8 +5,9 @@
 #   helm upgrade gateway-guardrails . --set rateLimit.global.requestsPerMinute=120
 # =============================================================================
 
-# Public FQDN of the chatbot (must resolve to the Istio ingress LB).
-domain: agent.santhoshtoorpu.com
+# Public FQDN of the chatbot (must resolve to the Istio ingress LB). Required;
+# Terraform passes var.kagent_domain_name.
+domain: ""
 
 namespaces:
   docsAgent: docs-agent
@@ -27,17 +28,16 @@ gateway:
       enabled: true
       clusterIssuerName: letsencrypt-prod
       server: https://acme-v02.api.letsencrypt.org/directory
-      email: toorpusanthosh@gmail.com
+      # Let's Encrypt account contact. Required when acme.enabled; Terraform
+      # passes var.kagent_acme_email.
+      email: ""
 
 routing:
   # kagent UI service that fronts the A2A agent.
   uiService: kagent-ui
   uiPort: 8080
-  # Cap slow/stuck upstream (LLM) calls so a hung request can't pin a worker.
-  timeout: 30s
-  # The A2A path streams tokens for as long as generation takes, so it can't
-  # live under the cap above: a 7B answer routinely runs past 30s and Envoy was
-  # cutting the SSE stream mid-token, which reads as the model truncating.
+  # Deadline for the A2A stream. It covers the whole generation: a 7B answer
+  # routinely runs past 30s, and a short cap cut the SSE stream mid-token.
   streamTimeout: 300s
   cors:
     # Lock embedding to the published chatbot origin(s) — no wildcard.
@@ -76,17 +76,20 @@ sessionAuth:
   # RS256 token and sends it as `Authorization: Bearer`. Istio validates
   # signature + expiry at the ingress gateway (RequestAuthentication).
   enabled: true
-  # enforce=false -> "canary" mode: requests carrying an invalid/expired token
-  # are rejected, but token-less requests still pass. Flip to true once the
-  # chat widget attaches tokens, to hard-require a session on protectedPaths.
-  enforce: false
+  # enforce=true hard-requires a session on protectedPaths (the widget attaches
+  # tokens and re-fetches on 401/403). false is "canary" mode: invalid/expired
+  # tokens are rejected, but token-less requests still pass.
+  enforce: true
   issuer: kubeflow-docs-session-issuer
   ttlSeconds: 1800
   # Paths that require a valid session JWT when enforce=true.
   # (OPTIONS is always exempt so CORS preflights succeed.)
   protectedPaths:
+    - /a2a/*
     - /api/a2a/*
   image: ghcr.io/kubeflow/kubeflow-session-issuer:latest
+  # Needed when the image is private, e.g. [{name: ghcr-session-issuer}].
+  imagePullSecrets: []
   # Secret holding the RS256 signing key at key `private.pem`. Create with:
   #   openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out private.pem
   #   kubectl -n docs-agent create secret generic session-issuer-key --from-file=private.pem
@@ -103,5 +106,7 @@ sessionAuth:
 # The RAG-stack AuthorizationPolicies previously defined in istio_policies.tf.
 meshPolicies:
   enabled: true
-  # Must match the active KServe InferenceService label.
-  qwenInferenceServiceName: qwen-llm-standard
+  # KServe InferenceServices kagent may call (llm-runtime's inferenceService.name).
+  # One policy each; list an old and a new name together during a migration.
+  llmInferenceServiceNames:
+    - llm

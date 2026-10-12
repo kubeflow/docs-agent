@@ -18,15 +18,15 @@ variable "enable_kagent_ingress" {
 }
 
 variable "kagent_domain_name" {
-  description = "FQDN for Kagent UI and A2A (must resolve to Istio ingress when enabled)"
+  description = "FQDN for the chatbot (must resolve to the Istio ingress). Required when enable_kagent_ingress"
   type        = string
-  default     = "agent.example.com"
+  default     = ""
 }
 
 variable "kagent_acme_email" {
-  description = "Email for Let's Encrypt expiry notifications"
+  description = "Let's Encrypt account contact (example.com is rejected). Required when enable_kagent_ingress"
   type        = string
-  default     = "admin@example.com"
+  default     = ""
 }
 
 variable "kagent_cors_allow_origins" {
@@ -48,9 +48,9 @@ variable "enable_session_auth" {
 }
 
 variable "enforce_session_auth" {
-  description = "Hard-require a session JWT on the A2A paths (flip only after the widget attaches tokens)"
+  description = "Hard-require a session JWT on the A2A paths (the chat widget attaches tokens)"
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "session_issuer_image" {
@@ -122,6 +122,13 @@ resource "helm_release" "gateway_guardrails" {
       }
     })
   ]
+
+  lifecycle {
+    precondition {
+      condition     = !var.enable_kagent_ingress || (var.kagent_domain_name != "" && var.kagent_acme_email != "")
+      error_message = "kagent_domain_name and kagent_acme_email are required when enable_kagent_ingress is true."
+    }
+  }
 
   depends_on = [
     helm_release.istiod,

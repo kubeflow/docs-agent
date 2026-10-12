@@ -5,7 +5,7 @@ metadata:
   name: "{{ .Release.Name }}-model-endpoint-test"
   namespace: {{ .Values.tests.namespace }}
   labels:
-    {{- include "qwen-runtime.labels" . | nindent 4 }}
+    {{- include "llm-runtime.labels" . | nindent 4 }}
   annotations:
     "helm.sh/hook": test
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
@@ -18,5 +18,6 @@ spec:
       args:
         - >-
           curl --fail --silent --show-error --max-time 60
-          http://{{ .Values.stableService.name }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.stableService.port }}/openai/v1/models
+          http://{{ .Values.service.name }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/v1/models
+          | grep -F '"{{ .Values.servedModelName }}"'
 {{- end }}

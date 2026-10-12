@@ -8,7 +8,7 @@ metadata:
 spec:
   acme:
     server: {{ .Values.gateway.tls.acme.server }}
-    email: {{ .Values.gateway.tls.acme.email }}
+    email: {{ required "gateway.tls.acme.email is required when acme.enabled" .Values.gateway.tls.acme.email }}
     privateKeySecretRef:
       name: {{ .Values.gateway.tls.acme.clusterIssuerName }}-account-key
     solvers:
@@ -28,7 +28,7 @@ spec:
   issuerRef:
     name: {{ .Values.gateway.tls.acme.clusterIssuerName }}
     kind: ClusterIssuer
-  commonName: {{ .Values.domain }}
+  commonName: {{ include "gateway-guardrails.domain" . }}
   dnsNames:
-    - {{ .Values.domain }}
+    - {{ include "gateway-guardrails.domain" . }}
 {{- end }}

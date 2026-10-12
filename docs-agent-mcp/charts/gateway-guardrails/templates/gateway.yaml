@@ -15,7 +15,7 @@ spec:
         name: http
         protocol: HTTP
       hosts:
-        - {{ .Values.domain | quote }}
+        - {{ include "gateway-guardrails.domain" . | quote }}
       tls:
         httpsRedirect: {{ .Values.gateway.tls.enabled }}
     {{- if .Values.gateway.tls.enabled }}
@@ -24,7 +24,7 @@ spec:
         name: https
         protocol: HTTPS
       hosts:
-        - {{ .Values.domain | quote }}
+        - {{ include "gateway-guardrails.domain" . | quote }}
       tls:
         mode: SIMPLE
         credentialName: {{ .Values.gateway.tls.credentialName }}

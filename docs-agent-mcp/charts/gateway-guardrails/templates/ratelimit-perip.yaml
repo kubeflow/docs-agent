@@ -196,7 +196,7 @@ spec:
         context: GATEWAY
         routeConfiguration:
           vhost:
-            name: "{{ .Values.domain }}:443"
+            name: "{{ include "gateway-guardrails.domain" . }}:443"
       patch:
         operation: MERGE
         value:

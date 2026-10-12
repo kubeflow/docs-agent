@@ -11,10 +11,10 @@ standalone YAML under `manifests/istio*`.
 | Layer | Resources | Toggle |
 |---|---|---|
 | TLS | ClusterIssuer (Let's Encrypt) + Certificate | `gateway.tls.acme.enabled` |
-| Routing | Gateway + VirtualService (CORS lockdown, 30s timeout) | `gateway.enabled` |
+| Routing | Gateway + VirtualService: only `/api/session`, the JWKS and the A2A stream are public (CORS lockdown, 300s stream timeout) | `gateway.enabled` |
 | Rate limit L1 | `a2a-global-ratelimit` EnvoyFilter — 60 req/min token bucket on the :443 listener | `rateLimit.global.enabled` |
 | Rate limit L2 | Envoy ratelimit service + Redis + EnvoyFilter — 10 req/min per client IP | `rateLimit.perIP.enabled` (off: needs real client IPs, see below) |
-| Mesh policies | 8 AuthorizationPolicies for the RAG stack (Milvus, LLM, MCP, embeddings) | `meshPolicies.enabled` |
+| Mesh policies | AuthorizationPolicies for the RAG stack (Milvus, MCP, embeddings, plus one per `meshPolicies.llmInferenceServiceNames` entry) | `meshPolicies.enabled` |
 
 ## Why
 
@@ -25,11 +25,19 @@ all at the Istio ingress, with no application changes.
 
 ## Install / upgrade
 
+The ACME HTTP-01 solver needs the `istio` IngressClass. Apply it once per
+cluster: `kubectl apply -f ../../manifests/istio-tls/ingress-class.yaml`.
+`domain` and `gateway.tls.acme.email` have no defaults. Terraform sets them from
+`kagent_domain_name` and `kagent_acme_email`; for a manual upgrade, pass them:
+
 ```bash
 helm upgrade --install gateway-guardrails . -n docs-agent \
-  --set domain=agent.example.com \
-  --set gateway.tls.acme.email=you@example.com
+  --set domain=agent.your-domain.example \
+  --set gateway.tls.acme.email=you@your-domain.example
 ```
+
+Session tokens are enforced (`sessionAuth.enforce: true`) on `/a2a/*` and
+`/api/a2a/*`: a request without a valid token from `POST /api/session` gets a 403.
 
 Tuning examples:
 
@@ -50,7 +58,20 @@ checks) or trust XFF via `meshConfig.numTrustedProxies`.
 ## Verifying
 
 ```bash
-# Rate limit: expect a mix of 200/429 past the per-minute cap
+# Exposure: kagent's admin API (no auth) must not be reachable; expect 404 for all
+for p in / /api/agents /api/sessions /api/toolservers '/a2a/..%2fapi/sessions'; do
+  curl -s -o /dev/null -w "%{http_code} $p\n" --path-as-is "https://$DOMAIN$p"; done
+
+# Session auth: no token -> 403
+curl -s -o /dev/null -w "%{http_code}\n" -X POST https://$DOMAIN/a2a/docs-agent/kubeflow-docs-agent \
+  -H 'content-type: application/json' -d '{}'
+
+# CORS: a foreign origin must get no access-control-allow-origin header
+TOKEN=$(curl -s -X POST https://$DOMAIN/api/session | jq -r .access_token)
+curl -s -o /dev/null -D - https://$DOMAIN/api/a2a/docs-agent/kubeflow-docs-agent/.well-known/agent.json \
+  -H "Authorization: Bearer $TOKEN" -H "Origin: https://evil.example" | grep -i access-control-allow-origin
+
+# Rate limit: expect 429s past the per-minute cap (403 for the rest: no token)
 seq 1 100 | xargs -P 25 -I{} curl -s -o /dev/null -w "%{http_code}\n" \
   -X POST https://$DOMAIN/api/a2a/docs-agent/kubeflow-docs-agent \
   -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":"t","method":"x"}' | sort | uniq -c

@@ -8,7 +8,7 @@ metadata:
     {{- include "gateway-guardrails.labels" . | nindent 4 }}
 spec:
   hosts:
-    - {{ .Values.domain | quote }}
+    - {{ include "gateway-guardrails.domain" . | quote }}
   gateways:
     - {{ .Values.namespaces.istioSystem }}/kagent-gateway
   http:
@@ -29,23 +29,30 @@ spec:
             port:
               number: 8000
     {{- end }}
-    # A2A streaming. Must precede the catch-all below so the prefix wins, and
-    # must carry its own deadline: the response streams for the whole
-    # generation, which outlives the short cap on ordinary requests.
+    # A2A streaming only. kagent-ui also serves its admin API (/api/agents,
+    # /api/sessions, ...) without auth, so there is deliberately no catch-all:
+    # any other path gets a 404 from the gateway. A regex rather than a prefix:
+    # Envoy routes on the raw path, and kagent-ui decodes %2F after routing, so
+    # /a2a/..%2fapi/sessions would otherwise escape to the admin API. Envoy
+    # resolves plain ../ before matching. The deadline covers the whole
+    # streamed generation.
     - name: agent-stream
       match:
         - uri:
-            prefix: /a2a/
+            regex: "/(api/)?a2a/[A-Za-z0-9._~/-]+"
       {{- include "gateway-guardrails.corsPolicy" . | nindent 6 }}
+      # kagent-ui answers with `access-control-allow-origin: *`. Drop its CORS
+      # headers so only corsPolicy (the allowed origins) decides.
+      headers:
+        response:
+          remove:
+            - access-control-allow-origin
+            - access-control-allow-methods
+            - access-control-allow-headers
+            - access-control-allow-credentials
+            - access-control-expose-headers
+            - access-control-max-age
       timeout: {{ .Values.routing.streamTimeout }}
-      route:
-        - destination:
-            host: {{ .Values.routing.uiService }}.{{ .Values.namespaces.docsAgent }}.svc.cluster.local
-            port:
-              number: {{ .Values.routing.uiPort }}
-    - name: kagent-ui
-      {{- include "gateway-guardrails.corsPolicy" . | nindent 6 }}
-      timeout: {{ .Values.routing.timeout }}
       route:
         - destination:
             host: {{ .Values.routing.uiService }}.{{ .Values.namespaces.docsAgent }}.svc.cluster.local

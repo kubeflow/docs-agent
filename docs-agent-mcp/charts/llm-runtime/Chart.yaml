@@ -1,0 +1,12 @@
+apiVersion: v2
+name: llm-runtime
+description: Single-GPU KServe LLM runtime for the Kubeflow Docs Agent; values pick the model from a catalog
+type: application
+version: 0.2.0
+# vLLM serving image version used by the catalog profiles.
+appVersion: "v0.30.0"
+keywords:
+  - kserve
+  - gpu
+  - vllm
+  - llm

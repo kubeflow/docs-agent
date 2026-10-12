@@ -277,6 +277,36 @@ function createChatbotElements() {
         selectorCard.appendChild(selectorContent);
         personaSidebar.appendChild(selectorCard);
 
+        // 3. Thinking toggle (docs persona only): routes to the thinking agent
+        const thinkCard = document.createElement('div');
+        thinkCard.className = 'persona-card selector-card';
+        thinkCard.innerHTML = '<div class="persona-card-header"><h4>THINKING</h4></div>';
+
+        const thinkContent = document.createElement('div');
+        thinkContent.className = 'persona-card-content selector-content';
+
+        const thinkToggle = document.createElement('div');
+        thinkToggle.id = 'think-toggle';
+        thinkToggle.className = 'persona-pill';
+        thinkToggle.setAttribute('role', 'switch');
+        thinkToggle.setAttribute('aria-checked', 'false');
+        thinkToggle.tabIndex = 0;
+        thinkToggle.innerHTML = `
+            <div class="persona-pill-icon">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/></svg>
+            </div>
+            <div class="persona-pill-text">
+                <span class="persona-pill-name">Think deeper</span>
+                <span class="persona-pill-sub">More careful · ~2x slower</span>
+            </div>
+            <div class="persona-pill-check">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
+        `;
+        thinkContent.appendChild(thinkToggle);
+        thinkCard.appendChild(thinkContent);
+        personaSidebar.appendChild(thinkCard);
+
 
         // Assemble chatbot body
         chatbotBody.appendChild(personaSidebar);
@@ -531,6 +561,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     const optionsDropdown = document.getElementById('options-dropdown');
     const personaOptionDocs = document.getElementById('persona-docs');
     const personaOptionDebug = document.getElementById('persona-debug');
+    const thinkToggle = document.getElementById('think-toggle');
 
     // Validate all required elements exist
     if (!chatbotContainer || !chatbotBackdrop || !chatMessages || !userInput || !sendButton || !toggleButton || !chatbotToggle || !sidebarStrip || !sidebarNewChat || !sidebarExpand || !chatSidebar || !chatList) {
@@ -569,6 +600,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     let currentChatIndex = -1; // Index of current chat in stack, -1 for new unsaved chat
     let currentContextId = generateUUID(); // KAgent session ID
     let currentPersona = 'docs';
+    let thinkingEnabled = false; // Docs persona only; selects the thinking agent
 
     // TODO 2: Browser storage functions ✅
     function saveChatsToStorage() {
@@ -832,17 +864,21 @@ document.addEventListener('DOMContentLoaded', async function () {
         if (scriptEl?.dataset?.agentBase) {
             return scriptEl.dataset.agentBase.replace(/\/$/, '') + KAGENT_A2A_PATH;
         }
-        return 'https://agent.santhoshtoorpu.com/a2a/docs-agent/kubeflow-docs-agent';
+        return 'https://agent.example.com/a2a/docs-agent/kubeflow-docs-agent';
     }
 
     function getAPIUrl() {
-        const agentName = currentPersona === 'debug' ? 'kubeflow-debug-agent' : 'kubeflow-docs-agent';
+        let agentName = 'kubeflow-docs-agent';
+        if (currentPersona === 'debug') {
+            agentName = 'kubeflow-debug-agent';
+        } else if (thinkingEnabled) {
+            agentName = 'kubeflow-docs-agent-think';
+        }
         const base = resolveAgentApiUrl();
+        const configuredAgent = base.match(/kubeflow-(?:docs|debug)-agent(?:-think)?\/?$/);
 
-        if (base.includes('kubeflow-docs-agent')) {
-            return base.replace('kubeflow-docs-agent', agentName);
-        } else if (base.includes('kubeflow-debug-agent')) {
-            return base.replace('kubeflow-debug-agent', agentName);
+        if (configuredAgent) {
+            return base.slice(0, configuredAgent.index) + agentName;
         } else {
             if (base.endsWith('/')) {
                 return base + agentName;
@@ -864,7 +900,8 @@ document.addEventListener('DOMContentLoaded', async function () {
     let sessionToken = null;
     let sessionExpiresAt = 0;
     let sessionFetch = null;
-    let sessionEndpointAvailable = true; // Disabled after first failure to avoid redundant errors
+    let sessionEndpointAvailable = true; // Disabled only when the gateway has no session endpoint (404/405)
+    const SESSION_RETRY_DELAYS_MS = [1000, 3000];
 
     function getSessionUrl() {
         return new URL(SESSION_PATH, getAPIUrl()).toString();
@@ -914,23 +951,32 @@ document.addEventListener('DOMContentLoaded', async function () {
         return Boolean(sessionToken) && now < sessionExpiresAt - SESSION_REFRESH_MARGIN_MS;
     }
 
+    // Rate limits (429), server errors and network failures are retried with
+    // backoff and never disable sessions for the rest of the page.
     async function fetchSessionToken() {
-        if (!sessionEndpointAvailable) return null;
-        try {
-            const requestedAt = Date.now();
-            const response = await fetch(getSessionUrl(), { method: 'POST' });
-            if (!response.ok) {
-                sessionEndpointAvailable = false;
-                return null;
+        for (let attempt = 0; attempt <= SESSION_RETRY_DELAYS_MS.length; attempt++) {
+            if (!sessionEndpointAvailable) return null;
+            if (attempt > 0) {
+                await new Promise((resolve) => setTimeout(resolve, SESSION_RETRY_DELAYS_MS[attempt - 1]));
             }
-            const data = await response.json();
-            sessionToken = data.access_token;
-            sessionExpiresAt = computeSessionExpiry(data, requestedAt);
-            return sessionToken;
-        } catch (e) {
-            sessionEndpointAvailable = false; // Mark unavailable for rest of session
-            return null;
+            try {
+                const requestedAt = Date.now();
+                const response = await fetch(getSessionUrl(), { method: 'POST' });
+                if (response.status === 404 || response.status === 405) {
+                    sessionEndpointAvailable = false;
+                    return null;
+                }
+                if (!response.ok) {
+                    if (response.status === 429 || response.status >= 500) continue;
+                    return null;
+                }
+                const data = await response.json();
+                sessionToken = data.access_token;
+                sessionExpiresAt = computeSessionExpiry(data, requestedAt);
+                return sessionToken;
+            } catch (e) {}
         }
+        return null;
     }
 
     // Returns a valid token, minting one if absent, near expiry, or already
@@ -970,7 +1016,7 @@ document.addEventListener('DOMContentLoaded', async function () {
         } catch (error) {}
 
         let response = await send(token);
-        if (token && (response.status === 401 || response.status === 403)) {
+        if (response.status === 401 || response.status === 403) {
             response = await send(await getSessionToken({ forceRefresh: true }));
         }
         return response;
@@ -1691,9 +1737,42 @@ document.addEventListener('DOMContentLoaded', async function () {
 
 
 
+        updateThinkToggle();
+
         // Start fresh session for the new persona
         startNewChat();
         console.log(`Persona switched to: ${persona}`);
+    }
+
+    function updateThinkToggle() {
+        if (!thinkToggle) return;
+        const available = currentPersona === 'docs';
+        const on = available && thinkingEnabled;
+        thinkToggle.classList.toggle('active', on);
+        thinkToggle.classList.toggle('disabled', !available);
+        thinkToggle.setAttribute('aria-checked', String(on));
+        thinkToggle.setAttribute('aria-disabled', String(!available));
+        const check = thinkToggle.querySelector('.persona-pill-check');
+        if (check) check.classList.toggle('visible', on);
+    }
+
+    // Kagent sessions are per agent, so switching modes starts a new chat.
+    function toggleThinking() {
+        if (currentPersona !== 'docs') return;
+        thinkingEnabled = !thinkingEnabled;
+        updateThinkToggle();
+        startNewChat();
+        console.log(`Thinking ${thinkingEnabled ? 'on' : 'off'}`);
+    }
+
+    if (thinkToggle) {
+        thinkToggle.addEventListener('click', toggleThinking);
+        thinkToggle.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                toggleThinking();
+            }
+        });
     }
 
     if (personaOptionDocs) {

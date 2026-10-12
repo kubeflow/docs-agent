@@ -81,27 +81,29 @@ spec:
         - operation:
             ports: ["19530"]
 ---
-# docs-agent/kagent -> ml-infra/qwen-llm (LLM inference)
+{{- range .Values.meshPolicies.llmInferenceServiceNames }}
+# docs-agent/kagent -> ml-infra/{{ . }} (LLM inference)
 apiVersion: security.istio.io/v1beta1
 kind: AuthorizationPolicy
 metadata:
-  name: allow-kagent-to-llm
-  namespace: {{ .Values.namespaces.mlInfra }}
+  name: allow-kagent-to-{{ . }}
+  namespace: {{ $.Values.namespaces.mlInfra }}
   labels:
-    {{- include "gateway-guardrails.labels" . | nindent 4 }}
+    {{- include "gateway-guardrails.labels" $ | nindent 4 }}
 spec:
   selector:
     matchLabels:
-      serving.kserve.io/inferenceservice: {{ .Values.meshPolicies.qwenInferenceServiceName }}
+      serving.kserve.io/inferenceservice: {{ . }}
   action: ALLOW
   rules:
     - from:
         - source:
-            namespaces: ["{{ .Values.namespaces.docsAgent }}", "{{ .Values.namespaces.istioSystem }}"]
+            namespaces: ["{{ $.Values.namespaces.docsAgent }}", "{{ $.Values.namespaces.istioSystem }}"]
       to:
         - operation:
             ports: ["8080", "8012"]
 ---
+{{- end }}
 # docs-agent/kagent -> docs-agent/mcp-server (MCP tool calls)
 apiVersion: security.istio.io/v1beta1
 kind: AuthorizationPolicy

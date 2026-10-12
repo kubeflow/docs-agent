@@ -1,6 +1,6 @@
 # MCP and Kagent application values. GPU serving and edge guardrails are
 # deliberately separate Helm releases so an ordinary app upgrade cannot
-# recycle the single-GPU InferenceService or change public routing.
+# recycle the GPU InferenceService (llm-runtime) or change public routing.
 
 mcp:
   replicaCount: 1
@@ -21,6 +21,14 @@ mcp:
     maxQueryChars: 512
     maxTopK: 10
     maxCandidateHits: 40
+    # auto = intent router picks bm25/hybrid/dense per query (needs the v4 hybrid collection).
+    searchMode: auto
+    autoBm25CandidateDepth: 30
+    autoTemporalCandidateDepth: 50
+    hybridRanker: rrf
+    hybridRrfK: 60
+    hybridDenseWeight: "0.7"
+    hybridSparseWeight: "0.3"
   milvusAuth:
     existingSecret: mcp-server-secret
     passwordKey: MILVUS_PASSWORD
@@ -52,32 +60,69 @@ mcp:
 
 kagent:
   enabled: true
-  model:
-    name: kserve-qwen
-    provider: OpenAI
-    model: qwen2.5-7B
-    baseUrl: http://qwen-llm-stable.ml-infra.svc.cluster.local/openai/v1
-    temperature: "0.1"
-    topP: "0.9"
-    maxTokens: 1024
-    timeout: 300
-    apiKeySecret:
-      name: kagent-kserve
-      key: OPENAI_API_KEY
-      create: true
-      # The in-cluster KServe endpoint does not authenticate this dummy value.
-      value: local-kserve
+  # Shared by every ModelConfig; the in-cluster LLM endpoints ignore the value.
+  apiKeySecret:
+    name: kagent-kserve
+    key: OPENAI_API_KEY
+    create: true
+    value: local-kserve
+  # One ModelConfig per entry (provider OpenAI). Agents pick one by name.
+  # Both point at the llm-runtime release; which model answers is decided
+  # there by its `model` value, so nothing here changes on a model switch.
+  # reasoningEffort low/medium/high turns thinking on per request when the
+  # active model supports it; models without a thinking mode ignore it.
+  models:
+    - name: flo-llm
+      model: flo-llm
+      baseUrl: http://llm-stable.ml-infra.svc.cluster.local/v1
+      temperature: "0.4"
+      topP: "0.9"
+      # Prompt + output must fit maxModelLen (32768) in llm-runtime.
+      maxTokens: 8192
+      timeout: 300
+    - name: flo-llm-think
+      model: flo-llm
+      baseUrl: http://llm-stable.ml-infra.svc.cluster.local/v1
+      temperature: "0.4"
+      topP: "0.9"
+      # Reasoning tokens count against this; 1024 truncates it.
+      maxTokens: 8192
+      timeout: 300
+      reasoningEffort: low
   remoteMcp:
     name: kubeflow-docs-mcp
     timeout: 30s
+  # Keyed by role; the frontend picks an agent by name.
   agents:
     docs:
       name: kubeflow-docs-agent
       enabled: true
+      description: Kubeflow documentation assistant
+      modelConfig: flo-llm
+      systemMessageFile: files/docs-system-message.txt
+      toolNames:
+        - search_kubeflow_docs
+        - search_github_issues
+    docsThink:
+      name: kubeflow-docs-agent-think
+      enabled: true
+      description: Kubeflow documentation assistant (thinking on)
+      modelConfig: flo-llm-think
+      systemMessageFile: files/docs-system-message.txt
+      toolNames:
+        - search_kubeflow_docs
+        - search_github_issues
     debug:
       name: kubeflow-debug-agent
       enabled: true
+      description: Kubeflow debugging and code assistant
+      modelConfig: flo-llm
+      systemMessageFile: files/debug-system-message.txt
+      toolNames:
+        - search_kubeflow_code
+        - search_github_issues
+        - search_kubeflow_docs
 
 tests:
   enabled: true
-  image: busybox:1.37
+  image: docker.io/library/busybox:1.37

@@ -1,0 +1,101 @@
+# The one switch: which catalog profile this release serves.
+model: gemma
+
+# Name clients (kagent ModelConfigs) call. Stays the same whichever profile is
+# active, so switching models never touches the docs-agent chart.
+servedModelName: flo-llm
+
+# Validated model profiles. Add a profile here, evaluate it with
+# tests/eval/slm_tool_eval.py, record the result in tests/eval/SLM_EVALS.md,
+# then switch `model`.
+catalog:
+  gemma:
+    image: docker.io/vllm/vllm-openai@sha256:8a69ffad015f138d7170c4ddc429e230a3bc1c1719f67e14324749df200a4b90
+    id: google/gemma-4-E4B-it
+    revision: ee0ef6023621cff504d758262d4e04895a5af4a2
+    quantization: ""
+    maxModelLen: 32768
+    # Share of GPU memory for weights + KV cache.
+    gpuMemoryUtilization: "0.90"
+    toolCallParser: gemma4
+    reasoningParser: gemma4
+    # Server default; requests with reasoning_effort low/medium/high turn it on.
+    thinkingDefault: false
+    extraArgs:
+      - '--limit-mm-per-prompt={"image": 0, "audio": 0}'
+    # All four values are required: KServe replaces a missing one with its
+    # cluster default (cpu 1, memory 2Gi).
+    resources:
+      cpu:
+        request: "4"
+        limit: "16"
+      memory:
+        request: 24Gi
+        limit: 48Gi
+      shm: 8Gi
+  qwen:
+    image: docker.io/vllm/vllm-openai@sha256:8a69ffad015f138d7170c4ddc429e230a3bc1c1719f67e14324749df200a4b90
+    id: Qwen/Qwen2.5-7B-Instruct-AWQ
+    revision: b25037543e9394b818fdfca67ab2a00ecc7dd641
+    quantization: awq
+    maxModelLen: 32768
+    gpuMemoryUtilization: "0.90"
+    toolCallParser: hermes
+    reasoningParser: ""
+    # null leaves the chat template alone (no thinking mode).
+    thinkingDefault: null
+    extraArgs: []
+    resources:
+      cpu:
+        request: "4"
+        limit: "16"
+      memory:
+        request: 16Gi
+        limit: 64Gi
+      shm: 8Gi
+
+# Any GPU node; one model per GPU.
+placement:
+  nodeSelector:
+    nvidia.com/gpu: "true"
+  tolerations:
+    - operator: Exists
+
+# One cache for every profile, so switching back does not re-download weights.
+cache:
+  create: true
+  claimName: llm-hf-cache
+  accessMode: ReadWriteOnce
+  size: 50Gi
+  storageClassName: oci-bv
+  keepOnDelete: true
+
+# Only for gated models; references an existing Secret, never a value.
+hfToken:
+  existingSecret: ""
+  key: HF_TOKEN
+
+inferenceService:
+  name: llm
+  deploymentMode: Standard
+  # One GPU per model: the old pod must release it before the new one starts.
+  deploymentStrategy: Recreate
+  minReplicas: 1
+  deploymentTimeout: "3600"
+  # containerConcurrency; 0 = unlimited (vLLM batches requests itself).
+  concurrency: 0
+  # First start downloads the weights.
+  startupProbe:
+    periodSeconds: 10
+    failureThreshold: 180
+
+service:
+  name: llm-stable
+  port: 80
+  targetPort: 8080
+
+tests:
+  enabled: true
+  # Exercise the same namespace-to-LLM AuthorizationPolicy path as Kagent.
+  namespace: docs-agent
+  image: docker.io/curlimages/curl:8.12.1

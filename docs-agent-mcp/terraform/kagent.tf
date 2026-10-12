@@ -104,13 +104,11 @@ resource "helm_release" "kagent" {
     name  = "ui.resources.requests.memory"
     value = "128Mi"
   }
+  # The bundled tool server runs as cluster-admin (shell, k8s_apply_manifest,
+  # helm_upgrade, ...) and no docs agent uses it.
   set {
-    name  = "kagent-tools.tools.resources.requests.cpu"
-    value = "50m"
-  }
-  set {
-    name  = "kagent-tools.tools.resources.requests.memory"
-    value = "64Mi"
+    name  = "kagent-tools.enabled"
+    value = "false"
   }
 
   depends_on = [helm_release.kagent_crds]

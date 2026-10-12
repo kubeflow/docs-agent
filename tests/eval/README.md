@@ -120,7 +120,7 @@ query-rewrite quality independently testable from answer generation.
 
 New chat, **Docs** persona, empty `contextId`. Widget-equivalent:
 
-1. `POST https://agent.santhoshtoorpu.com/api/session` with `Origin: https://kubeflowdemochatbot.netlify.app`
+1. `POST https://<agent-domain>/api/session` with `Origin: https://kubeflowdemochatbot.netlify.app`
 2. `POST .../a2a/docs-agent/kubeflow-docs-agent` `message/stream`
 
 Pass all of:

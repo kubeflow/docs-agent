@@ -1,4 +1,5 @@
 import re
+from datetime import datetime, timezone
 
 from fastmcp.tools import ToolResult
 
@@ -11,6 +12,14 @@ def sanitize_evidence_text(value: object) -> str:
     text = str(value or "")
     text = MARKDOWN_LINK.sub(r"\1", text)
     return BARE_HTTP_URL.sub("", text)
+
+
+def format_release_date(value: object) -> str:
+    """Milvus stores release_date as epoch seconds; models misread raw integers."""
+    try:
+        return datetime.fromtimestamp(int(value), tz=timezone.utc).strftime("%Y-%m-%d")
+    except (TypeError, ValueError, OverflowError, OSError):
+        return str(value)
 
 
 def format_docs_hits(hits: list[dict]) -> tuple[str, list[dict]]:
@@ -28,7 +37,7 @@ def format_docs_hits(hits: list[dict]) -> tuple[str, list[dict]]:
             entry += f"\n**Version:** {version}"
         release_date = entity.get("release_date")
         if release_date is not None:
-            entry += f"\n**Release date:** {release_date}"
+            entry += f"\n**Release date:** {format_release_date(release_date)}"
         entry += f"\n\n{sanitize_evidence_text(entity.get('content_text', ''))}\n"
         results.append(entry)
 
