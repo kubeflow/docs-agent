@@ -125,7 +125,7 @@ The model evals (`SLM_EVALS.md`) ran on the previous prompt. Its weaknesses on G
 ## 11. Thinking as a UI toggle
 
 - vLLM v0.30.0 (checked 2026-10-03): with `reasoning_effort` unset or `none`, thinking is off; with `low`, `medium` or `high`, it is on. kagent exposes this as `ModelConfig.spec.openAI.reasoningEffort`.
-- The chart adds agent `kubeflow-docs-agent-think` on `flo-llm-think` (`maxTokens: 4096`; 1024 truncates the reasoning).
+- The chart adds agent `kubeflow-docs-agent-think` on `flo-llm-think` (`maxTokens: 8192`; 1024 truncates the reasoning).
 - The frontend's "Think deeper" pill routes the docs persona to that agent. Toggling starts a new chat, because kagent sessions are per agent. The pill is disabled for the debug persona.
 - Expected effect: 258 → 270/291, with median reply time going from 1.3 s to 2.9 s.
 - Rejected: passing a flag in A2A metadata, because kagent does not map it onto model parameters.

@@ -11,7 +11,7 @@ prompt file and MCP tools:
 | Agent | ModelConfig | Thinking |
 |---|---|---|
 | `kubeflow-docs-agent` | `flo-llm` | server default |
-| `kubeflow-docs-agent-think` | `flo-llm-think` (`reasoningEffort: low`, 4096 tokens) | on, when the model supports it |
+| `kubeflow-docs-agent-think` | `flo-llm-think` (`reasoningEffort: low`, 8192 tokens) | on, when the model supports it |
 | `kubeflow-debug-agent` | `flo-llm` | server default |
 
 The docs agents get `search_kubeflow_docs` and `search_github_issues` only;

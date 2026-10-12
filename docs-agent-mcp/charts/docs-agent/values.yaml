@@ -75,17 +75,18 @@ kagent:
     - name: flo-llm
       model: flo-llm
       baseUrl: http://llm-stable.ml-infra.svc.cluster.local/v1
-      temperature: "0.1"
+      temperature: "0.4"
       topP: "0.9"
-      maxTokens: 1024
+      # Prompt + output must fit maxModelLen (32768) in llm-runtime.
+      maxTokens: 8192
       timeout: 300
     - name: flo-llm-think
       model: flo-llm
       baseUrl: http://llm-stable.ml-infra.svc.cluster.local/v1
-      temperature: "0.1"
+      temperature: "0.4"
       topP: "0.9"
       # Reasoning tokens count against this; 1024 truncates it.
-      maxTokens: 4096
+      maxTokens: 8192
       timeout: 300
       reasoningEffort: low
   remoteMcp:
