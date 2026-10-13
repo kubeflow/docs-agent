@@ -4,8 +4,9 @@
 # collections until a change to ingestion needs its own collection.
 mcp:
   image:
-    repository: docker.io/santhoshtoorpu/mcp-kubeflow-docs
-    tag: otel-flo@sha256:24eb19bd6f45e3b62ece9cb5ddad8469c7684368334fd7671080a4ca2a15a457
+    # Same build as production until a newer main image is tested here.
+    repository: ghcr.io/kubeflow/mcp-kubeflow-docs
+    tag: 0e49ebd
   # Evaluation-project keys: Secret mcp-langfuse-keys in docs-agent-staging.
   extraEnv:
     - name: LANGFUSE_PUBLIC_KEY
