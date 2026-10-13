@@ -40,6 +40,9 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.mcp.milvusAuth.existingSecret }}
                   key: {{ .Values.mcp.milvusAuth.passwordKey }}
+            {{- with .Values.mcp.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           readinessProbe:
             tcpSocket:
               port: mcp

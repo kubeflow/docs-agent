@@ -32,6 +32,10 @@ mcp:
   milvusAuth:
     existingSecret: mcp-server-secret
     passwordKey: MILVUS_PASSWORD
+  # Extra container env, e.g. tracing keys read from an existing Secret:
+  #   - name: LANGFUSE_PUBLIC_KEY
+  #     valueFrom: {secretKeyRef: {name: mcp-langfuse-keys, key: LANGFUSE_PUBLIC_KEY}}
+  extraEnv: []
   strategy:
     type: RollingUpdate
     rollingUpdate:
