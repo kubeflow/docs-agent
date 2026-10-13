@@ -1,7 +1,7 @@
 # Argo CD (observe-only)
 
 Argo CD watches the Helm releases (`docs-agent`, `gateway-guardrails`,
-`llm-runtime`, `llm-judge`) against `kubeflow/docs-agent` `main`. None of the
+`llm-runtime`, `llm-judge`, `langfuse`) against `kubeflow/docs-agent` `main`. None of the
 Applications has a `syncPolicy`: Argo reports drift, and a maintainer clicks
 Sync to deploy. GPU releases (`llm-runtime`, `llm-judge`) stay manual.
 
@@ -50,26 +50,27 @@ kubectl apply -f deploy/platform/llm-judge/authz.yaml
 kubectl apply -f deploy/argocd/apps/
 ```
 
-## Admin password
+## Admin and read-only passwords
 
-Argo CD has no "init user" env vars like Langfuse. Two options:
-
-1. Default: the chart generates a random one in `argocd-initial-admin-secret`.
-   Read it, log in, change it, then delete that secret.
-2. Set it at install time. Pass a bcrypt hash from your shell so it never lands in Git:
+Argo CD has no "init user" env vars like Langfuse. Both passwords are bcrypt
+hashes passed at install time from your shell, so they never land in Git:
 
 ```bash
-read -rs ARGO_PWD
+hash() { htpasswd -nbBC 10 "" "$1" | tr -d ':\n' | sed 's/$2y/$2a/'; }
+read -rs -p "admin password: " ADMIN_PWD; echo
+read -rs -p "viewer password: " VIEWER_PWD; echo
+now=$(date -u +%FT%TZ)
 helm upgrade argocd argo/argo-cd -n argocd --version 10.10.1 \
   -f deploy/argocd/install-values.yaml \
-  --set-string configs.secret.argocdServerAdminPassword="$(htpasswd -nbBC 10 "" "$ARGO_PWD" | tr -d ':\n' | sed 's/$2y/$2a/')" \
-  --set-string configs.secret.argocdServerAdminPasswordMtime="$(date -u +%FT%TZ)"
+  --set-string configs.secret.argocdServerAdminPassword="$(hash "$ADMIN_PWD")" \
+  --set-string configs.secret.argocdServerAdminPasswordMtime="$now" \
+  --set-string 'configs.secret.extra.accounts\.viewer\.password'="$(hash "$VIEWER_PWD")" \
+  --set-string 'configs.secret.extra.accounts\.viewer\.passwordMtime'="$now"
 kubectl -n argocd delete secret argocd-initial-admin-secret --ignore-not-found
 ```
 
-Read-only access for mentors: add a local account in `configs.cm` (`accounts.viewer: login`)
-and `configs.rbac` (`g, viewer, role:readonly`), then set its password with
-`argocd account update-password`.
+`viewer` maps to `role:readonly`: it sees every Application, diff and log but
+cannot sync, delete or edit. Anonymous access and `exec` are off.
 
 ## Using it
 

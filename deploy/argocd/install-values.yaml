@@ -11,6 +11,13 @@ configs:
     # Observe-only: admin local account only, no anonymous access.
     users.anonymous.enabled: "false"
     exec.enabled: "false"
+    # Read-only login for mentors and community. Its password hash is set at install
+    # time (configs.secret.extra), never in this file; see README.
+    accounts.viewer: login
+  rbac:
+    policy.default: ""
+    policy.csv: |
+      g, viewer, role:readonly
 dex:
   enabled: false
 notifications:
