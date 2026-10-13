@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: docs-agent
+  labels:
+    app: otel-collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: otel-collector
+  template:
+    metadata:
+      labels:
+        app: otel-collector
+    spec:
+      containers:
+        - name: otel-collector
+          image: docker.io/otel/opentelemetry-collector-contrib:0.160.0
+          imagePullPolicy: IfNotPresent
+          args: ["--config=/conf/config.yaml"]
+          env:
+            - name: LANGFUSE_OTLP_AUTHORIZATION
+              valueFrom:
+                secretKeyRef: {name: langfuse-otlp, key: Authorization}
+            - name: LANGFUSE_OTLP_INGESTION_VERSION
+              valueFrom:
+                secretKeyRef: {name: langfuse-otlp, key: x-langfuse-ingestion-version}
+            # Evaluation project. Optional so the collector starts before the key is added;
+            # until then staging spans are rejected by Langfuse (401) and live spans are unaffected.
+            - name: LANGFUSE_OTLP_AUTHORIZATION_EVAL
+              valueFrom:
+                secretKeyRef: {name: langfuse-otlp, key: Authorization-eval, optional: true}
+          ports:
+            - {name: otlp-grpc, containerPort: 4317, protocol: TCP}
+            - {name: otlp-http, containerPort: 4318, protocol: TCP}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 512Mi}
+          volumeMounts:
+            - {name: config, mountPath: /conf}
+      volumes:
+        - name: config
+          configMap:
+            name: otel-collector-config

@@ -1,0 +1,22 @@
+# Staging values (namespace docs-agent-staging). Public by design: no secrets here.
+# Staging runs the same chart as production and shares the model (llm-stable),
+# the embeddings service and Milvus. Retrieval only reads, so it uses the production
+# collections until a change to ingestion needs its own collection.
+mcp:
+  image:
+    repository: docker.io/santhoshtoorpu/mcp-kubeflow-docs
+    tag: otel-flo@sha256:24eb19bd6f45e3b62ece9cb5ddad8469c7684368334fd7671080a4ca2a15a457
+  # Evaluation-project keys: Secret mcp-langfuse-keys in docs-agent-staging.
+  extraEnv:
+    - name: LANGFUSE_PUBLIC_KEY
+      valueFrom:
+        secretKeyRef: {name: mcp-langfuse-keys, key: LANGFUSE_PUBLIC_KEY}
+    - name: LANGFUSE_SECRET_KEY
+      valueFrom:
+        secretKeyRef: {name: mcp-langfuse-keys, key: LANGFUSE_SECRET_KEY}
+kagent:
+  agentEnv:
+    - name: OTEL_RESOURCE_ATTRIBUTES
+      value: deployment.environment=staging
+tests:
+  enabled: false

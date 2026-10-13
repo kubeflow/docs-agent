@@ -1,0 +1,30 @@
+# Staging: follows main and syncs automatically (self-heal on, prune on).
+# Not public: reached in-cluster through the kagent controller A2A API
+# (/api/a2a/docs-agent-staging/<agent>), which is what the eval job calls.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: docs-agent-staging
+  namespace: argocd
+spec:
+  project: default
+  sources:
+    - repoURL: https://github.com/kubeflow/docs-agent
+      targetRevision: main
+      path: docs-agent-mcp/charts/docs-agent
+      helm:
+        releaseName: docs-agent-staging
+        valueFiles:
+          - $values/deploy/envs/staging/docs-agent.yaml
+    - repoURL: https://github.com/kubeflow/docs-agent
+      targetRevision: main
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: docs-agent-staging
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

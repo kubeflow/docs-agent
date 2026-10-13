@@ -1,0 +1,61 @@
+# OpenTelemetry collector for agent and MCP spans. Was hand-applied; now in Git.
+# Spans with resource attribute deployment.environment=staging go to the Langfuse
+# evaluation project; everything else goes to the live project. Each project's
+# Basic-auth header comes from the Secret langfuse-otlp (keys never in Git).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: docs-agent
+  labels:
+    app: otel-collector
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+    processors:
+      # Drop framework transport spans that bury the agent/tool/LLM spans in Langfuse.
+      filter/noise:
+        error_mode: ignore
+        traces:
+          span:
+            - 'IsMatch(name, "^a2a\\.(server|utils)\\.")'
+            - 'IsMatch(name, "^(POST|GET|PUT|PATCH|DELETE)( /api/(tasks|sessions).*| / http (send|receive))?$")'
+      batch:
+    connectors:
+      routing:
+        default_pipelines: [traces/live]
+        table:
+          - context: resource
+            condition: attributes["deployment.environment"] == "staging"
+            pipelines: [traces/eval]
+    exporters:
+      otlphttp/live:
+        endpoint: http://langfuse-web.langfuse.svc.cluster.local:3000/api/public/otel
+        headers:
+          Authorization: ${env:LANGFUSE_OTLP_AUTHORIZATION}
+          x-langfuse-ingestion-version: ${env:LANGFUSE_OTLP_INGESTION_VERSION}
+      otlphttp/eval:
+        endpoint: http://langfuse-web.langfuse.svc.cluster.local:3000/api/public/otel
+        headers:
+          Authorization: ${env:LANGFUSE_OTLP_AUTHORIZATION_EVAL}
+          x-langfuse-ingestion-version: ${env:LANGFUSE_OTLP_INGESTION_VERSION}
+    service:
+      pipelines:
+        traces/in:
+          receivers: [otlp]
+          processors: [filter/noise]
+          exporters: [routing]
+        traces/live:
+          receivers: [routing]
+          processors: [batch]
+          exporters: [otlphttp/live]
+        traces/eval:
+          receivers: [routing]
+          processors: [batch]
+          exporters: [otlphttp/eval]
