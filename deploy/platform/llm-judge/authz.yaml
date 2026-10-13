@@ -1,5 +1,10 @@
-# Who may call the judge model: the eval jobs (staging), the feedback triage job (docs-agent),
-# and Langfuse's LLM-as-a-judge evaluators (langfuse-worker). Agents do not use it.
+# Intended callers of the judge model: the eval jobs (staging), the feedback triage job
+# (docs-agent), and Langfuse's LLM-as-a-judge evaluators. Agents do not use it.
+#
+# KNOWN GAP: Istio enforces this only for pods with a sidecar. docs-agent and ml-infra
+# have no sidecar injection today, so this policy (like the mesh policies in
+# gateway-guardrails) is declared but not enforced; any pod in the cluster can reach
+# the model. See "Known gaps" in deploy/argocd/README.md.
 apiVersion: security.istio.io/v1beta1
 kind: AuthorizationPolicy
 metadata:

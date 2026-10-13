@@ -60,7 +60,7 @@ hash() { htpasswd -nbBC 10 "" "$1" | tr -d ':\n' | sed 's/$2y/$2a/'; }
 read -rs -p "admin password: " ADMIN_PWD; echo
 read -rs -p "viewer password: " VIEWER_PWD; echo
 now=$(date -u +%FT%TZ)
-helm upgrade argocd argo/argo-cd -n argocd --version 10.10.1 \
+helm upgrade argocd argo/argo-cd -n argocd --version 10.10.1 --force-conflicts \
   -f deploy/argocd/install-values.yaml \
   --set-string configs.secret.argocdServerAdminPassword="$(hash "$ADMIN_PWD")" \
   --set-string configs.secret.argocdServerAdminPasswordMtime="$now" \
@@ -80,3 +80,14 @@ kubectl get applications.argoproj.io -n argocd
 
 Drift that remains is intentional until reviewed. Do not enable auto-sync on
 `llm-runtime` (GPU pod, a restart means a long model reload).
+
+## Known gaps
+
+- **In-cluster access control is not enforced.** The Istio AuthorizationPolicies
+  for `ml-infra` (LLM, judge, Milvus, embeddings) only take effect on pods with
+  an Istio sidecar, and `docs-agent` and `ml-infra` have no sidecar injection.
+  Verified 2026-10-14: a pod in `default` reaches `llm-stable`, `llm-judge` and
+  Milvus. The public gateway (route allow-list, session tokens, rate limits) is
+  enforced and unaffected. The cluster CNI (`vcn-native-ip-cni`, no Calico) is
+  not expected to enforce NetworkPolicy either. Planned fix: enable sidecar
+  injection namespace by namespace, `ml-infra` first, testing chat after each.
