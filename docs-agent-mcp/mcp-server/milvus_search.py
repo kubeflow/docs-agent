@@ -7,6 +7,7 @@ import threading
 
 from pymilvus import AnnSearchRequest, MilvusClient, RRFRanker, WeightedRanker
 
+import flo_tracing
 from embeddings_client import embed_query
 from intent_router import (
     downgrade_plan_for_collection,
@@ -188,6 +189,11 @@ def _load(collection_name: str) -> None:
         raise RuntimeError(f"Milvus load_collection failed for {collection_name}: {exc}") from exc
 
 
+@flo_tracing.traced(
+    "retriever",
+    inputs=("query", "top_k"),
+    output=lambda r: flo_tracing.retriever_output(r[0], mode=r[1].get("retrieval_mode"), intent=r[1].get("intent")),
+)
 def search_docs_auto(
     query: str,
     top_k: int,
@@ -250,6 +256,11 @@ def search_docs_auto(
     return hits, retrieval_metadata(plan)
 
 
+@flo_tracing.traced(
+    "retriever",
+    inputs=("collection_name", "query", "top_k", "filter_expr"),
+    output=flo_tracing.retriever_output,
+)
 def search_collection(
     collection_name: str,
     query: str,
