@@ -36,6 +36,13 @@ helm upgrade --install gateway-guardrails . -n docs-agent \
   --set gateway.tls.acme.email=you@your-domain.example
 ```
 
+To keep the contact email out of values (for example with Argo CD reading
+values from Git), create the ClusterIssuer once as a cluster admin and set
+`gateway.tls.acme.createIssuer=false`; the Certificate then references the
+existing `clusterIssuerName`. On a release that already created the issuer,
+first run `kubectl annotate clusterissuer letsencrypt-prod helm.sh/resource-policy=keep`
+so the upgrade does not delete it.
+
 Session tokens are enforced (`sessionAuth.enforce: true`) on `/a2a/*` and
 `/api/a2a/*`: a request without a valid token from `POST /api/session` gets a 403.
 

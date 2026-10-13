@@ -2,10 +2,10 @@
 # Small footprint: no Dex/SSO, no notifications, no ApplicationSet, no HA.
 # Images come from quay.io / ecr-public / ghcr.io, not Docker Hub (Hub's anonymous pull limit has bitten this cluster).
 global:
-  domain: argocd.example.org   # override per install: --set global.domain=<your Argo host>
+  domain: argocd.kmrrohit.space
 configs:
   params:
-    # TLS terminates at the Istio ingress gateway (Gateway + VirtualService in your config repo).
+    # TLS terminates at the Istio ingress gateway (deploy/envs/prod/ingress/argocd-ingress.yaml).
     server.insecure: true
   cm:
     # Observe-only: admin local account only, no anonymous access.

@@ -1,0 +1,5 @@
+# Production values for the demo cluster. Public by design: no secrets here.
+mcp:
+  image:
+    repository: docker.io/santhoshtoorpu/mcp-kubeflow-docs
+    tag: otel-flo@sha256:24eb19bd6f45e3b62ece9cb5ddad8469c7684368334fd7671080a4ca2a15a457

@@ -9,34 +9,23 @@ Sync to deploy. GPU releases (`llm-runtime`, `llm-judge`) stay manual.
 
 | Kind of data | Where | Who can change it |
 |---|---|---|
-| Charts, Argo Applications, generic values | this repo | PR + review |
-| Deployment values (domain, ACME contact email, CORS origins, image overrides, ingress hosts) | a private config repo, read by Argo as a second source (`$values/envs/prod/<app>.yaml`) | config-repo admins, by PR |
-| Secrets (API keys, Langfuse keys, passwords, pull secrets) | Kubernetes Secrets only, referenced by name from the charts | cluster admins (RBAC on `secrets`); later External Secrets from OCI Vault |
+| Charts, Argo Applications | `docs-agent-mcp/charts/`, `deploy/argocd/` | PR + review |
+| Per-environment values (domain, CORS origins, image overrides, ingress hosts) | `deploy/envs/<env>/` in this repo, read by Argo as a second source (`$values/deploy/envs/prod/<app>.yaml`) | PR + review |
+| Secrets (API keys, Langfuse keys, passwords, pull secrets) | Kubernetes Secrets only, referenced by name; inventory and local backup in `deploy/secrets/` | cluster admins |
 
-Argo reads the private repo with a read-only deploy key, registered as a
-repository Secret (never committed):
-
-```bash
-kubectl -n argocd create secret generic repo-docs-agent-deploy \
-  --from-literal=type=git --from-literal=url=git@github.com:<you>/docs-agent-deploy.git \
-  --from-file=sshPrivateKey=$HOME/.ssh/docs_agent_deploy_ro
-kubectl -n argocd label secret repo-docs-agent-deploy argocd.argoproj.io/secret-type=repository
-```
-
-(With an SSH key, use the `git@github.com:` URL in the Applications as well.)
-
-Argo CD cannot read Helm values from a Kubernetes Secret on its own. Values
-that are truly secret stay out of Helm values: the chart takes a Secret name
-(`existingSecret`), and the Secret is created by an admin or by External
-Secrets.
+Values files are public, so nothing personal or secret goes in them. The ACME
+contact email, for example, lives only in the cluster's ClusterIssuer
+(`gateway.tls.acme.createIssuer: false`). Argo CD cannot read Helm values from
+a Kubernetes Secret on its own, so secret values are never Helm values: the
+chart takes a Secret name.
 
 ## Install / upgrade
 
 ```bash
 helm repo add argo https://argoproj.github.io/argo-helm
 helm upgrade --install argocd argo/argo-cd -n argocd --create-namespace --version 10.10.1 \
-  -f deploy/argocd/install-values.yaml --set global.domain=<your Argo host>
-# public HTTPS: apply the Gateway/VirtualService from your config repo (needs an A record for the host)
+  -f deploy/argocd/install-values.yaml
+kubectl apply -f deploy/envs/prod/ingress/        # public HTTPS for Langfuse and Argo (needs A records)
 kubectl apply -f deploy/platform/llm-judge/authz.yaml
 kubectl apply -f deploy/argocd/apps/
 ```

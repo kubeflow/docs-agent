@@ -26,9 +26,12 @@ gateway:
     acme:
       # Creates the Let's Encrypt ClusterIssuer + Certificate (cert-manager).
       enabled: true
+      # false: use an existing ClusterIssuer named clusterIssuerName (created by a
+      # cluster admin), so the ACME contact email never appears in chart values.
+      createIssuer: true
       clusterIssuerName: letsencrypt-prod
       server: https://acme-v02.api.letsencrypt.org/directory
-      # Let's Encrypt account contact. Required when acme.enabled; Terraform
+      # Let's Encrypt account contact. Required when createIssuer; Terraform
       # passes var.kagent_acme_email.
       email: ""
 

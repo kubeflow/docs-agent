@@ -6,8 +6,8 @@ metadata:
   namespace: argocd
 spec:
   project: default
-  # Chart from this repo; deployment-specific values (domain, contact email, image overrides)
-  # from the operator's private config repo, so no personal or environment data lives here.
+  # Chart and per-environment values both come from this repo (second source = values ref).
+  # deploy/envs/prod/ is public and holds no secrets; secrets are Kubernetes Secrets referenced by name.
   sources:
     - repoURL: https://github.com/kubeflow/docs-agent
       targetRevision: main
@@ -15,8 +15,8 @@ spec:
       helm:
         releaseName: gateway-guardrails
         valueFiles:
-          - $values/envs/prod/gateway-guardrails.yaml
-    - repoURL: https://github.com/kmr-rohit/docs-agent-deploy   # private; replace with your own config repo
+          - $values/deploy/envs/prod/gateway-guardrails.yaml
+    - repoURL: https://github.com/kubeflow/docs-agent
       targetRevision: main
       ref: values
   # Objects adopted from Helm have no Argo tracking-id until the first sync, which would flag every

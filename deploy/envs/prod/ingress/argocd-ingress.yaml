@@ -1,0 +1,76 @@
+# Public HTTPS ingress for the Argo CD UI (apply by hand; not a Helm release).
+# Host: argocd.kmrrohit.space -> A record to the istio-ingressgateway LB IP.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: argocd-cert
+  namespace: istio-system
+spec:
+  commonName: argocd.kmrrohit.space
+  dnsNames:
+    - argocd.kmrrohit.space
+  issuerRef:
+    kind: ClusterIssuer
+    name: letsencrypt-prod
+  secretName: argocd-tls
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: Gateway
+metadata:
+  name: argocd-gateway
+  namespace: istio-system
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - hosts: ["argocd.kmrrohit.space"]
+      port: {name: http-argocd, number: 80, protocol: HTTP}
+      tls: {httpsRedirect: true}
+    - hosts: ["argocd.kmrrohit.space"]
+      port: {name: https-argocd, number: 443, protocol: HTTPS}
+      tls: {mode: SIMPLE, credentialName: argocd-tls}
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: argocd
+  namespace: argocd
+spec:
+  hosts: ["argocd.kmrrohit.space"]
+  gateways: ["istio-system/argocd-gateway"]
+  http:
+    - timeout: 300s
+      route:
+        - destination:
+            host: argocd-server.argocd.svc.cluster.local
+            port: {number: 80}
+---
+# The shared a2a-global-ratelimit (60 req/min, all hosts on :443) would throttle the
+# Argo CD UI. Override it for this vhost only; the chatbot limits stay untouched.
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: argocd-ratelimit-override
+  namespace: istio-system
+spec:
+  workloadSelector:
+    labels: {istio: ingressgateway}
+  configPatches:
+    - applyTo: HTTP_ROUTE
+      match:
+        context: GATEWAY
+        routeConfiguration:
+          vhost:
+            name: "argocd.kmrrohit.space:443"
+      patch:
+        operation: MERGE
+        value:
+          typed_per_filter_config:
+            envoy.filters.http.local_ratelimit:
+              "@type": type.googleapis.com/udpa.type.v1.TypedStruct
+              type_url: type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+              value:
+                stat_prefix: argocd_local_rate_limiter
+                token_bucket: {max_tokens: 6000, tokens_per_fill: 6000, fill_interval: 60s}
+                filter_enabled:  {default_value: {numerator: 100, denominator: HUNDRED}}
+                filter_enforced: {default_value: {numerator: 100, denominator: HUNDRED}}
