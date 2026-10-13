@@ -1,8 +1,10 @@
-# Test + optional OKE CD. PRs and main always run compile/test/lint.
-# Deploy job runs only when repository variable ENABLE_OKE_DEPLOY=true (set on operator forks).
-# GHCR push uses secrets.GITHUB_TOKEN + packages:write (no custom GHCR_TOKEN required).
-# Optional GHCR_TOKEN / GHCR_USERNAME: only for private package imagePullSecrets on OKE.
-name: Build, Test, and Deploy to OKE
+# Test on every PR and push; on main, also build and push the MCP image to GHCR.
+# Deployment is Argo CD's job (deploy/argocd/): this workflow never touches the
+# cluster, so it holds no cluster credentials. To roll out an image, change its
+# tag in deploy/envs/<env>/docs-agent.yaml and sync the Application in Argo CD.
+# Image push runs only when repository variable ENABLE_OKE_DEPLOY=true (name kept
+# for continuity with existing repository settings).
+name: Build and Test
 
 on:
   push:
@@ -15,16 +17,10 @@ on:
         description: Optional new SemVer MCP image tag (for example 0.2.1); existing tags are rejected, blank uses the commit SHA
         type: string
         required: false
-      deploy_llm:
-        description: Helm-upgrade llm-runtime (restarts the model — intentional downtime)
-        type: boolean
-        default: false
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: mcp-kubeflow-docs
-  K8S_NAMESPACE: docs-agent
-  OKE_CLUSTER_OCID: ${{ secrets.OKE_CLUSTER_OCID }}
 
 jobs:
   test-and-compile:
@@ -88,65 +84,19 @@ jobs:
       - name: Run Unit Tests
         run: pytest -v --tb=short
 
-  build-and-deploy:
-    name: Build, Push, and Deploy to OKE
+  build-and-push:
+    name: Build and push MCP image
     needs: test-and-compile
-    # Off by default in kubeflow/docs-agent (no OKE secrets). Fork operators set repo variable ENABLE_OKE_DEPLOY=true.
     if: |
       (github.event_name == 'workflow_dispatch' || github.event_name == 'push') &&
       vars.ENABLE_OKE_DEPLOY == 'true'
     runs-on: ubuntu-latest
-    # Queue production deployments. In particular, never cancel a first Helm
-    # ownership-transfer run while it is adopting existing cluster resources.
-    concurrency:
-      group: ${{ github.repository }}-oke-production
-      cancel-in-progress: false
-    # Secrets are stored under Settings → Environments → kubeflow (not repo secrets)
-    environment: kubeflow
     permissions:
       contents: read
       packages: write
-    env:
-      # oracle-actions/configure-kubectl-oke expects OCI_CLI_* env vars
-      OCI_CLI_USER: ${{ secrets.OCI_USER_OCID }}
-      OCI_CLI_TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
-      OCI_CLI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
-      OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_KEY_FILE }}
-      OCI_CLI_REGION: ${{ secrets.OCI_REGION }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-
-      - name: Setup Helm
-        uses: azure/setup-helm@v4
-        with:
-          version: v3.21.0
-
-      - name: Validate deploy secrets
-        env:
-          OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
-          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
-          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
-          OCI_KEY_FILE: ${{ secrets.OCI_KEY_FILE }}
-          OCI_REGION: ${{ secrets.OCI_REGION }}
-          OKE_CLUSTER_OCID: ${{ secrets.OKE_CLUSTER_OCID }}
-        run: |
-          set -euo pipefail
-          missing=()
-          for name in OCI_USER_OCID OCI_TENANCY_OCID OCI_FINGERPRINT OCI_KEY_FILE OCI_REGION OKE_CLUSTER_OCID; do
-            if [ -z "${!name:-}" ]; then
-              missing+=("$name")
-            fi
-          done
-          if [ "${#missing[@]}" -gt 0 ]; then
-            echo "::error::Missing required GitHub Actions secrets in environment 'kubeflow':"
-            printf '  - %s\n' "${missing[@]}"
-            echo "Add them under Settings → Environments → kubeflow → Environment secrets."
-            exit 1
-          fi
-          # GHCR push uses built-in GITHUB_TOKEN (packages: write). No GHCR_TOKEN/USERNAME needed.
-          # Optional GHCR_TOKEN / GHCR_PULL_TOKEN / Github_Pat: only if the package is private
-          # and OKE needs an imagePullSecret. Public packages pull without credentials.
 
       - name: Set image coordinates
         id: image_coordinates
@@ -203,137 +153,11 @@ jobs:
           tags: |
             ${{ env.IMAGE_REPO }}:${{ env.tag }}
 
-      - name: Configure kubectl for OKE
-        uses: oracle-actions/configure-kubectl-oke@v1.5.0
-        with:
-          cluster: ${{ secrets.OKE_CLUSTER_OCID }}
-
-      - name: Deploy to OKE
-        env:
-          FULL_IMAGE: ${{ env.IMAGE_REPO }}:${{ env.tag }}
-          GHCR_PULL_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GHCR_PULL_TOKEN || secrets.Github_Pat }}
-          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME || github.repository_owner }}
+      - name: Summary
         run: |
-          set -euo pipefail
-
-          kubectl create namespace "${{ env.K8S_NAMESPACE }}" --dry-run=client -o yaml | kubectl apply -f -
-
-          HELM_PULL_ARGS=()
-
-          if [ -n "${GHCR_PULL_TOKEN:-}" ]; then
-            echo "Optional GHCR pull token present — creating imagePullSecret for private package pulls"
-            kubectl create secret docker-registry ghcrsecret \
-              --namespace "${{ env.K8S_NAMESPACE }}" \
-              --docker-server="${{ env.REGISTRY }}" \
-              --docker-username="${GHCR_USERNAME}" \
-              --docker-password="${GHCR_PULL_TOKEN}" \
-              --docker-email="${GHCR_USERNAME}@users.noreply.github.com" \
-              --dry-run=client -o yaml | kubectl apply -f -
-            HELM_PULL_ARGS=(--set-string 'mcp.imagePullSecrets[0].name=ghcrsecret')
-          else
-            echo "No GHCR pull token — relying on public package visibility (no imagePullSecret)"
-          fi
-
-          DOCS_OWNERSHIP_ARGS=()
-          DOCS_ATOMIC_ARGS=(--atomic --cleanup-on-fail)
-          if ! helm status docs-agent -n "${{ env.K8S_NAMESPACE }}" >/dev/null 2>&1; then
-            echo "First Helm adoption: server-dry-run, then take ownership without uninstall-on-failure"
-            helm template docs-agent docs-agent-mcp/charts/docs-agent \
-              --namespace "${{ env.K8S_NAMESPACE }}" \
-              --set-string "mcp.image.repository=${IMAGE_REPO}" \
-              --set-string "mcp.image.tag=${tag}" \
-              "${HELM_PULL_ARGS[@]}" \
-              | kubectl apply -n "${{ env.K8S_NAMESPACE }}" --dry-run=server -f -
-            DOCS_OWNERSHIP_ARGS=(--take-ownership)
-            DOCS_ATOMIC_ARGS=()
-          fi
-
-          echo "Helm-upgrading docs-agent application release to ${FULL_IMAGE}"
-          helm upgrade --install docs-agent docs-agent-mcp/charts/docs-agent \
-            --namespace "${{ env.K8S_NAMESPACE }}" --create-namespace \
-            --wait --timeout 10m --history-max 10 \
-            --set-string "mcp.image.repository=${IMAGE_REPO}" \
-            --set-string "mcp.image.tag=${tag}" \
-            "${DOCS_OWNERSHIP_ARGS[@]}" \
-            "${DOCS_ATOMIC_ARGS[@]}" \
-            "${HELM_PULL_ARGS[@]}"
-
-          kubectl rollout status deployment/mcp-kubeflow-docs \
-            -n "${{ env.K8S_NAMESPACE }}" --timeout=600s
-          helm test docs-agent -n "${{ env.K8S_NAMESPACE }}" --timeout 2m
-
-          LLM_DEPLOY=false
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.deploy_llm }}" = "true" ]; then
-            LLM_DEPLOY=true
-          elif ! helm status llm-runtime -n ml-infra >/dev/null 2>&1; then
-            echo "llm-runtime is not installed; the docs-agent ModelConfigs need it"
-            LLM_DEPLOY=true
-          fi
-          if [ "${LLM_DEPLOY}" = "true" ]; then
-            # Restarts the model (one GPU, Recreate). Which model runs is the
-            # chart's `model` value; this step never changes it.
-            LLM_ISVC="$(helm show values docs-agent-mcp/charts/llm-runtime | yq '.inferenceService.name')"
-            echo "Helm-upgrading the llm-runtime release"
-            helm upgrade --install llm-runtime docs-agent-mcp/charts/llm-runtime \
-              --namespace ml-infra --create-namespace --timeout 10m --history-max 5 \
-              --atomic --cleanup-on-fail
-            kubectl rollout status "deployment/${LLM_ISVC}-predictor" \
-              -n ml-infra --timeout=1800s
-            helm test llm-runtime -n ml-infra --timeout 3m
-          else
-            echo "Skipping llm-runtime Helm upgrade; normal app upgrades do not restart the model"
-          fi
-
-      - name: Wait for ml-infra dependencies
-        run: |
-          set -euo pipefail
-          kubectl wait --for=condition=Ready inferenceservice/embeddings-service \
-            -n ml-infra --timeout=600s
-          # Milvus CR reports Healthy in .status.status, not a Ready condition.
-          for i in $(seq 1 60); do
-            status="$(kubectl get milvus milvus -n ml-infra -o jsonpath='{.status.status}' 2>/dev/null || true)"
-            if [ "${status}" = "Healthy" ]; then
-              echo "milvus status=${status}"
-              break
-            fi
-            echo "waiting for milvus (status=${status:-unknown}) attempt ${i}/60"
-            sleep 10
-          done
-          kubectl get milvus -n ml-infra
-          test "$(kubectl get milvus milvus -n ml-infra -o jsonpath='{.status.status}')" = "Healthy"
-
-      - name: Smoke test MCP tools and embeddings (ml-infra)
-        run: |
-          set -euo pipefail
-          kubectl rollout status deployment/mcp-kubeflow-docs \
-            -n "${{ env.K8S_NAMESPACE }}" --timeout=120s
-          kubectl exec -n "${{ env.K8S_NAMESPACE }}" deploy/mcp-kubeflow-docs -- \
-            python3 /app/smoke_tools.py
-          kubectl get agent,modelconfig -n "${{ env.K8S_NAMESPACE }}"
-
-      - name: Smoke test LLM
-        run: |
-          set -euo pipefail
-          LLM_SVC="$(helm show values docs-agent-mcp/charts/llm-runtime | yq '.service.name')"
-          LLM_MODEL="$(helm show values docs-agent-mcp/charts/llm-runtime | yq '.servedModelName')"
-          SMOKE_POD="llm-stable-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          kubectl delete pod "${SMOKE_POD}" -n "${{ env.K8S_NAMESPACE }}" \
-            --ignore-not-found --wait=false
-          # Exercise the stable service from the agent namespace, the same
-          # mesh path kagent uses.
-          kubectl run "${SMOKE_POD}" -n "${{ env.K8S_NAMESPACE }}" \
-            --image=docker.io/curlimages/curl:8.12.1 --restart=Never --rm --attach \
-            --pod-running-timeout=5m --command -- \
-            curl --fail --silent --show-error --max-time 120 \
-              --header 'Content-Type: application/json' \
-              --data "{\"model\":\"${LLM_MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":8}" \
-              "http://${LLM_SVC}.ml-infra.svc.cluster.local/v1/chat/completions"
-
-      - name: Remove pre-Helm MCP canary after functional smoke tests
-        run: |
-          set -euo pipefail
-          # Keep the rollback canary until MCP dependencies and the stable LLM
-          # endpoint have all passed their functional checks.
-          kubectl delete deployment/mcp-kubeflow-docs-canary \
-            service/mcp-kubeflow-docs-canary configmap/mcp-server-canary-code-v7 \
-            -n "${{ env.K8S_NAMESPACE }}" --ignore-not-found
+          {
+            echo "Pushed ${IMAGE_REPO}:${tag}"
+            echo
+            echo "Nothing was deployed. To roll it out, set mcp.image.repository/tag in"
+            echo "deploy/envs/<env>/docs-agent.yaml (PR) and sync the Application in Argo CD."
+          } >> "$GITHUB_STEP_SUMMARY"

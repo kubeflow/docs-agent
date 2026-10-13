@@ -1,8 +1,9 @@
 # Production values for the demo cluster. Public by design: no secrets here.
 mcp:
   image:
-    repository: docker.io/santhoshtoorpu/mcp-kubeflow-docs
-    tag: otel-flo@sha256:24eb19bd6f45e3b62ece9cb5ddad8469c7684368334fd7671080a4ca2a15a457
+    # Built by CI from main (#269 merge). Promote by changing this tag in a PR.
+    repository: ghcr.io/kubeflow/mcp-kubeflow-docs
+    tag: 0e49ebd
   # Tracing keys for the MCP server (Secret created by an admin; were hand-added with kubectl set env).
   extraEnv:
     - name: LANGFUSE_PUBLIC_KEY
