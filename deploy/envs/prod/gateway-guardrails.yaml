@@ -18,3 +18,5 @@ sessionAuth:
   image: ghcr.io/kmr-rohit/kubeflow-session-issuer:v0.1.0
   imagePullSecrets:
   - name: ghcr-session-issuer
+feedback:
+  enabled: true

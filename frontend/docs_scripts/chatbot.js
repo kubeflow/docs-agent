@@ -811,6 +811,7 @@ document.addEventListener('DOMContentLoaded', async function () {
                 addMessage(msg.content, 'user');
             } else if (msg.role === 'assistant') {
                 addMessage(msg.content, 'bot', msg.citations || []);
+                attachFeedback(chatMessages && chatMessages.lastElementChild, msg.turn, msg);
             }
         });
 
@@ -1020,6 +1021,99 @@ document.addEventListener('DOMContentLoaded', async function () {
             response = await send(await getSessionToken({ forceRefresh: true }));
         }
         return response;
+    }
+
+    // --- Answer feedback (thumbs up/down) ----------------------------------
+    // POST /api/feedback on the same gateway. `turn` is the 0-based index of the
+    // user message in this chat; each one is one trace in the chat's Langfuse
+    // session (the A2A contextId), so the vote lands on the right answer.
+    const FEEDBACK_PATH = '/api/feedback';
+    let feedbackAvailable = true; // false once the gateway shows it has no feedback route
+
+    async function sendFeedback(turn, value, comment = '') {
+        const url = new URL(FEEDBACK_PATH, getAPIUrl()).toString();
+        const body = JSON.stringify({ contextId: currentContextId, turn, value, comment });
+        const send = async (token) => fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+            },
+            body
+        });
+        let response = await send(await getSessionToken());
+        if (response.status === 401 || response.status === 403) {
+            response = await send(await getSessionToken({ forceRefresh: true }));
+        }
+        if (response.status === 404 || response.status === 405) {
+            feedbackAvailable = false;
+        }
+        return response.ok;
+    }
+
+    const THUMB_UP_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 21h4V9H2v12zm20-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L13.17 1 6.59 7.59C6.22 7.95 6 8.45 6 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z"/></svg>';
+    const THUMB_DOWN_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3H6c-.83 0-1.54.5-1.84 1.22l-3.02 7.05c-.09.23-.14.47-.14.73v2c0 1.1.9 2 2 2h6.31l-.95 4.57-.03.32c0 .41.17.79.44 1.06L9.83 23l6.59-6.59c.36-.36.58-.86.58-1.41V5c0-1.1-.9-2-2-2zm4 0v12h4V3h-4z"/></svg>';
+
+    // Adds "Helpful? 👍 👎" under a finished answer. `entry` is the history entry,
+    // so the vote survives switching chats and reloading the page.
+    function attachFeedback(messageDiv, turn, entry) {
+        if (!feedbackAvailable || !messageDiv || !Number.isInteger(turn)) return;
+        const contentDiv = messageDiv.querySelector('.message-content') || messageDiv;
+        const bar = document.createElement('div');
+        bar.className = 'feedback-bar';
+        bar.innerHTML =
+            '<span class="feedback-label">Helpful?</span>' +
+            `<button type="button" class="feedback-btn" data-value="up" aria-label="Helpful" title="Helpful">${THUMB_UP_ICON}</button>` +
+            `<button type="button" class="feedback-btn" data-value="down" aria-label="Not helpful" title="Not helpful">${THUMB_DOWN_ICON}</button>` +
+            '<span class="feedback-status" role="status"></span>';
+        const status = bar.querySelector('.feedback-status');
+        const buttons = bar.querySelectorAll('.feedback-btn');
+
+        const mark = (value) => buttons.forEach(btn => {
+            const on = btn.dataset.value === value;
+            btn.classList.toggle('selected', on);
+            btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+        });
+        if (entry && entry.feedback) mark(entry.feedback);
+
+        const submit = async (value, comment = '') => {
+            mark(value);
+            status.textContent = 'Sending…';
+            let ok = false;
+            try {
+                ok = await sendFeedback(turn, value, comment);
+            } catch (error) {}
+            status.textContent = ok ? 'Thanks for the feedback' : 'Could not send feedback';
+            if (ok && entry) {
+                entry.feedback = value;
+                autoSaveCurrentChat();
+            }
+            if (!feedbackAvailable) bar.remove();
+            return ok;
+        };
+
+        buttons.forEach(btn => btn.addEventListener('click', async () => {
+            const value = btn.dataset.value;
+            const existing = bar.parentElement && bar.parentElement.querySelector('.feedback-comment');
+            if (existing) existing.remove();
+            const ok = await submit(value);
+            if (!ok || value !== 'down') return;
+            // Optional detail for a thumbs-down; sending it overwrites the same vote.
+            const form = document.createElement('form');
+            form.className = 'feedback-comment';
+            form.innerHTML =
+                '<input type="text" maxlength="1000" placeholder="What was wrong or missing? (optional)" aria-label="Feedback comment">' +
+                '<button type="submit">Send</button>';
+            form.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const text = form.querySelector('input').value.trim();
+                if (text && await submit('down', text)) form.remove();
+            });
+            bar.insertAdjacentElement('afterend', form);
+            form.querySelector('input').focus();
+        }));
+
+        contentDiv.appendChild(bar);
     }
 
     // Toggle Send button between "Send" (arrow) and "Stop" (square) mode
@@ -1412,12 +1506,15 @@ document.addEventListener('DOMContentLoaded', async function () {
         if (rawContent) {
             const historyEntry = {
                 role: 'assistant',
-                content: rawContent
+                content: rawContent,
+                // One trace per user message in this chat's session.
+                turn: messagesHistory.filter(m => m.role === 'user').length - 1
             };
             if (pendingCitations.length > 0) {
                 historyEntry.citations = cloneCitationsForHistory(pendingCitations);
             }
             messagesHistory.push(historyEntry);
+            attachFeedback(currentMessageDiv, historyEntry.turn, historyEntry);
         }
 
         currentMessageDiv = null;

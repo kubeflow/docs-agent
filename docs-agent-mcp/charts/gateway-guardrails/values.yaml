@@ -90,6 +90,7 @@ sessionAuth:
   protectedPaths:
     - /a2a/*
     - /api/a2a/*
+    - /api/feedback
   image: ghcr.io/kubeflow/kubeflow-session-issuer:latest
   # Needed when the image is private, e.g. [{name: ghcr-session-issuer}].
   imagePullSecrets: []
@@ -105,6 +106,19 @@ sessionAuth:
     limits:
       cpu: 200m
       memory: 128Mi
+
+# Chat-widget feedback: POST /api/feedback -> Langfuse score `user_feedback` on the
+# answer's trace. Needs sessionAuth (the path requires a session token).
+feedback:
+  enabled: false
+  image: mirror.gcr.io/library/python:3.12-slim
+  langfuseHost: http://langfuse-web.langfuse.svc.cluster.local:3000
+  # Secret in namespaces.docsAgent with LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY
+  # of the project that holds the live chat traces.
+  langfuseSecret: mcp-langfuse-keys
+  resources:
+    requests: {cpu: 20m, memory: 48Mi}
+    limits: {cpu: 200m, memory: 128Mi}
 
 # The RAG-stack AuthorizationPolicies previously defined in istio_policies.tf.
 meshPolicies:

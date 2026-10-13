@@ -1,0 +1,92 @@
+{{- if and .Values.feedback.enabled .Values.sessionAuth.enabled }}
+# Chat-widget feedback (thumbs up/down) -> Langfuse score `user_feedback`.
+# Source: files/feedback.py (standard library only), run from a ConfigMap on a
+# stock python image, so there is no image to build.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: feedback
+  namespace: {{ .Values.namespaces.docsAgent }}
+  labels:
+    app: feedback
+    {{- include "gateway-guardrails.labels" . | nindent 4 }}
+data:
+  feedback.py: |-
+    {{- .Files.Get "files/feedback.py" | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: feedback
+  namespace: {{ .Values.namespaces.docsAgent }}
+  labels:
+    app: feedback
+    {{- include "gateway-guardrails.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: feedback
+  template:
+    metadata:
+      labels:
+        app: feedback
+      annotations:
+        checksum/code: {{ .Files.Get "files/feedback.py" | sha256sum }}
+    spec:
+      containers:
+        - name: feedback
+          image: {{ .Values.feedback.image }}
+          command: ["python", "/app/feedback.py"]
+          ports:
+            - containerPort: 8000
+          env:
+            - name: LANGFUSE_HOST
+              value: {{ .Values.feedback.langfuseHost | quote }}
+            - name: LANGFUSE_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.feedback.langfuseSecret }}, key: LANGFUSE_PUBLIC_KEY}
+            - name: LANGFUSE_SECRET_KEY
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.feedback.langfuseSecret }}, key: LANGFUSE_SECRET_KEY}
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          volumeMounts:
+            - name: code
+              mountPath: /app
+              readOnly: true
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8000}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: 8000}
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.feedback.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65534
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: code
+          configMap:
+            name: feedback
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: feedback
+  namespace: {{ .Values.namespaces.docsAgent }}
+  labels:
+    {{- include "gateway-guardrails.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: feedback
+  ports:
+    - port: 8000
+      targetPort: 8000
+{{- end }}
