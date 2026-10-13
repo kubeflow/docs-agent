@@ -20,3 +20,5 @@ kagent:
       value: deployment.environment=staging
 tests:
   enabled: false
+eval:
+  enabled: true

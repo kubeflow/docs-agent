@@ -1,0 +1,72 @@
+{{- if .Values.eval.enabled }}
+# End-to-end eval after every Argo CD sync of this release (tests/eval/staging_eval.py).
+# Results go to the Langfuse project whose keys are in mcp-langfuse-keys; a failed gate
+# fails the Job, which marks the Argo CD sync as failed.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-eval
+  labels:
+    {{- include "docs-agent.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ .Values.eval.timeoutSeconds }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}-eval
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: eval
+          image: {{ .Values.eval.image }}
+          command: ["sh", "-ec"]
+          # The script and dataset are fetched at the evaluated revision, so the eval
+          # always matches the code that was just deployed.
+          args:
+            - |
+              python - <<'PY'
+              import urllib.request
+              base = "https://raw.githubusercontent.com/{{ .Values.eval.repo }}/{{ .Values.eval.revision | default "main" }}/tests/eval"
+              for f in ("staging_eval.py", "flo_eval_dataset.json"):
+                  urllib.request.urlretrieve(f"{base}/{f}", f"/tmp/{f}")
+              PY
+              exec python /tmp/staging_eval.py
+          env:
+            - name: AGENT_NAMESPACE
+              value: {{ .Release.Namespace }}
+            - name: AGENT_BASE
+              value: {{ .Values.eval.agentBase | quote }}
+            - name: JUDGE_URL
+              value: {{ .Values.eval.judgeUrl | quote }}
+            - name: JUDGE_MODEL
+              value: {{ .Values.eval.judgeModel | quote }}
+            - name: LANGFUSE_HOST
+              value: {{ .Values.eval.langfuseHost | quote }}
+            - name: LANGFUSE_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.eval.langfuseSecret }}, key: LANGFUSE_PUBLIC_KEY}
+            - name: LANGFUSE_SECRET_KEY
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.eval.langfuseSecret }}, key: LANGFUSE_SECRET_KEY}
+            - name: REVISION
+              value: {{ .Values.eval.revision | quote }}
+            - name: GITHUB_REPO
+              value: {{ .Values.eval.prRepo | quote }}
+            - name: MIN_ROUTING
+              value: {{ .Values.eval.minRouting | quote }}
+            - name: MIN_GROUNDED
+              value: {{ .Values.eval.minGrounded | quote }}
+            - name: CONCURRENCY
+              value: {{ .Values.eval.concurrency | quote }}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+{{- end }}

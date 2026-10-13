@@ -131,6 +131,26 @@ kagent:
         - search_github_issues
         - search_kubeflow_docs
 
+# End-to-end eval as an Argo CD PostSync hook (staging only). See templates/eval-job.yaml.
+eval:
+  enabled: false
+  image: mirror.gcr.io/library/python:3.12-slim
+  # Where the eval script is fetched from, and the commit being evaluated. Argo CD sets
+  # revision from $ARGOCD_APP_REVISION (helm parameter in the Application).
+  repo: kubeflow/docs-agent
+  revision: ""
+  # Repository whose PRs and authors label the run in Langfuse.
+  prRepo: kubeflow/docs-agent
+  agentBase: http://kagent-controller.docs-agent.svc.cluster.local:8083
+  judgeUrl: http://llm-judge.ml-infra.svc.cluster.local/v1/chat/completions
+  judgeModel: flo-judge
+  langfuseHost: http://langfuse-web.langfuse.svc.cluster.local:3000
+  langfuseSecret: mcp-langfuse-keys
+  minRouting: "0.85"
+  minGrounded: "0.65"
+  concurrency: "3"
+  timeoutSeconds: 1800
+
 tests:
   enabled: true
   image: docker.io/library/busybox:1.37

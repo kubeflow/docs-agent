@@ -16,6 +16,10 @@ spec:
         releaseName: docs-agent-staging
         valueFiles:
           - $values/deploy/envs/staging/docs-agent.yaml
+        # The commit under test, for the eval Job (Argo CD build environment variable).
+        parameters:
+          - name: eval.revision
+            value: $ARGOCD_APP_REVISION
     - repoURL: https://github.com/kubeflow/docs-agent
       targetRevision: main
       ref: values
