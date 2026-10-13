@@ -93,10 +93,6 @@ kagent:
       maxTokens: 8192
       timeout: 300
       reasoningEffort: low
-  # Extra env for every agent pod. Staging sets
-  # OTEL_RESOURCE_ATTRIBUTES=deployment.environment=staging so the collector
-  # routes its spans to the evaluation project instead of the live one.
-  agentEnv: []
   remoteMcp:
     name: kubeflow-docs-mcp
     timeout: 30s

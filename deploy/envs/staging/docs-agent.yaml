@@ -14,10 +14,6 @@ mcp:
     - name: LANGFUSE_SECRET_KEY
       valueFrom:
         secretKeyRef: {name: mcp-langfuse-keys, key: LANGFUSE_SECRET_KEY}
-kagent:
-  agentEnv:
-    - name: OTEL_RESOURCE_ATTRIBUTES
-      value: deployment.environment=staging
 tests:
   enabled: false
 eval:

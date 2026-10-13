@@ -1,0 +1,31 @@
+# Read-only pod/namespace lookups for the k8sattributes processor (routes spans by namespace).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-collector
+  namespace: docs-agent
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: docs-agent-otel-collector
+rules:
+  - apiGroups: [""]
+    resources: [pods, namespaces]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: docs-agent-otel-collector
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: docs-agent-otel-collector
+subjects:
+  - kind: ServiceAccount
+    name: otel-collector
+    namespace: docs-agent

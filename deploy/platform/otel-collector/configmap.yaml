@@ -1,6 +1,8 @@
 # OpenTelemetry collector for agent and MCP spans. Was hand-applied; now in Git.
-# Spans with resource attribute deployment.environment=staging go to the Langfuse
-# evaluation project; everything else goes to the live project. Each project's
+# Spans from pods in docs-agent-staging go to the Langfuse evaluation project;
+# everything else goes to the live project. The namespace is looked up by the
+# k8sattributes processor from the sending pod's IP (kagent's agent runtime does not
+# apply OTEL_RESOURCE_ATTRIBUTES, so the agents cannot tag themselves). Each project's
 # Basic-auth header comes from the Secret langfuse-otlp (keys never in Git).
 apiVersion: v1
 kind: ConfigMap
@@ -26,13 +28,21 @@ data:
           span:
             - 'IsMatch(name, "^a2a\\.(server|utils)\\.")'
             - 'IsMatch(name, "^(POST|GET|PUT|PATCH|DELETE)( /api/(tasks|sessions).*| / http (send|receive))?$")'
+      k8sattributes:
+        auth_type: serviceAccount
+        passthrough: false
+        pod_association:
+          - sources:
+              - from: connection
+        extract:
+          metadata: [k8s.namespace.name, k8s.pod.name, k8s.deployment.name]
       batch:
     connectors:
       routing:
         default_pipelines: [traces/live]
         table:
           - context: resource
-            condition: attributes["deployment.environment"] == "staging"
+            condition: attributes["k8s.namespace.name"] == "docs-agent-staging"
             pipelines: [traces/eval]
     exporters:
       otlphttp/live:
@@ -49,7 +59,7 @@ data:
       pipelines:
         traces/in:
           receivers: [otlp]
-          processors: [filter/noise]
+          processors: [k8sattributes, filter/noise]
           exporters: [routing]
         traces/live:
           receivers: [routing]
