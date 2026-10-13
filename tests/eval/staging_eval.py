@@ -3,7 +3,7 @@
 Sends the single-turn cases of flo_eval_dataset.json to the real agents (through
 the kagent controller A2A API), checks tool routing and query fidelity, asks a
 judge model whether each answer is grounded in what the tools returned, and
-records everything in Langfuse as a dataset run, so two commits can be compared
+records everything in Langfuse as an Experiment on the flo-e2e dataset, so two commits can be compared
 side by side. Exits non-zero when a gate fails.
 
 Unlike slm_tool_eval.py (model + canned tool results), this exercises the whole
@@ -92,7 +92,8 @@ def ask(case: dict, context_id: str) -> dict:
     try:
         res = http("POST", url, {"jsonrpc": "2.0", "id": "1", "method": "message/send", "params": {"message": msg}}, timeout=300)
     except (urllib.error.URLError, TimeoutError) as e:
-        return {"error": str(e), "latency": time.time() - t0, "calls": [], "context": "", "answer": ""}
+        return {"error": str(e), "latency": time.time() - t0, "t_start": t0, "t_end": time.time(),
+                "calls": [], "context": "", "answer": ""}
     result = res.get("result") or {}
     calls, context = [], []
     for m in result.get("history", []):
@@ -109,6 +110,7 @@ def ask(case: dict, context_id: str) -> dict:
                         context.append(c["text"])
     answer = "\n".join(p.get("text", "") for a in result.get("artifacts", []) for p in a.get("parts", []) if p.get("kind") == "text")
     return {"error": res.get("error"), "state": (result.get("status") or {}).get("state"), "latency": time.time() - t0,
+            "t_start": t0, "t_end": time.time(),
             "calls": calls, "context": "\n\n".join(context), "answer": answer.strip()}
 
 
@@ -207,7 +209,27 @@ def traces_by_session(since: str, sessions: set[str], wait_s: int = 120) -> dict
     return found
 
 
-def record(run_name: str, run_meta: dict, rows: list[dict], since: str) -> None:
+def otlp_attrs(d: dict) -> list[dict]:
+    return [{"key": k, "value": {"stringValue": v if isinstance(v, str) else json.dumps(v)}} for k, v in d.items() if v is not None]
+
+
+def send_spans(spans: list[dict]) -> None:
+    """OTLP/HTTP JSON straight to Langfuse; no SDK needed."""
+    auth = base64.b64encode(f"{LF_PK}:{LF_SK}".encode()).decode()
+    body = {"resourceSpans": [{
+        "resource": {"attributes": otlp_attrs({"service.name": "flo-staging-eval", "langfuse.environment": "staging"})},
+        "scopeSpans": [{"scope": {"name": "tests/eval/staging_eval.py"}, "spans": spans}]}]}
+    http("POST", f"{LF}/api/public/otel/v1/traces", body,
+         {"Authorization": f"Basic {auth}", "x-langfuse-ingestion-version": "4"}, timeout=60)
+
+
+def record(run_name: str, run_meta: dict, rows: list[dict], since: str, experiment_id: str) -> None:
+    """Langfuse v4 builds Experiments from spans carrying langfuse.experiment.* attributes.
+
+    The agent traces are created by kagent, so each case gets its own small root span
+    (one trace per item) with the experiment attributes, the question, the agent's answer
+    and a link to the agent trace. Scores go on that root span and on the agent trace.
+    """
     if not (LF_PK and LF_SK):
         print("warn: no Langfuse keys, results not recorded", file=sys.stderr)
         return
@@ -216,7 +238,10 @@ def record(run_name: str, run_meta: dict, rows: list[dict], since: str) -> None:
     except urllib.error.HTTPError as e:
         if e.code not in (409,):
             print(f"warn: dataset create: {e}", file=sys.stderr)
-    traces = traces_by_session(since, {r["session"] for r in rows})
+    dataset_id = lf("GET", f"/datasets/{DATASET_NAME}").get("id")
+    agent_traces = traces_by_session(since, {r["session"] for r in rows})
+
+    spans, scores = [], []
     for r in rows:
         c, item_id = r["case"], f"{DATASET_NAME}-{r['case']['id']}"
         try:
@@ -225,27 +250,56 @@ def record(run_name: str, run_meta: dict, rows: list[dict], since: str) -> None:
                                           "metadata": {"group": c["group"]}})
         except urllib.error.HTTPError as e:
             print(f"warn: dataset item {item_id}: {e}", file=sys.stderr)
-        trace_id = traces.get(r["session"])
-        if not trace_id:
-            print(f"warn: no trace for {c['id']} (session {r['session']})", file=sys.stderr)
-            continue
-        scores = [("routing", int(r["routing"]), "NUMERIC")]
+        agent_trace = agent_traces.get(r["session"])
+        if not agent_trace:
+            print(f"warn: no agent trace for {c['id']} (session {r['session']})", file=sys.stderr)
+        trace_id, span_id = uuid.uuid4().hex, uuid.uuid4().hex[:16]
+        out = r["out"]
+        spans.append({
+            "traceId": trace_id, "spanId": span_id, "name": f"flo-e2e {c['id']}", "kind": 1,
+            "startTimeUnixNano": str(int(out["t_start"] * 1e9)), "endTimeUnixNano": str(int(out["t_end"] * 1e9)),
+            "attributes": otlp_attrs({
+                "langfuse.experiment.id": experiment_id,
+                "langfuse.experiment.name": run_name,
+                "langfuse.experiment.dataset.id": dataset_id,
+                "langfuse.experiment.description": run_meta.get("description"),
+                **{f"langfuse.experiment.metadata.{k}": v for k, v in run_meta.items() if k != "description" and v is not None},
+                "langfuse.experiment.item.id": item_id,
+                "langfuse.experiment.item.root_observation_id": span_id,
+                "langfuse.experiment.item.expected_output": c["expect"],
+                "langfuse.experiment.item.metadata.group": c["group"],
+                "langfuse.experiment.item.metadata.agent_trace_id": agent_trace,
+                "langfuse.observation.input": {"q": c["q"], "agent": c["agent"]},
+                "langfuse.observation.output": {"answer": out["answer"], "tools": [x["name"] for x in out["calls"]],
+                                                "queries": [x["args"] for x in out["calls"]]},
+                "langfuse.session.id": r["session"],
+                "langfuse.environment": "staging",
+            })})
+        vals = [("routing", int(r["routing"]), "NUMERIC")]
         if r["fidelity"] is not None:
-            scores.append(("query_fidelity", int(r["fidelity"]), "NUMERIC"))
+            vals.append(("query_fidelity", int(r["fidelity"]), "NUMERIC"))
         if r["judge"]:
-            scores += [("grounded", r["judge"]["grounded"], "CATEGORICAL"), ("answers", r["judge"]["answers"], "CATEGORICAL")]
-        for name, value, dtype in scores:
-            try:
-                lf("POST", "/scores", {"id": f"{trace_id}-{name}", "traceId": trace_id, "name": name, "value": value,
-                                       "dataType": dtype, "comment": (r["judge"] or {}).get("reason", "") if dtype == "CATEGORICAL" else None,
-                                       "metadata": run_meta})
-            except urllib.error.HTTPError as e:
-                print(f"warn: score {name} on {trace_id}: {e}", file=sys.stderr)
+            vals += [("grounded", r["judge"]["grounded"], "CATEGORICAL"), ("answers", r["judge"]["answers"], "CATEGORICAL")]
+        reason = (r["judge"] or {}).get("reason", "")
+        for name, value, dtype in vals:
+            comment = reason if dtype == "CATEGORICAL" else None
+            scores.append({"id": f"{span_id}-{name}", "traceId": trace_id, "observationId": span_id, "name": name,
+                           "value": value, "dataType": dtype, "comment": comment, "environment": "staging"})
+            if agent_trace:
+                scores.append({"id": f"{agent_trace}-{name}", "traceId": agent_trace, "name": name, "value": value,
+                               "dataType": dtype, "comment": comment, "metadata": run_meta})
+    for i in range(0, len(spans), 20):
         try:
-            lf("POST", "/dataset-run-items", {"runName": run_name, "runDescription": run_meta.get("description"),
-                                              "metadata": run_meta, "datasetItemId": item_id, "traceId": trace_id})
+            send_spans(spans[i:i + 20])
         except urllib.error.HTTPError as e:
-            print(f"warn: run item {item_id}: {e}", file=sys.stderr)
+            print(f"warn: experiment spans: {e} {e.read()[:200]!r}", file=sys.stderr)
+    for sc in scores:
+        try:
+            lf("POST", "/scores", sc)
+        except urllib.error.HTTPError as e:
+            print(f"warn: score {sc['name']} on {sc['traceId']}: {e}", file=sys.stderr)
+    print(f"recorded experiment {experiment_id}: {len(spans)} items, {len(scores)} scores, "
+          f"{len(agent_traces)}/{len(rows)} agent traces linked")
 
 
 # ----- Main ----------------------------------------------------------------------------
@@ -293,7 +347,7 @@ def main() -> int:
 
     record(run_name, {"sha": git["sha"], "pr": git["pr"], "author": git["author"], "pr_url": git["url"],
                       "namespace": AGENT_NS, "judge": JUDGE_MODEL, "description": f"{n} cases, routing {routing:.2f}, grounded {grounded:.2f}"},
-           rows, since)
+           rows, since, f"{DATASET_NAME}-{sha7}-{stamp}")
     print(json.dumps(summary, indent=2))
     return 0 if summary["passed"] else 1
 
