@@ -1,0 +1,19 @@
+# Who may call the judge model: the eval jobs (staging), the feedback triage job (docs-agent),
+# and Langfuse's LLM-as-a-judge evaluators (langfuse-worker). Agents do not use it.
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-eval-to-llm-judge
+  namespace: ml-infra
+spec:
+  selector:
+    matchLabels:
+      serving.kserve.io/inferenceservice: llm-judge
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            namespaces: ["docs-agent", "docs-agent-staging", "langfuse"]
+      to:
+        - operation:
+            ports: ["8080", "8012"]
