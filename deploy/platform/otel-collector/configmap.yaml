@@ -36,6 +36,13 @@ data:
               - from: connection
         extract:
           metadata: [k8s.namespace.name, k8s.pod.name, k8s.deployment.name]
+      # Langfuse environment filter: production for the live route, staging for the eval route.
+      resource/production:
+        attributes:
+          - {key: langfuse.environment, value: production, action: upsert}
+      resource/staging:
+        attributes:
+          - {key: langfuse.environment, value: staging, action: upsert}
       batch:
     connectors:
       routing:
@@ -63,9 +70,9 @@ data:
           exporters: [routing]
         traces/live:
           receivers: [routing]
-          processors: [batch]
+          processors: [resource/production, batch]
           exporters: [otlphttp/live]
         traces/eval:
           receivers: [routing]
-          processors: [batch]
+          processors: [resource/staging, batch]
           exporters: [otlphttp/eval]

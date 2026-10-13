@@ -14,6 +14,8 @@ mcp:
     - name: LANGFUSE_SECRET_KEY
       valueFrom:
         secretKeyRef: {name: mcp-langfuse-keys, key: LANGFUSE_SECRET_KEY}
+    - name: LANGFUSE_TRACING_ENVIRONMENT
+      value: staging
 tests:
   enabled: false
 eval:
