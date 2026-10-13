@@ -149,6 +149,20 @@ eval:
   limit: "0"
   timeoutSeconds: 1800
 
+# Nightly triage of thumbs-down answers (see templates/triage-cronjob.yaml).
+triage:
+  enabled: false
+  schedule: "0 3 * * *"
+  sinceHours: 24
+  image: mirror.gcr.io/library/python:3.12-slim
+  repo: kubeflow/docs-agent
+  ref: main
+  langfuseHost: http://langfuse-web.langfuse.svc.cluster.local:3000
+  # Keys of the project that holds the live chat traces (where user_feedback lands).
+  langfuseSecret: mcp-langfuse-keys
+  judgeUrl: http://llm-judge.ml-infra.svc.cluster.local/v1/chat/completions
+  judgeModel: flo-judge
+
 tests:
   enabled: true
   image: docker.io/library/busybox:1.37
