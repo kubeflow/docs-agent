@@ -6,6 +6,8 @@ from pathlib import Path
 # Add pipelines directory to path
 PIPELINES_DIR = Path(__file__).parent.parent / "docs-agent-mcp" / "pipelines"
 sys.path.insert(0, str(PIPELINES_DIR))
+# Shared helpers moved to pipelines/utils/ (the pipelines add it to sys.path the same way).
+sys.path.insert(0, str(PIPELINES_DIR / "utils"))
 
 from utils import clean_content, embed_texts, resolve_github_token, truncate_for_tei
 

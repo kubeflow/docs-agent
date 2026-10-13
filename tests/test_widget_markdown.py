@@ -71,21 +71,26 @@ process.stdout.write(JSON.stringify({{
     return json.loads(completed.stdout)
 
 
-def test_linkifies_only_http_sources_with_safe_anchor_attributes():
+# Since #249, links belong in the Sources panel, not the answer bubble: an http(s)
+# Markdown link renders as its (escaped) label and bare URLs are removed.
+def test_http_markdown_links_render_as_label_only():
     rendered = run_formatter("[Katib Experiment](https://www.kubeflow.org/docs/components/katib/)")
 
-    assert rendered == (
-        '<a href="https://www.kubeflow.org/docs/components/katib/" '
-        'target="_blank" rel="noopener noreferrer">Katib Experiment</a>'
-    )
-    assert run_formatter("[unsafe](javascript:alert(1))") == ("[unsafe](javascript:alert(1))")
+    assert rendered == "Katib Experiment"
+    assert "<a " not in rendered
 
 
-def test_escapes_markdown_link_label_and_query_delimiter():
+def test_non_http_links_stay_inert_text():
+    rendered = run_formatter("[unsafe](javascript:alert(1))")
+
+    assert rendered == "[unsafe](javascript:alert(1))"
+    assert "<a " not in rendered
+
+
+def test_escapes_markdown_link_label():
     rendered = run_formatter("[<img src=x>](https://example.test/docs?a=1&b=2)")
 
-    assert "&lt;img src=x&gt;" in rendered
-    assert 'href="https://example.test/docs?a=1&amp;b=2"' in rendered
+    assert rendered == "&lt;img src=x&gt;"
     assert "<img" not in rendered
 
 
@@ -109,11 +114,12 @@ def test_preserves_dollar_sequences_and_links_inside_fenced_yaml(streaming):
     assert '<pre><code class="language-yaml">' in rendered
 
 
-def test_does_not_linkify_markdown_inside_inline_code():
+def test_keeps_markdown_inside_inline_code_and_strips_prose_links():
     rendered = run_formatter("Use `[title](https://example.test/literal)` then [open docs](https://example.test/docs).")
 
     assert "<code>[title](https://example.test/literal)</code>" in rendered
-    assert rendered.count("<a ") == 1
+    assert rendered.endswith("then open docs.")
+    assert "<a " not in rendered
 
 
 def test_sse_parser_preserves_fragmented_tool_and_citation_events():

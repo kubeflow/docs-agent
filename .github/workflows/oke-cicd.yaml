@@ -49,14 +49,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r docs-agent-mcp/mcp-server/requirements.txt
           pip install -r requirements-test.txt
-          pip install ruff==0.15.9 kfp kfp-kubernetes
+          pip install ruff==0.15.9
 
+      # The pipelines have their own pins (kfp, ingest libraries) that differ from
+      # the test requirements, so they compile in a separate virtualenv.
       - name: Compile docs RAG pipeline
         working-directory: docs-agent-mcp/pipelines
         run: |
-          python kubeflow-pipeline.py
-          python issues-pipeline.py
-          python code-pipeline.py
+          python -m venv /tmp/pipelines-venv
+          /tmp/pipelines-venv/bin/pip install -r requirements.txt
+          /tmp/pipelines-venv/bin/python kubeflow-pipeline.py
+          /tmp/pipelines-venv/bin/python issues-pipeline.py
+          /tmp/pipelines-venv/bin/python code-pipeline.py
 
       - name: Lint and render Helm charts
         run: |

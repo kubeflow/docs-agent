@@ -67,9 +67,7 @@ def search_kubeflow_docs(query: str, top_k: int = 5) -> ToolResult:
         if milvus_search.SEARCH_MODE == "auto":
             hits, retrieval_meta = search_docs_auto(query, top_k, DOCS_OUTPUT_FIELDS)
         else:
-            hits = search_collection(
-                milvus_search.COLLECTION_NAME, query, top_k, DOCS_OUTPUT_FIELDS
-            )
+            hits = search_collection(milvus_search.COLLECTION_NAME, query, top_k, DOCS_OUTPUT_FIELDS)
             retrieval_meta = retrieval_metadata(
                 RetrievalPlan(
                     intent="explicit",
@@ -122,9 +120,7 @@ def search_github_issues(query: str, top_k: int = 5, repo: str = "", state: str 
 
 
 @mcp.tool()
-def search_kubeflow_code(
-    query: str, top_k: int = 5, resource_kind: str = "", repo: str = ""
-) -> ToolResult:
+def search_kubeflow_code(query: str, top_k: int = 5, resource_kind: str = "", repo: str = "") -> ToolResult:
     """Search Kubeflow code and YAML manifests."""
     try:
         query, top_k = _search_args(query, top_k)
