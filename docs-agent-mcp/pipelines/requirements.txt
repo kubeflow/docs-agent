@@ -7,4 +7,4 @@ toml==0.10.2
 python-frontmatter==1.1.0
 markdownify==1.2.0
 html-table-rescuer==0.3.1
-requests==2.34.2
+requests==2.33.0  # kfp 2.17.0 pins requests==2.33.0 on Python >= 3.10
