@@ -145,6 +145,8 @@ eval:
   minRouting: "0.85"
   minGrounded: "0.65"
   concurrency: "3"
+  # Number of cases to run; "0" = all. Use "1" for a quick smoke run.
+  limit: "0"
   timeoutSeconds: 1800
 
 tests:
