@@ -36,6 +36,8 @@ DENSE_DIM = 768
 MAX_CONTENT_TEXT_CHARS = 2000
 INSERT_BATCH_SIZE = 1000
 DELETE_BATCH_SIZE = 100
+PRIMARY_KEY_FIELD = "id"
+PRIMARY_KEY_BATCH_SIZE = 1000
 
 ANALYZER_PARAMS = {
     "tokenizer": "standard",
@@ -290,6 +292,77 @@ def compute_validation_metrics(
     }
 
 
+def _document_id_filter(document_ids: Sequence[str]) -> str:
+    quoted = ", ".join(json.dumps(doc_id, ensure_ascii=False) for doc_id in document_ids)
+    return f"{DOCUMENT_ID_FIELD} in [{quoted}]"
+
+
+def fetch_existing_primary_keys(
+    milvus: MilvusClient,
+    collection_name: str,
+    document_ids: Sequence[str],
+) -> list[int]:
+    """Return primary keys of every stored chunk for the given document ids.
+
+    Uses query_iterator because a plain query is capped by Milvus's result window.
+    """
+    primary_keys: dict[int, None] = {}
+    for start in range(0, len(document_ids), DELETE_BATCH_SIZE):
+        iterator = milvus.query_iterator(
+            collection_name=collection_name,
+            batch_size=PRIMARY_KEY_BATCH_SIZE,
+            filter=_document_id_filter(document_ids[start : start + DELETE_BATCH_SIZE]),
+            output_fields=[PRIMARY_KEY_FIELD],
+        )
+        try:
+            while True:
+                page = iterator.next()
+                if not page:
+                    break
+                for item in page:
+                    primary_keys[item[PRIMARY_KEY_FIELD]] = None
+        finally:
+            iterator.close()
+    return list(primary_keys)
+
+
+def delete_primary_keys(
+    milvus: MilvusClient,
+    collection_name: str,
+    primary_keys: Sequence[int],
+) -> int:
+    """Delete rows by primary key in batches; returns the reported delete count."""
+    deleted = 0
+    for start in range(0, len(primary_keys), PRIMARY_KEY_BATCH_SIZE):
+        result = milvus.delete(
+            collection_name=collection_name,
+            ids=list(primary_keys[start : start + PRIMARY_KEY_BATCH_SIZE]),
+        )
+        # Servers older than 2.3.2 return the deleted keys instead of a count.
+        if isinstance(result, list):
+            deleted += len(result)
+        else:
+            deleted += int(result.get("delete_count", 0) or 0)
+    return deleted
+
+
+def rollback_inserted_rows(
+    milvus: MilvusClient,
+    collection_name: str,
+    primary_keys: Sequence[int],
+) -> None:
+    """Best-effort removal of rows inserted by a failed run; never raises."""
+    for start in range(0, len(primary_keys), PRIMARY_KEY_BATCH_SIZE):
+        batch = list(primary_keys[start : start + PRIMARY_KEY_BATCH_SIZE])
+        try:
+            milvus.delete(collection_name=collection_name, ids=batch)
+        except Exception as exc:
+            print(
+                f"WARNING: failed to roll back {len(batch)} inserted chunks "
+                f"after insert failure: {exc}"
+            )
+
+
 def store_embedded_records(
     embedded_data_path: str,
     *,
@@ -358,31 +431,38 @@ def store_embedded_records(
 
     rows = [prepare_v4_insert_row(record) for record in records]
 
+    # Replace in insert-then-delete order so a failed insert never leaves a
+    # document missing: capture the previous generation's primary keys, insert
+    # the new rows, and only then delete the old keys.
+    old_primary_keys: list[int] = []
     if not clean_rebuild:
         unique_ids = sorted({row[DOCUMENT_ID_FIELD] for row in rows})
-        deleted = 0
-        for start in range(0, len(unique_ids), DELETE_BATCH_SIZE):
-            batch_ids = unique_ids[start : start + DELETE_BATCH_SIZE]
-            quoted = ", ".join(f'"{doc_id}"' for doc_id in batch_ids)
-            result = milvus.delete(
-                collection_name=collection_name,
-                filter=f"{DOCUMENT_ID_FIELD} in [{quoted}]",
-            )
-            deleted += int(result.get("delete_count", 0) or 0)
-        if deleted:
-            print(f"Deleted {deleted} existing chunks for {len(unique_ids)} documents")
+        # query_iterator requires a loaded collection.
+        milvus.load_collection(collection_name)
+        old_primary_keys = fetch_existing_primary_keys(milvus, collection_name, unique_ids)
 
     inserted_count = 0
-    batch: list[dict[str, Any]] = []
-    for row in rows:
-        batch.append(row)
-        if len(batch) >= INSERT_BATCH_SIZE:
-            milvus.insert(collection_name=collection_name, data=batch)
+    inserted_primary_keys: list[int] = []
+    try:
+        for start in range(0, len(rows), INSERT_BATCH_SIZE):
+            batch = rows[start : start + INSERT_BATCH_SIZE]
+            result = milvus.insert(collection_name=collection_name, data=batch)
+            if not clean_rebuild:
+                batch_ids = list(result.get("ids") or [])
+                inserted_primary_keys.extend(batch_ids)
+                if len(batch_ids) != len(batch):
+                    raise RuntimeError(
+                        f"insert returned {len(batch_ids)} primary keys for {len(batch)} rows"
+                    )
             inserted_count += len(batch)
-            batch.clear()
-    if batch:
-        milvus.insert(collection_name=collection_name, data=batch)
-        inserted_count += len(batch)
+    except Exception:
+        if not clean_rebuild and inserted_primary_keys:
+            rollback_inserted_rows(milvus, collection_name, inserted_primary_keys)
+        raise
+
+    if old_primary_keys:
+        deleted = delete_primary_keys(milvus, collection_name, old_primary_keys)
+        print(f"Deleted {deleted} previous chunks for {len(unique_ids)} documents")
 
     milvus.flush(collection_name)
     milvus.load_collection(collection_name)
