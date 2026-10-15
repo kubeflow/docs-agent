@@ -1,0 +1,20 @@
+# Production values for the demo cluster. Public by design: no secrets here.
+# The ACME contact email lives only in the cluster's ClusterIssuer (createIssuer: false).
+domain: agent.santhoshtoorpu.com
+gateway:
+  tls:
+    acme:
+      createIssuer: false
+routing:
+  cors:
+    allowOrigins:
+    - exact: https://kubeflowdemochatbot.netlify.app
+    - exact: https://kubeflow-docs-chatbot-demo.vercel.app
+sessionAuth:
+  enabled: true
+  enforce: true
+  # Moves to ghcr.io/kubeflow/kubeflow-session-issuer:<sha> (built by CI on main)
+  # in the first PR after that image exists; then imagePullSecrets can go.
+  image: ghcr.io/kmr-rohit/kubeflow-session-issuer:v0.1.0
+  imagePullSecrets:
+  - name: ghcr-session-issuer

@@ -1,0 +1,42 @@
+# Argo CD install values for the observe-only trial (helm chart argo/argo-cd 10.10.1, app v3.5.4).
+# Small footprint: no Dex/SSO, no notifications, no ApplicationSet, no HA.
+# Images come from quay.io / ecr-public / ghcr.io, not Docker Hub (Hub's anonymous pull limit has bitten this cluster).
+global:
+  domain: argocd.kmrrohit.space
+configs:
+  params:
+    # TLS terminates at the Istio ingress gateway (deploy/envs/prod/ingress/argocd-ingress.yaml).
+    server.insecure: true
+  cm:
+    # Observe-only: admin local account only, no anonymous access.
+    users.anonymous.enabled: "false"
+    exec.enabled: "false"
+    # Read-only login for mentors and community. Its password hash is set at install
+    # time (configs.secret.extra), never in this file; see README.
+    accounts.viewer: login
+  rbac:
+    policy.default: ""
+    policy.csv: |
+      g, viewer, role:readonly
+dex:
+  enabled: false
+notifications:
+  enabled: false
+applicationSet:
+  enabled: false
+controller:
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {memory: 1Gi}
+server:
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {memory: 512Mi}
+repoServer:
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {memory: 512Mi}
+redis:
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {memory: 256Mi}

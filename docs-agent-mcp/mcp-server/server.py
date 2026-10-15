@@ -14,6 +14,7 @@ from citations import (
     text_tool_result,
 )
 from intent_router import RetrievalPlan, retrieval_metadata
+import flo_tracing
 import milvus_search
 from milvus_search import search_collection, search_docs_auto
 
@@ -57,6 +58,7 @@ def _search_args(query: str, top_k: int) -> tuple[str, int]:
 
 
 @mcp.tool()
+@flo_tracing.traced("tool", inputs=("query", "top_k"))
 def search_kubeflow_docs(query: str, top_k: int = 5) -> ToolResult:
     """Search Kubeflow documentation. Search mode is chosen here, not by the LLM."""
     try:
@@ -86,6 +88,7 @@ def search_kubeflow_docs(query: str, top_k: int = 5) -> ToolResult:
 
 
 @mcp.tool()
+@flo_tracing.traced("tool", inputs=("query", "top_k", "repo", "state"))
 def search_github_issues(query: str, top_k: int = 5, repo: str = "", state: str = "") -> ToolResult:
     """Search Kubeflow GitHub issues."""
     try:
@@ -120,6 +123,7 @@ def search_github_issues(query: str, top_k: int = 5, repo: str = "", state: str 
 
 
 @mcp.tool()
+@flo_tracing.traced("tool", inputs=("query", "top_k", "resource_kind", "repo"))
 def search_kubeflow_code(query: str, top_k: int = 5, resource_kind: str = "", repo: str = "") -> ToolResult:
     """Search Kubeflow code and YAML manifests."""
     try:

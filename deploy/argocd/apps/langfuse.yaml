@@ -1,0 +1,27 @@
+# Observe-only: no syncPolicy. Langfuse holds live chat traces; sync by hand after reviewing the diff.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: langfuse
+  namespace: argocd
+spec:
+  project: default
+  sources:
+    - repoURL: https://langfuse.github.io/langfuse-k8s
+      chart: langfuse
+      targetRevision: 2.1.0
+      helm:
+        releaseName: langfuse
+        valueFiles:
+          - $values/deploy/envs/prod/langfuse/values.yaml
+    - repoURL: https://github.com/kubeflow/docs-agent
+      targetRevision: main
+      ref: values
+  ignoreDifferences:
+    - group: "*"
+      kind: "*"
+      jqPathExpressions:
+        - '.metadata.annotations."argocd.argoproj.io/tracking-id"'
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: langfuse

@@ -1,0 +1,31 @@
+# Second llm-runtime release: Qwen2.5-7B as the evaluation judge, on the second A10.
+# Gemma answers, Qwen judges, so the judge is a different model family from the answerer.
+# GPU workload: sync MANUALLY (no syncPolicy). Each release needs its own GPU and its own cache PVC.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: llm-judge
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/kubeflow/docs-agent
+    targetRevision: main
+    path: docs-agent-mcp/charts/llm-runtime
+    helm:
+      releaseName: llm-judge
+      valuesObject:
+        model: qwen
+        servedModelName: flo-judge
+        inferenceService:
+          name: llm-judge
+        service:
+          name: llm-judge
+        cache:
+          claimName: llm-judge-hf-cache
+          size: 30Gi
+        tests:
+          enabled: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ml-infra

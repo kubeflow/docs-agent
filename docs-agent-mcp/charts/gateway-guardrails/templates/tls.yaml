@@ -1,4 +1,5 @@
 {{- if and .Values.gateway.enabled .Values.gateway.tls.enabled .Values.gateway.tls.acme.enabled }}
+{{- if .Values.gateway.tls.acme.createIssuer }}
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
@@ -16,6 +17,7 @@ spec:
           ingress:
             ingressClassName: istio
 ---
+{{- end }}
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:

@@ -1,0 +1,31 @@
+# Observe-only: no syncPolicy, so Argo CD reports drift but never changes the cluster.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: docs-agent
+  namespace: argocd
+spec:
+  project: default
+  # Chart and per-environment values both come from this repo (second source = values ref).
+  # deploy/envs/prod/ is public and holds no secrets; secrets are Kubernetes Secrets referenced by name.
+  sources:
+    - repoURL: https://github.com/kubeflow/docs-agent
+      targetRevision: main
+      path: docs-agent-mcp/charts/docs-agent
+      helm:
+        releaseName: docs-agent
+        valueFiles:
+          - $values/deploy/envs/prod/docs-agent.yaml
+    - repoURL: https://github.com/kubeflow/docs-agent
+      targetRevision: main
+      ref: values
+  # Objects adopted from Helm have no Argo tracking-id until the first sync, which would flag every
+  # resource OutOfSync on that annotation alone. Ignore it so only real drift shows.
+  ignoreDifferences:
+    - group: "*"
+      kind: "*"
+      jqPathExpressions:
+        - '.metadata.annotations."argocd.argoproj.io/tracking-id"'
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: docs-agent

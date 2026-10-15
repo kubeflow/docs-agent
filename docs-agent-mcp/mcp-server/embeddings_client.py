@@ -7,6 +7,8 @@ from typing import Sequence
 
 import requests
 
+import flo_tracing
+
 DEFAULT_TIMEOUT_SEC = int(os.getenv("EMBEDDINGS_TIMEOUT_SEC", "60"))
 # TEI all-mpnet-base-v2: each input must be <384 tokens.
 MAX_TEI_INPUT_CHARS = int(os.getenv("MAX_TEI_INPUT_CHARS", "1000"))
@@ -50,6 +52,12 @@ def embed_texts(
     return vectors
 
 
+@flo_tracing.traced(
+    "embedding",
+    inputs=("query",),
+    output=lambda v: {"dimension": len(v)},
+    model=os.getenv("EMBEDDINGS_MODEL", "tei"),
+)
 def embed_query(query: str, **kwargs) -> list[float]:
     """Embed a single search query."""
     return embed_texts([query], **kwargs)[0]

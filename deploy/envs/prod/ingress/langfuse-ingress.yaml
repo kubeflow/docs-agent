@@ -1,0 +1,76 @@
+# Public HTTPS ingress for the self-hosted Langfuse (apply by hand; not a Helm release).
+# Host: langfuse.kmrrohit.space -> A record to the istio-ingressgateway LB IP.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: langfuse-cert
+  namespace: istio-system
+spec:
+  commonName: langfuse.kmrrohit.space
+  dnsNames:
+    - langfuse.kmrrohit.space
+  issuerRef:
+    kind: ClusterIssuer
+    name: letsencrypt-prod
+  secretName: langfuse-tls
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: Gateway
+metadata:
+  name: langfuse-gateway
+  namespace: istio-system
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - hosts: ["langfuse.kmrrohit.space"]
+      port: {name: http-langfuse, number: 80, protocol: HTTP}
+      tls: {httpsRedirect: true}
+    - hosts: ["langfuse.kmrrohit.space"]
+      port: {name: https-langfuse, number: 443, protocol: HTTPS}
+      tls: {mode: SIMPLE, credentialName: langfuse-tls}
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: langfuse
+  namespace: langfuse
+spec:
+  hosts: ["langfuse.kmrrohit.space"]
+  gateways: ["istio-system/langfuse-gateway"]
+  http:
+    - timeout: 120s
+      route:
+        - destination:
+            host: langfuse-web.langfuse.svc.cluster.local
+            port: {number: 3000}
+---
+# The shared a2a-global-ratelimit (60 req/min, all hosts on :443) would throttle the
+# Langfuse UI. Override it for this vhost only; the chatbot limits stay untouched.
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: langfuse-ratelimit-override
+  namespace: istio-system
+spec:
+  workloadSelector:
+    labels: {istio: ingressgateway}
+  configPatches:
+    - applyTo: HTTP_ROUTE
+      match:
+        context: GATEWAY
+        routeConfiguration:
+          vhost:
+            name: "langfuse.kmrrohit.space:443"
+      patch:
+        operation: MERGE
+        value:
+          typed_per_filter_config:
+            envoy.filters.http.local_ratelimit:
+              "@type": type.googleapis.com/udpa.type.v1.TypedStruct
+              type_url: type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+              value:
+                stat_prefix: langfuse_local_rate_limiter
+                token_bucket: {max_tokens: 6000, tokens_per_fill: 6000, fill_interval: 60s}
+                filter_enabled:  {default_value: {numerator: 100, denominator: HUNDRED}}
+                filter_enforced: {default_value: {numerator: 100, denominator: HUNDRED}}

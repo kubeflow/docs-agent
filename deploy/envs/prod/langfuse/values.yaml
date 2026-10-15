@@ -1,0 +1,75 @@
+# Langfuse (chart langfuse/langfuse 2.1.0) on the demo cluster. Captured from
+# `helm get values langfuse` on 2026-10-14 plus the settings that were applied by hand.
+# No secret values: salt, encryption key and NextAuth secret are read from the
+# existing Secret langfuse-app (helm.sh/resource-policy: keep).
+# LLM connections may call the judge (llm-judge) and the answer model (llm-stable).
+# No node affinity: GPU nodes carry the nvidia.com/gpu NoSchedule taint, so these
+# pods never land on them.
+clickhouse:
+  cluster:
+    image:
+      repository: docker.io/clickhouse/clickhouse-server
+      tag: '26.4'
+    replicas: 1
+    resources:
+      limits:
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+    storage:
+      size: 20Gi
+  deploy: true
+  keeper:
+    enabled: true
+    image:
+      repository: docker.io/clickhouse/clickhouse-keeper
+      tag: '26.4'
+    replicas: 1
+    resources:
+      limits:
+        memory: 512Mi
+      requests:
+        cpu: 250m
+        memory: 256Mi
+    storage:
+      size: 10Gi
+langfuse:
+  features:
+    telemetryEnabled: false
+    signUpDisabled: true
+  ingress:
+    enabled: false
+  salt:
+    secretKeyRef:
+      name: langfuse-app
+      key: salt
+  encryptionKey:
+    secretKeyRef:
+      name: langfuse-app
+      key: encryption-key
+  nextauth:
+    url: https://langfuse.kmrrohit.space
+    secret:
+      secretKeyRef:
+        name: langfuse-app
+        key: nextauth-secret
+  image:
+    pullPolicy: IfNotPresent
+  additionalEnv:
+  - name: LANGFUSE_LLM_CONNECTION_WHITELISTED_HOST
+    value: llm-judge.ml-infra.svc.cluster.local,llm-stable.ml-infra.svc.cluster.local,tool-choice-proxy.docs-agent.svc.cluster.local
+postgresql:
+  image:
+    registry: docker.io
+    repository: postgres
+    tag: '18'
+  storage:
+    requestedSize: 10Gi
+s3:
+  global:
+    imageRegistry: docker.io
+  image:
+    registry: docker.io
+    repository: chrislusf/seaweedfs
+    tag: '4.23'

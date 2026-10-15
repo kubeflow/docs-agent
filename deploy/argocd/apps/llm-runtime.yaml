@@ -1,0 +1,24 @@
+# Observe-only (no syncPolicy). GPU workload: when sync is ever enabled, keep it MANUAL (Recreate on one GPU).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: llm-runtime
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/kubeflow/docs-agent
+    targetRevision: main
+    path: docs-agent-mcp/charts/llm-runtime
+    helm:
+      releaseName: llm-runtime
+  # Objects adopted from Helm have no Argo tracking-id until the first sync, which would flag every
+  # resource OutOfSync on that annotation alone. Ignore it so only real drift shows.
+  ignoreDifferences:
+    - group: "*"
+      kind: "*"
+      jqPathExpressions:
+        - '.metadata.annotations."argocd.argoproj.io/tracking-id"'
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ml-infra
