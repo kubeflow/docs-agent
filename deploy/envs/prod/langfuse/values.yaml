@@ -3,26 +3,10 @@
 # No secret values: salt, encryption key and NextAuth secret are read from the
 # existing Secret langfuse-app (helm.sh/resource-policy: keep).
 # LLM connections may call the judge (llm-judge) and the answer model (llm-stable).
-_avoidGpu:
-  nodeAffinity:
-    requiredDuringSchedulingIgnoredDuringExecution:
-      nodeSelectorTerms:
-      - matchExpressions:
-        - key: kubernetes.io/hostname
-          operator: NotIn
-          values:
-          - 10.0.10.102
+# No node affinity: GPU nodes carry the nvidia.com/gpu NoSchedule taint, so these
+# pods never land on them.
 clickhouse:
   cluster:
-    affinity:
-      nodeAffinity:
-        requiredDuringSchedulingIgnoredDuringExecution:
-          nodeSelectorTerms:
-          - matchExpressions:
-            - key: kubernetes.io/hostname
-              operator: NotIn
-              values:
-              - 10.0.10.102
     image:
       repository: docker.io/clickhouse/clickhouse-server
       tag: '26.4'
@@ -37,15 +21,6 @@ clickhouse:
       size: 20Gi
   deploy: true
   keeper:
-    affinity:
-      nodeAffinity:
-        requiredDuringSchedulingIgnoredDuringExecution:
-          nodeSelectorTerms:
-          - matchExpressions:
-            - key: kubernetes.io/hostname
-              operator: NotIn
-              values:
-              - 10.0.10.102
     enabled: true
     image:
       repository: docker.io/clickhouse/clickhouse-keeper
@@ -60,15 +35,6 @@ clickhouse:
     storage:
       size: 10Gi
 langfuse:
-  affinity:
-    nodeAffinity:
-      requiredDuringSchedulingIgnoredDuringExecution:
-        nodeSelectorTerms:
-        - matchExpressions:
-          - key: kubernetes.io/hostname
-            operator: NotIn
-            values:
-            - 10.0.10.102
   features:
     telemetryEnabled: false
     signUpDisabled: true
@@ -94,15 +60,6 @@ langfuse:
   - name: LANGFUSE_LLM_CONNECTION_WHITELISTED_HOST
     value: llm-judge.ml-infra.svc.cluster.local,llm-stable.ml-infra.svc.cluster.local,tool-choice-proxy.docs-agent.svc.cluster.local
 postgresql:
-  affinity:
-    nodeAffinity:
-      requiredDuringSchedulingIgnoredDuringExecution:
-        nodeSelectorTerms:
-        - matchExpressions:
-          - key: kubernetes.io/hostname
-            operator: NotIn
-            values:
-            - 10.0.10.102
   image:
     registry: docker.io
     repository: postgres
