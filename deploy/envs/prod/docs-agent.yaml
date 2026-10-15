@@ -1,9 +1,9 @@
 # Production values for the demo cluster. Public by design: no secrets here.
 mcp:
   image:
-    # Built by CI from main (#269 merge). Promote by changing this tag in a PR.
+    # Built by CI from main (#266 merge, adds Langfuse tracing). Promote by changing this tag in a PR.
     repository: ghcr.io/kubeflow/mcp-kubeflow-docs
-    tag: 0e49ebd
+    tag: eb53144
   # Tracing keys for the MCP server (Secret created by an admin; were hand-added with kubectl set env).
   extraEnv:
     - name: LANGFUSE_PUBLIC_KEY
