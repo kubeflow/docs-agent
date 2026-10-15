@@ -22,6 +22,26 @@ spec:
       kind: "*"
       jqPathExpressions:
         - '.metadata.annotations."argocd.argoproj.io/tracking-id"'
+    # The chart keeps generated credentials with Helm `lookup`, which Argo CD cannot run,
+    # so every render produces new random passwords. Never overwrite the live ones.
+    - kind: Secret
+      name: langfuse-clickhouse-auth
+      jsonPointers: [/data]
+    - kind: Secret
+      name: langfuse-postgresql-auth
+      jsonPointers: [/data]
+    - kind: Secret
+      name: langfuse-redis-auth
+      jsonPointers: [/data]
+    - kind: Secret
+      name: langfuse-s3-auth
+      jsonPointers: [/data]
+    - kind: Secret
+      name: langfuse-s3-sftp-secret
+      jsonPointers: [/data]
+  syncPolicy:
+    syncOptions:
+      - RespectIgnoreDifferences=true
   destination:
     server: https://kubernetes.default.svc
     namespace: langfuse
