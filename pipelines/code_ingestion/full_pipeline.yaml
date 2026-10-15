@@ -1,0 +1,1434 @@
+# PIPELINE DEFINITION
+# Name: full-ingestion-pipeline
+# Description: Run both docs and code ingestion pipelines in parallel
+# Inputs:
+#    chunk_overlap: int [Default: 50.0]
+#    chunk_size: int [Default: 500.0]
+#    code_branch: str [Default: 'master']
+#    code_repo_url: str [Default: 'https://github.com/kubeflow/manifests']
+#    docs_base_url: str [Default: 'https://www.kubeflow.org']
+#    docs_crawl_delay: float [Default: 1.0]
+#    docs_max_pages: int [Default: 0.0]
+#    embedding_dim: int [Default: 384.0]
+#    embedding_model: str [Default: 'sentence-transformers/all-MiniLM-L6-v2']
+#    milvus_host: str [Default: 'localhost']
+#    milvus_port: str [Default: '19530']
+components:
+  comp-chunk-code:
+    executorLabel: exec-chunk-code
+    inputDefinitions:
+      artifacts:
+        parsed_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+          description: Input dataset of parsed chunks.
+    outputDefinitions:
+      artifacts:
+        chunked_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-chunk-docs:
+    executorLabel: exec-chunk-docs
+    inputDefinitions:
+      artifacts:
+        crawled_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+          description: Input dataset of crawled pages.
+      parameters:
+        chunk_overlap:
+          description: Token overlap between chunks.
+          parameterType: NUMBER_INTEGER
+        chunk_size:
+          description: Maximum tokens per chunk.
+          parameterType: NUMBER_INTEGER
+    outputDefinitions:
+      artifacts:
+        chunked_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-clone-repo:
+    executorLabel: exec-clone-repo
+    inputDefinitions:
+      parameters:
+        branch:
+          description: Branch name to clone.
+          parameterType: STRING
+        repo_url:
+          description: Repository URL to clone.
+          parameterType: STRING
+    outputDefinitions:
+      artifacts:
+        clone_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-code-ingestion-pipeline:
+    dag:
+      tasks:
+        chunk-code:
+          cachingOptions:
+            enableCache: true
+          componentRef:
+            name: comp-chunk-code
+          dependentTasks:
+          - parse-code
+          inputs:
+            artifacts:
+              parsed_data:
+                taskOutputArtifact:
+                  outputArtifactKey: parsed_data
+                  producerTask: parse-code
+          retryPolicy:
+            backoffDuration: 30s
+            backoffFactor: 2.0
+            backoffMaxDuration: 3600s
+            maxRetryCount: 3
+          taskInfo:
+            name: chunk-code
+        clone-repo:
+          cachingOptions:
+            enableCache: true
+          componentRef:
+            name: comp-clone-repo
+          inputs:
+            parameters:
+              branch:
+                componentInputParameter: branch
+              repo_url:
+                componentInputParameter: repo_url
+          retryPolicy:
+            backoffDuration: 30s
+            backoffFactor: 2.0
+            backoffMaxDuration: 3600s
+            maxRetryCount: 3
+          taskInfo:
+            name: clone-repo
+        embed-code:
+          cachingOptions:
+            enableCache: true
+          componentRef:
+            name: comp-embed-code
+          dependentTasks:
+          - chunk-code
+          inputs:
+            artifacts:
+              chunked_data:
+                taskOutputArtifact:
+                  outputArtifactKey: chunked_data
+                  producerTask: chunk-code
+            parameters:
+              embedding_model:
+                componentInputParameter: embedding_model
+          retryPolicy:
+            backoffDuration: 30s
+            backoffFactor: 2.0
+            backoffMaxDuration: 3600s
+            maxRetryCount: 3
+          taskInfo:
+            name: embed-code
+        load-code:
+          cachingOptions:
+            enableCache: true
+          componentRef:
+            name: comp-load-code
+          dependentTasks:
+          - embed-code
+          inputs:
+            artifacts:
+              embedded_data:
+                taskOutputArtifact:
+                  outputArtifactKey: embedded_data
+                  producerTask: embed-code
+            parameters:
+              collection_name:
+                componentInputParameter: collection_name
+              embedding_dim:
+                componentInputParameter: embedding_dim
+              milvus_host:
+                componentInputParameter: milvus_host
+              milvus_port:
+                componentInputParameter: milvus_port
+          retryPolicy:
+            backoffDuration: 30s
+            backoffFactor: 2.0
+            backoffMaxDuration: 3600s
+            maxRetryCount: 3
+          taskInfo:
+            name: load-code
+        parse-code:
+          cachingOptions:
+            enableCache: true
+          componentRef:
+            name: comp-parse-code
+          dependentTasks:
+          - clone-repo
+          inputs:
+            artifacts:
+              clone_data:
+                taskOutputArtifact:
+                  outputArtifactKey: clone_data
+                  producerTask: clone-repo
+          retryPolicy:
+            backoffDuration: 30s
+            backoffFactor: 2.0
+            backoffMaxDuration: 3600s
+            maxRetryCount: 3
+          taskInfo:
+            name: parse-code
+    inputDefinitions:
+      parameters:
+        branch:
+          defaultValue: master
+          isOptional: true
+          parameterType: STRING
+        collection_name:
+          defaultValue: code_collection
+          isOptional: true
+          parameterType: STRING
+        embedding_dim:
+          defaultValue: 384.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        embedding_model:
+          defaultValue: sentence-transformers/all-MiniLM-L6-v2
+          isOptional: true
+          parameterType: STRING
+        milvus_host:
+          defaultValue: localhost
+          isOptional: true
+          parameterType: STRING
+        milvus_port:
+          defaultValue: '19530'
+          isOptional: true
+          parameterType: STRING
+        repo_url:
+          defaultValue: https://github.com/kubeflow/manifests
+          isOptional: true
+          parameterType: STRING
+  comp-crawl-docs:
+    executorLabel: exec-crawl-docs
+    inputDefinitions:
+      parameters:
+        base_url:
+          description: Base URL for kubeflow docs (e.g., https://www.kubeflow.org).
+          parameterType: STRING
+        crawl_delay:
+          description: Delay in seconds between requests.
+          parameterType: NUMBER_DOUBLE
+        max_pages:
+          description: Max pages to crawl (0 = unlimited).
+          parameterType: NUMBER_INTEGER
+    outputDefinitions:
+      artifacts:
+        crawled_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-docs-ingestion-pipeline:
+    dag:
+      tasks:
+        chunk-docs:
+          cachingOptions:
+            enableCache: true
+          componentRef:
+            name: comp-chunk-docs
+          dependentTasks:
+          - crawl-docs
+          inputs:
+            artifacts:
+              crawled_data:
+                taskOutputArtifact:
+                  outputArtifactKey: crawled_data
+                  producerTask: crawl-docs
+            parameters:
+              chunk_overlap:
+                componentInputParameter: chunk_overlap
+              chunk_size:
+                componentInputParameter: chunk_size
+          retryPolicy:
+            backoffDuration: 30s
+            backoffFactor: 2.0
+            backoffMaxDuration: 3600s
+            maxRetryCount: 3
+          taskInfo:
+            name: chunk-docs
+        crawl-docs:
+          cachingOptions:
+            enableCache: true
+          componentRef:
+            name: comp-crawl-docs
+          inputs:
+            parameters:
+              base_url:
+                componentInputParameter: base_url
+              crawl_delay:
+                componentInputParameter: crawl_delay
+              max_pages:
+                componentInputParameter: max_pages
+          retryPolicy:
+            backoffDuration: 30s
+            backoffFactor: 2.0
+            backoffMaxDuration: 3600s
+            maxRetryCount: 3
+          taskInfo:
+            name: crawl-docs
+        embed-docs:
+          cachingOptions:
+            enableCache: true
+          componentRef:
+            name: comp-embed-docs
+          dependentTasks:
+          - chunk-docs
+          inputs:
+            artifacts:
+              chunked_data:
+                taskOutputArtifact:
+                  outputArtifactKey: chunked_data
+                  producerTask: chunk-docs
+            parameters:
+              embedding_model:
+                componentInputParameter: embedding_model
+          retryPolicy:
+            backoffDuration: 30s
+            backoffFactor: 2.0
+            backoffMaxDuration: 3600s
+            maxRetryCount: 3
+          taskInfo:
+            name: embed-docs
+        load-docs:
+          cachingOptions:
+            enableCache: true
+          componentRef:
+            name: comp-load-docs
+          dependentTasks:
+          - embed-docs
+          inputs:
+            artifacts:
+              embedded_data:
+                taskOutputArtifact:
+                  outputArtifactKey: embedded_data
+                  producerTask: embed-docs
+            parameters:
+              collection_name:
+                componentInputParameter: collection_name
+              embedding_dim:
+                componentInputParameter: embedding_dim
+              milvus_host:
+                componentInputParameter: milvus_host
+              milvus_port:
+                componentInputParameter: milvus_port
+          retryPolicy:
+            backoffDuration: 30s
+            backoffFactor: 2.0
+            backoffMaxDuration: 3600s
+            maxRetryCount: 3
+          taskInfo:
+            name: load-docs
+    inputDefinitions:
+      parameters:
+        base_url:
+          defaultValue: https://www.kubeflow.org
+          isOptional: true
+          parameterType: STRING
+        chunk_overlap:
+          defaultValue: 50.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        chunk_size:
+          defaultValue: 500.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        collection_name:
+          defaultValue: docs_collection
+          isOptional: true
+          parameterType: STRING
+        crawl_delay:
+          defaultValue: 1.0
+          isOptional: true
+          parameterType: NUMBER_DOUBLE
+        embedding_dim:
+          defaultValue: 384.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        embedding_model:
+          defaultValue: sentence-transformers/all-MiniLM-L6-v2
+          isOptional: true
+          parameterType: STRING
+        max_pages:
+          defaultValue: 0.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        milvus_host:
+          defaultValue: localhost
+          isOptional: true
+          parameterType: STRING
+        milvus_port:
+          defaultValue: '19530'
+          isOptional: true
+          parameterType: STRING
+  comp-embed-code:
+    executorLabel: exec-embed-code
+    inputDefinitions:
+      artifacts:
+        chunked_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+          description: Input dataset of chunked code.
+      parameters:
+        embedding_model:
+          description: Model name for embeddings.
+          parameterType: STRING
+    outputDefinitions:
+      artifacts:
+        embedded_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-embed-docs:
+    executorLabel: exec-embed-docs
+    inputDefinitions:
+      artifacts:
+        chunked_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+          description: Input dataset of chunks.
+      parameters:
+        embedding_model:
+          description: Model name for embeddings.
+          parameterType: STRING
+    outputDefinitions:
+      artifacts:
+        embedded_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-load-code:
+    executorLabel: exec-load-code
+    inputDefinitions:
+      artifacts:
+        embedded_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+          description: Input dataset with embedded chunks.
+      parameters:
+        collection_name:
+          description: Target collection name.
+          parameterType: STRING
+        embedding_dim:
+          description: Vector dimension.
+          parameterType: NUMBER_INTEGER
+        milvus_host:
+          description: Milvus server host.
+          parameterType: STRING
+        milvus_port:
+          description: Milvus server port.
+          parameterType: STRING
+  comp-load-docs:
+    executorLabel: exec-load-docs
+    inputDefinitions:
+      artifacts:
+        embedded_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+          description: Input dataset with embedded chunks.
+      parameters:
+        collection_name:
+          description: Target collection name.
+          parameterType: STRING
+        embedding_dim:
+          description: Vector dimension.
+          parameterType: NUMBER_INTEGER
+        milvus_host:
+          description: Milvus server host.
+          parameterType: STRING
+        milvus_port:
+          description: Milvus server port.
+          parameterType: STRING
+  comp-parse-code:
+    executorLabel: exec-parse-code
+    inputDefinitions:
+      artifacts:
+        clone_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+          description: Input dataset from repo cloner.
+    outputDefinitions:
+      artifacts:
+        parsed_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+deploymentSpec:
+  executors:
+    exec-chunk-code:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - chunk_code
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'tiktoken==0.7.0'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef chunk_code(\n    parsed_data: Input[Dataset],\n    chunked_data:\
+          \ Output[Dataset],\n):\n    \"\"\"Post-process parsed chunks with token\
+          \ limits and context headers.\n\n    Args:\n        parsed_data: Input dataset\
+          \ of parsed chunks.\n        chunked_data: Output dataset of token-bounded\
+          \ chunks.\n    \"\"\"\n    import hashlib\n    import json\n    import logging\n\
+          \n    import tiktoken\n\n    logging.basicConfig(level=logging.INFO)\n \
+          \   logger = logging.getLogger(\"chunker\")\n\n    enc = tiktoken.get_encoding(\"\
+          cl100k_base\")\n    count = lambda t: len(enc.encode(t))\n\n    MIN_T, MAX_T\
+          \ = 50, 512\n\n    def build_path_hints(chunk):\n        raw = \" \".join(str(chunk.get(key,\
+          \ \"\")) for key in (\"file_path\", \"folder_context\", \"symbol_name\"\
+          ))\n        expanded = raw.replace(\"/\", \" \").replace(\"_\", \" \").replace(\"\
+          -\", \" \")\n        expanded = \"\".join(\n            (\n            \
+          \    f\" {char}\" if index > 0 and char.isupper() and expanded[index - 1].islower()\
+          \ else char\n            )\n            for index, char in enumerate(expanded)\n\
+          \        )\n        return \" \".join(expanded.split()).lower()\n\n    raw\
+          \ = []\n    with open(parsed_data.path) as f:\n        for line in f:\n\
+          \            if line.strip():\n                raw.append(json.loads(line))\n\
+          \n    processed = []\n    for chunk in raw:\n        header = (\n      \
+          \      f\"# File: {chunk.get('file_path', '?')} | Symbol: {chunk.get('symbol_name',\
+          \ '?')} \"\n            f\"| Lang: {chunk.get('language', '?')} | Folder:\
+          \ {chunk.get('folder_context', '?')}\"\n        )\n        path_hints =\
+          \ build_path_hints(chunk)\n        if path_hints:\n            header =\
+          \ f\"{header}\\n# Path Hints: {path_hints}\"\n        full = f\"{header}\\\
+          n\\n{chunk['chunk_text']}\"\n        tc = count(full)\n\n        if tc <\
+          \ MIN_T:\n            continue\n\n        if tc <= MAX_T:\n            chunk[\"\
+          chunk_text\"] = full[:8192]\n            chunk[\"token_count\"] = tc\n \
+          \           processed.append(chunk)\n        else:\n            # Split\
+          \ oversized\n            parts = full.split(\"\\n\\n\")\n            cur,\
+          \ subs = \"\", []\n            for p in parts:\n                cand = cur\
+          \ + \"\\n\\n\" + p if cur else p\n                if count(cand) > MAX_T:\n\
+          \                    if cur.strip():\n                        subs.append(cur.strip())\n\
+          \                    cur = p\n                else:\n                  \
+          \  cur = cand\n            if cur.strip():\n                subs.append(cur.strip())\n\
+          \n            for si, sub in enumerate(subs):\n                st = count(sub)\n\
+          \                if st < MIN_T:\n                    continue\n        \
+          \        sc = chunk.copy()\n                sc[\"chunk_id\"] = hashlib.sha256(f\"\
+          {chunk['chunk_id']}::{si}\".encode()).hexdigest()[:32]\n               \
+          \ sc[\"chunk_text\"] = sub[:8192]\n                sc[\"token_count\"] =\
+          \ st\n                processed.append(sc)\n\n    logger.info(\"Chunked\
+          \ %d -> %d chunks\", len(raw), len(processed))\n\n    with open(chunked_data.path,\
+          \ \"w\") as f:\n        for c in processed:\n            f.write(json.dumps(c,\
+          \ ensure_ascii=False) + \"\\n\")\n\n"
+        image: python:3.11-slim
+    exec-chunk-docs:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - chunk_docs
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'tiktoken==0.7.0'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef chunk_docs(\n    crawled_data: Input[Dataset],\n    chunk_size:\
+          \ int,\n    chunk_overlap: int,\n    chunked_data: Output[Dataset],\n):\n\
+          \    \"\"\"Chunk crawled documentation by headings with token-aware limits.\n\
+          \n    Args:\n        crawled_data: Input dataset of crawled pages.\n   \
+          \     chunk_size: Maximum tokens per chunk.\n        chunk_overlap: Token\
+          \ overlap between chunks.\n        chunked_data: Output dataset of chunks.\n\
+          \    \"\"\"\n    import hashlib\n    import json\n    import logging\n \
+          \   import re\n\n    import tiktoken\n\n    logging.basicConfig(level=logging.INFO)\n\
+          \    logger = logging.getLogger(\"chunker\")\n\n    enc = tiktoken.get_encoding(\"\
+          cl100k_base\")\n    count_tokens = lambda t: len(enc.encode(t))\n\n    def\
+          \ gen_id(url, idx):\n        return hashlib.sha256(f\"{url}::{idx}\".encode()).hexdigest()[:32]\n\
+          \n    def split_headings(content):\n        pat = re.compile(r\"^(#{2,4})\\\
+          s+(.+)$\", re.MULTILINE)\n        matches = list(pat.finditer(content))\n\
+          \        if not matches:\n            return [{\"heading\": \"Overview\"\
+          , \"text\": content.strip()}]\n        sections = []\n        pre = content[:matches[0].start()].strip()\n\
+          \        if pre and len(pre) > 50:\n            sections.append({\"heading\"\
+          : \"Introduction\", \"text\": pre})\n        for i, m in enumerate(matches):\n\
+          \            end = matches[i + 1].start() if i + 1 < len(matches) else len(content)\n\
+          \            text = content[m.end():end].strip()\n            if text:\n\
+          \                sections.append({\"heading\": m.group(2).strip(), \"text\"\
+          : text})\n        return sections\n\n    def recursive_split(text, max_t,\
+          \ overlap):\n        if count_tokens(text) <= max_t:\n            return\
+          \ [text]\n        for sep in [\"\\n\\n\", \"\\n\", \". \", \" \"]:\n   \
+          \         parts = text.split(sep)\n            if len(parts) <= 1:\n   \
+          \             continue\n            chunks, cur = [], \"\"\n           \
+          \ for p in parts:\n                cand = cur + sep + p if cur else p\n\
+          \                if count_tokens(cand) > max_t:\n                    if\
+          \ cur:\n                        chunks.append(cur.strip())\n           \
+          \             words = cur.split()\n                        ow = max(1, int(overlap\
+          \ / 1.3))\n                        cur = \" \".join(words[-ow:]) + sep +\
+          \ p\n                    else:\n                        cur = p\n      \
+          \          else:\n                    cur = cand\n            if cur.strip():\n\
+          \                chunks.append(cur.strip())\n            if chunks:\n  \
+          \              return chunks\n        words = text.split()\n        chunks,\
+          \ cw = [], []\n        for w in words:\n            cw.append(w)\n     \
+          \       if count_tokens(\" \".join(cw)) > max_t:\n                chunks.append(\"\
+          \ \".join(cw[:-1]))\n                ow = max(1, int(overlap / 1.3))\n \
+          \               cw = cw[-ow:]\n        if cw:\n            chunks.append(\"\
+          \ \".join(cw))\n        return chunks\n\n    pages = []\n    with open(crawled_data.path)\
+          \ as f:\n        for line in f:\n            if line.strip():\n        \
+          \        pages.append(json.loads(line))\n\n    all_chunks = []\n    for\
+          \ page in pages:\n        sections = split_headings(page[\"content\"])\n\
+          \        ci = 0\n        context_prefix = f\"Page: {page['title']} | Source:\
+          \ {page['url']}\"\n        for sec in sections:\n            prefixed =\
+          \ f\"{context_prefix}\\n{sec['heading']}\\n\\n{sec['text']}\"\n        \
+          \    tc = count_tokens(prefixed)\n            if tc <= chunk_size and tc\
+          \ >= 30:\n                all_chunks.append({\n                    \"chunk_id\"\
+          : gen_id(page[\"url\"], ci),\n                    \"source_url\": page[\"\
+          url\"], \"page_title\": page[\"title\"],\n                    \"heading\"\
+          : sec[\"heading\"][:256], \"section\": page.get(\"section\", \"\")[:128],\n\
+          \                    \"chunk_text\": prefixed[:16384], \"token_count\":\
+          \ tc,\n                    \"chunk_index\": ci, \"crawled_at\": page.get(\"\
+          crawled_at\", \"\"),\n                })\n                ci += 1\n    \
+          \        elif tc > chunk_size:\n                for sub in recursive_split(prefixed,\
+          \ chunk_size, chunk_overlap):\n                    st = count_tokens(sub)\n\
+          \                    if st >= 30:\n                        all_chunks.append({\n\
+          \                            \"chunk_id\": gen_id(page[\"url\"], ci),\n\
+          \                            \"source_url\": page[\"url\"], \"page_title\"\
+          : page[\"title\"],\n                            \"heading\": sec[\"heading\"\
+          ][:256], \"section\": page.get(\"section\", \"\")[:128],\n             \
+          \               \"chunk_text\": sub[:16384], \"token_count\": st,\n    \
+          \                        \"chunk_index\": ci, \"crawled_at\": page.get(\"\
+          crawled_at\", \"\"),\n                        })\n                     \
+          \   ci += 1\n\n    logger.info(\"Created %d chunks from %d pages.\", len(all_chunks),\
+          \ len(pages))\n\n    with open(chunked_data.path, \"w\") as f:\n       \
+          \ for c in all_chunks:\n            f.write(json.dumps(c, ensure_ascii=False)\
+          \ + \"\\n\")\n\n"
+        image: python:3.11-slim
+    exec-clone-repo:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - clone_repo
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'gitpython==3.1.43'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef clone_repo(\n    repo_url: str,\n    branch: str,\n    clone_data:\
+          \ Output[Dataset],\n):\n    \"\"\"Clone a git repository and collect file\
+          \ metadata.\n\n    Args:\n        repo_url: Repository URL to clone.\n \
+          \       branch: Branch name to clone.\n        clone_data: Output dataset\
+          \ artifact.\n    \"\"\"\n    import json\n    import logging\n    import\
+          \ os\n    import subprocess\n    import tempfile\n\n    logging.basicConfig(level=logging.INFO)\n\
+          \    logger = logging.getLogger(\"repo_cloner\")\n\n    SKIP_DIRS = {\"\
+          .git\", \"__pycache__\", \"node_modules\", \".tox\", \".mypy_cache\"}\n\
+          \    EXTENSIONS = {\".py\", \".go\", \".yaml\", \".yml\", \".md\"}\n   \
+          \ MIN_SIZE, MAX_SIZE = 200, 100_000\n\n    clone_dir = tempfile.mkdtemp(prefix=\"\
+          code-ingest-\")\n    logger.info(\"Cloning %s -> %s\", repo_url, clone_dir)\n\
+          \n    subprocess.run(\n        [\"git\", \"clone\", \"--depth\", \"1\",\
+          \ \"--branch\", branch, repo_url, clone_dir],\n        check=True, capture_output=True,\
+          \ text=True,\n    )\n\n    result = subprocess.run(\n        [\"git\", \"\
+          rev-parse\", \"HEAD\"],\n        capture_output=True, text=True, cwd=clone_dir,\
+          \ check=True,\n    )\n    commit_sha = result.stdout.strip()\n    logger.info(\"\
+          Commit: %s\", commit_sha[:12])\n\n    files = []\n    for root, dirs, fnames\
+          \ in os.walk(clone_dir):\n        dirs[:] = [d for d in dirs if d not in\
+          \ SKIP_DIRS and not d.startswith(\".\")]\n        for fn in fnames:\n  \
+          \          fp = os.path.join(root, fn)\n            rel = os.path.relpath(fp,\
+          \ clone_dir)\n            _, ext = os.path.splitext(fn)\n            if\
+          \ ext.lower() not in EXTENSIONS:\n                continue\n           \
+          \ try:\n                sz = os.path.getsize(fp)\n            except OSError:\n\
+          \                continue\n            if sz < MIN_SIZE or sz > MAX_SIZE:\n\
+          \                continue\n            parts = rel.split(os.sep)\n     \
+          \       folder = parts[0] if len(parts) > 1 else \"root\"\n            files.append({\"\
+          path\": rel, \"extension\": ext.lower(),\n                          \"size_bytes\"\
+          : sz, \"folder_context\": folder})\n\n    logger.info(\"Collected %d files\"\
+          , len(files))\n\n    # Save file list + contents\n    output = []\n    for\
+          \ f in files:\n        full = os.path.join(clone_dir, f[\"path\"])\n   \
+          \     try:\n            with open(full, \"r\", encoding=\"utf-8\", errors=\"\
+          replace\") as fh:\n                content = fh.read()\n        except Exception:\n\
+          \            continue\n        output.append({**f, \"content\": content,\
+          \ \"commit_sha\": commit_sha})\n\n    with open(clone_data.path, \"w\")\
+          \ as fh:\n        for item in output:\n            fh.write(json.dumps(item,\
+          \ ensure_ascii=False) + \"\\n\")\n\n    # Cleanup\n    import shutil\n \
+          \   shutil.rmtree(clone_dir, ignore_errors=True)\n\n"
+        image: python:3.11-slim
+    exec-crawl-docs:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - crawl_docs
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'requests==2.31.0'\
+          \ 'beautifulsoup4==4.12.3'  &&  python3 -m pip install --quiet --no-warn-script-location\
+          \ 'kfp==2.16.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
+          3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef crawl_docs(\n    base_url: str,\n    crawl_delay: float,\n  \
+          \  max_pages: int,\n    crawled_data: Output[Dataset],\n):\n    \"\"\"Crawl\
+          \ kubeflow.org documentation pages via sitemap.xml.\n\n    Args:\n     \
+          \   base_url: Base URL for kubeflow docs (e.g., https://www.kubeflow.org).\n\
+          \        crawl_delay: Delay in seconds between requests.\n        max_pages:\
+          \ Max pages to crawl (0 = unlimited).\n        crawled_data: Output dataset\
+          \ artifact for crawled pages.\n    \"\"\"\n    import json\n    import logging\n\
+          \    import re\n    import time\n    from datetime import datetime, timezone\n\
+          \    from xml.etree import ElementTree\n\n    import requests\n    from\
+          \ bs4 import BeautifulSoup\n\n    logging.basicConfig(level=logging.INFO)\n\
+          \    logger = logging.getLogger(\"crawler\")\n\n    SITEMAP_NS = {\"ns\"\
+          : \"http://www.sitemaps.org/schemas/sitemap/0.9\"}\n\n    def fetch(url,\
+          \ retries=3):\n        for attempt in range(retries):\n            try:\n\
+          \                resp = requests.get(url, timeout=30, headers={\n      \
+          \              \"User-Agent\": \"Kubeflow-DocsAgent-Crawler/1.0\"\n    \
+          \            })\n                resp.raise_for_status()\n             \
+          \   return resp\n            except Exception as e:\n                if\
+          \ attempt < retries - 1:\n                    time.sleep(2 ** attempt)\n\
+          \                else:\n                    logger.error(\"Failed: %s \u2014\
+          \ %s\", url, e)\n        return None\n\n    def fix_url(raw):\n        prefix\
+          \ = \"https://www.kubeflow.org\"\n        if raw.startswith(prefix + prefix):\n\
+          \            return raw[len(prefix):]\n        if raw.startswith(prefix\
+          \ + \"https://\"):\n            return raw[len(prefix):]\n        return\
+          \ raw\n\n    # Parse sitemap\n    resp = fetch(f\"{base_url}/sitemap.xml\"\
+          )\n    if not resp:\n        raise RuntimeError(\"Cannot fetch sitemap\"\
+          )\n\n    root = ElementTree.fromstring(resp.content)\n    urls = []\n  \
+          \  for elem in root.findall(\"ns:url\", SITEMAP_NS):\n        loc = elem.find(\"\
+          ns:loc\", SITEMAP_NS)\n        if loc is not None and loc.text:\n      \
+          \      url = fix_url(loc.text.strip())\n            if \"/docs/\" in url:\n\
+          \                urls.append(url)\n\n    if max_pages > 0:\n        urls\
+          \ = urls[:max_pages]\n\n    logger.info(\"Found %d docs URLs from sitemap.\"\
+          , len(urls))\n\n    results = []\n    crawled_at = datetime.now(timezone.utc).isoformat()\n\
+          \n    for i, url in enumerate(urls):\n        logger.info(\"[%d/%d] %s\"\
+          , i + 1, len(urls), url)\n        resp = fetch(url)\n        if not resp:\n\
+          \            continue\n\n        soup = BeautifulSoup(resp.text, \"html.parser\"\
+          )\n        title_tag = soup.find(\"title\")\n        title = title_tag.get_text(strip=True)\
+          \ if title_tag else \"Untitled\"\n        title = re.sub(r\"\\s*[|\u2013\
+          -]\\s*Kubeflow\\s*$\", \"\", title)\n\n        for sel in [\"nav\", \"footer\"\
+          , \"header\", \"aside\", \"script\", \"style\",\n                     \"\
+          .navbar\", \".sidebar\", \".toc\", \".breadcrumb\",\n                  \
+          \   \".td-sidebar\", \".td-toc\", \".td-navbar\",\n                    \
+          \ \".edit-page\", \".page-meta\"]:\n            for el in soup.select(sel):\n\
+          \                el.decompose()\n\n        main = (\n            soup.find(\"\
+          main\")\n            or soup.find(\"article\")\n            or soup.find(\"\
+          div\", class_=re.compile(r\"content|td-content|docs-content\"))\n      \
+          \      or soup.body\n            or soup\n        )\n\n        # Preserve\
+          \ heading structure so downstream chunking can split correctly.\n      \
+          \  for tag_name, md_prefix in [(\"h1\", \"#\"), (\"h2\", \"##\"), (\"h3\"\
+          , \"###\"), (\"h4\", \"####\")]:\n            for heading_tag in main.find_all(tag_name):\n\
+          \                heading_text = heading_tag.get_text(strip=True)\n     \
+          \           if heading_text:\n                    heading_tag.replace_with(f\"\
+          \\n\\n{md_prefix} {heading_text}\\n\\n\")\n\n        # Preserve code blocks\
+          \ as inline fenced text markers instead of flattening them away.\n     \
+          \   for code_tag in main.find_all([\"code\", \"pre\"]):\n            code_text\
+          \ = code_tag.get_text()\n            code_tag.replace_with(f\"`{code_text}`\"\
+          )\n\n        content = main.get_text(separator=\"\\n\", strip=False)\n \
+          \       content = re.sub(r\"\\n{3,}\", \"\\n\\n\", content)\n        content\
+          \ = re.sub(r\"[ \\t]+\", \" \", content).strip()\n\n        if len(content)\
+          \ < 200:\n            continue\n\n        section_match = re.search(r\"\
+          /docs/([^/]+)\", url)\n        section = section_match.group(1) if section_match\
+          \ else \"root\"\n\n        results.append({\n            \"url\": url, \"\
+          title\": title.strip(), \"content\": content.strip(),\n            \"section\"\
+          : section, \"crawled_at\": crawled_at,\n        })\n\n        if crawl_delay\
+          \ > 0 and i < len(urls) - 1:\n            time.sleep(crawl_delay)\n\n  \
+          \  logger.info(\"Crawled %d pages.\", len(results))\n\n    with open(crawled_data.path,\
+          \ \"w\") as f:\n        for r in results:\n            f.write(json.dumps(r,\
+          \ ensure_ascii=False) + \"\\n\")\n\n"
+        image: python:3.11-slim
+    exec-embed-code:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - embed_code
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'sentence-transformers==2.7.0'\
+          \ 'torch==2.3.0'  &&  python3 -m pip install --quiet --no-warn-script-location\
+          \ 'kfp==2.16.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
+          3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef embed_code(\n    chunked_data: Input[Dataset],\n    embedding_model:\
+          \ str,\n    embedded_data: Output[Dataset],\n):\n    \"\"\"Embed code chunks\
+          \ using configurable model.\n\n    Args:\n        chunked_data: Input dataset\
+          \ of chunked code.\n        embedding_model: Model name for embeddings.\n\
+          \        embedded_data: Output dataset with embeddings.\n    \"\"\"\n  \
+          \  import json\n    import logging\n\n    from sentence_transformers import\
+          \ SentenceTransformer\n\n    logging.basicConfig(level=logging.INFO)\n \
+          \   logger = logging.getLogger(\"embedder\")\n\n    chunks = []\n    with\
+          \ open(chunked_data.path) as f:\n        for line in f:\n            if\
+          \ line.strip():\n                chunks.append(json.loads(line))\n\n   \
+          \ logger.info(\"Embedding %d code chunks with %s\", len(chunks), embedding_model)\n\
+          \    model = SentenceTransformer(embedding_model)\n\n    texts = [c[\"chunk_text\"\
+          ] for c in chunks]\n    bs = 32\n    all_embs = []\n    for i in range(0,\
+          \ len(texts), bs):\n        batch = texts[i:i + bs]\n        embs = model.encode(batch,\
+          \ show_progress_bar=False)\n        all_embs.extend([e.tolist() for e in\
+          \ embs])\n        logger.info(\"Batch %d/%d\", i // bs + 1, (len(texts)\
+          \ + bs - 1) // bs)\n\n    for c, e in zip(chunks, all_embs):\n        c[\"\
+          embedding\"] = e\n\n    with open(embedded_data.path, \"w\") as f:\n   \
+          \     for c in chunks:\n            f.write(json.dumps(c, ensure_ascii=False)\
+          \ + \"\\n\")\n\n"
+        image: python:3.11-slim
+    exec-embed-docs:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - embed_docs
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'sentence-transformers==2.7.0'\
+          \ 'torch==2.3.0'  &&  python3 -m pip install --quiet --no-warn-script-location\
+          \ 'kfp==2.16.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
+          3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef embed_docs(\n    chunked_data: Input[Dataset],\n    embedding_model:\
+          \ str,\n    embedded_data: Output[Dataset],\n):\n    \"\"\"Embed documentation\
+          \ chunks using configurable model.\n\n    Args:\n        chunked_data: Input\
+          \ dataset of chunks.\n        embedding_model: Model name for embeddings.\n\
+          \        embedded_data: Output dataset with embeddings.\n    \"\"\"\n  \
+          \  import json\n    import logging\n\n    from sentence_transformers import\
+          \ SentenceTransformer\n\n    logging.basicConfig(level=logging.INFO)\n \
+          \   logger = logging.getLogger(\"embedder\")\n\n    chunks = []\n    with\
+          \ open(chunked_data.path) as f:\n        for line in f:\n            if\
+          \ line.strip():\n                chunks.append(json.loads(line))\n\n   \
+          \ logger.info(\"Embedding %d chunks with %s\", len(chunks), embedding_model)\n\
+          \    model = SentenceTransformer(embedding_model)\n\n    texts = [c[\"chunk_text\"\
+          ] for c in chunks]\n    batch_size = 32\n    all_embeddings = []\n\n   \
+          \ for i in range(0, len(texts), batch_size):\n        batch = texts[i:i\
+          \ + batch_size]\n        embs = model.encode(batch, show_progress_bar=False)\n\
+          \        all_embeddings.extend([e.tolist() for e in embs])\n        logger.info(\"\
+          Batch %d/%d done.\", i // batch_size + 1,\n                     (len(texts)\
+          \ + batch_size - 1) // batch_size)\n\n    for chunk, emb in zip(chunks,\
+          \ all_embeddings):\n        chunk[\"embedding\"] = emb\n\n    logger.info(\"\
+          Embedding complete.\")\n\n    with open(embedded_data.path, \"w\") as f:\n\
+          \        for c in chunks:\n            f.write(json.dumps(c, ensure_ascii=False)\
+          \ + \"\\n\")\n\n"
+        image: python:3.11-slim
+    exec-load-code:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - load_code
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'pymilvus==2.4.0'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef load_code(\n    embedded_data: Input[Dataset],\n    milvus_host:\
+          \ str,\n    milvus_port: str,\n    collection_name: str,\n    embedding_dim:\
+          \ int,\n):\n    \"\"\"Load embedded code chunks into Milvus code_collection.\n\
+          \n    Args:\n        embedded_data: Input dataset with embedded chunks.\n\
+          \        milvus_host: Milvus server host.\n        milvus_port: Milvus server\
+          \ port.\n        collection_name: Target collection name.\n        embedding_dim:\
+          \ Vector dimension.\n    \"\"\"\n    import json\n    import logging\n\n\
+          \    from pymilvus import (Collection, CollectionSchema, DataType, FieldSchema,\n\
+          \                          connections, utility)\n\n    logging.basicConfig(level=logging.INFO)\n\
+          \    logger = logging.getLogger(\"loader\")\n\n    connections.connect(\"\
+          default\", host=milvus_host, port=milvus_port)\n\n    if not utility.has_collection(collection_name):\n\
+          \        fields = [\n            FieldSchema(\"chunk_id\", DataType.VARCHAR,\
+          \ max_length=128, is_primary=True),\n            FieldSchema(\"file_path\"\
+          , DataType.VARCHAR, max_length=512),\n            FieldSchema(\"extension\"\
+          , DataType.VARCHAR, max_length=16),\n            FieldSchema(\"language\"\
+          , DataType.VARCHAR, max_length=32),\n            FieldSchema(\"symbol_name\"\
+          , DataType.VARCHAR, max_length=256),\n            FieldSchema(\"folder_context\"\
+          , DataType.VARCHAR, max_length=128),\n            FieldSchema(\"chunk_text\"\
+          , DataType.VARCHAR, max_length=8192),\n            FieldSchema(\"start_line\"\
+          , DataType.INT64),\n            FieldSchema(\"end_line\", DataType.INT64),\n\
+          \            FieldSchema(\"commit_sha\", DataType.VARCHAR, max_length=64),\n\
+          \            FieldSchema(\"embedding\", DataType.FLOAT_VECTOR, dim=embedding_dim),\n\
+          \        ]\n        schema = CollectionSchema(fields, \"Kubeflow manifests\
+          \ code chunks\")\n        collection = Collection(collection_name, schema)\n\
+          \        collection.create_index(\"embedding\", {\n            \"metric_type\"\
+          : \"COSINE\", \"index_type\": \"HNSW\",\n            \"params\": {\"M\"\
+          : 16, \"efConstruction\": 200},\n        })\n    else:\n        collection\
+          \ = Collection(collection_name)\n\n    collection.load()\n\n    chunks =\
+          \ []\n    with open(embedded_data.path) as f:\n        for line in f:\n\
+          \            if line.strip():\n                chunks.append(json.loads(line))\n\
+          \n    rows = []\n    for c in chunks:\n        rows.append({\n         \
+          \   \"chunk_id\": str(c[\"chunk_id\"])[:128],\n            \"file_path\"\
+          : str(c.get(\"file_path\", \"\"))[:512],\n            \"extension\": str(c.get(\"\
+          extension\", \"\"))[:16],\n            \"language\": str(c.get(\"language\"\
+          , \"\"))[:32],\n            \"symbol_name\": str(c.get(\"symbol_name\",\
+          \ \"\"))[:256],\n            \"folder_context\": str(c.get(\"folder_context\"\
+          , \"\"))[:128],\n            \"chunk_text\": str(c.get(\"chunk_text\", \"\
+          \"))[:8192],\n            \"start_line\": int(c.get(\"start_line\", 0)),\n\
+          \            \"end_line\": int(c.get(\"end_line\", 0)),\n            \"\
+          commit_sha\": str(c.get(\"commit_sha\", \"\"))[:64],\n            \"embedding\"\
+          : c[\"embedding\"],\n        })\n\n    bs = 100\n    inserted = 0\n    for\
+          \ i in range(0, len(rows), bs):\n        batch = rows[i:i + bs]\n      \
+          \  collection.upsert(batch)\n        inserted += len(batch)\n\n    collection.flush()\n\
+          \    logger.info(\"Loaded %d chunks into %s. Total: %d\",\n            \
+          \    inserted, collection_name, collection.num_entities)\n\n"
+        image: python:3.11-slim
+    exec-load-docs:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - load_docs
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'pymilvus==2.4.0'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef load_docs(\n    embedded_data: Input[Dataset],\n    milvus_host:\
+          \ str,\n    milvus_port: str,\n    collection_name: str,\n    embedding_dim:\
+          \ int,\n):\n    \"\"\"Load embedded chunks into Milvus docs_collection.\n\
+          \n    Args:\n        embedded_data: Input dataset with embedded chunks.\n\
+          \        milvus_host: Milvus server host.\n        milvus_port: Milvus server\
+          \ port.\n        collection_name: Target collection name.\n        embedding_dim:\
+          \ Vector dimension.\n    \"\"\"\n    import json\n    import logging\n\n\
+          \    from pymilvus import (Collection, CollectionSchema, DataType, FieldSchema,\n\
+          \                          connections, utility)\n\n    logging.basicConfig(level=logging.INFO)\n\
+          \    logger = logging.getLogger(\"loader\")\n\n    connections.connect(\"\
+          default\", host=milvus_host, port=milvus_port)\n    logger.info(\"Connected\
+          \ to Milvus at %s:%s\", milvus_host, milvus_port)\n\n    if not utility.has_collection(collection_name):\n\
+          \        fields = [\n            FieldSchema(\"chunk_id\", DataType.VARCHAR,\
+          \ max_length=128, is_primary=True),\n            FieldSchema(\"source_url\"\
+          , DataType.VARCHAR, max_length=512),\n            FieldSchema(\"page_title\"\
+          , DataType.VARCHAR, max_length=256),\n            FieldSchema(\"heading\"\
+          , DataType.VARCHAR, max_length=256),\n            FieldSchema(\"section\"\
+          , DataType.VARCHAR, max_length=128),\n            FieldSchema(\"chunk_text\"\
+          , DataType.VARCHAR, max_length=16384),\n            FieldSchema(\"token_count\"\
+          , DataType.INT64),\n            FieldSchema(\"chunk_index\", DataType.INT64),\n\
+          \            FieldSchema(\"crawled_at\", DataType.VARCHAR, max_length=64),\n\
+          \            FieldSchema(\"embedding\", DataType.FLOAT_VECTOR, dim=embedding_dim),\n\
+          \        ]\n        schema = CollectionSchema(fields, \"Kubeflow docs chunks\"\
+          )\n        collection = Collection(collection_name, schema)\n        collection.create_index(\"\
+          embedding\", {\n            \"metric_type\": \"COSINE\", \"index_type\"\
+          : \"HNSW\",\n            \"params\": {\"M\": 16, \"efConstruction\": 200},\n\
+          \        })\n        logger.info(\"Created collection: %s\", collection_name)\n\
+          \    else:\n        collection = Collection(collection_name)\n\n    collection.load()\n\
+          \n    chunks = []\n    with open(embedded_data.path) as f:\n        for\
+          \ line in f:\n            if line.strip():\n                chunks.append(json.loads(line))\n\
+          \n    rows = []\n    for c in chunks:\n        rows.append({\n         \
+          \   \"chunk_id\": str(c[\"chunk_id\"])[:128],\n            \"source_url\"\
+          : str(c.get(\"source_url\", \"\"))[:512],\n            \"page_title\": str(c.get(\"\
+          page_title\", \"\"))[:256],\n            \"heading\": str(c.get(\"heading\"\
+          , \"\"))[:256],\n            \"section\": str(c.get(\"section\", \"\"))[:128],\n\
+          \            \"chunk_text\": str(c.get(\"chunk_text\", \"\"))[:16384],\n\
+          \            \"token_count\": int(c.get(\"token_count\", 0)),\n        \
+          \    \"chunk_index\": int(c.get(\"chunk_index\", 0)),\n            \"crawled_at\"\
+          : str(c.get(\"crawled_at\", \"\"))[:64],\n            \"embedding\": c[\"\
+          embedding\"],\n        })\n\n    batch_size = 100\n    inserted = 0\n  \
+          \  for i in range(0, len(rows), batch_size):\n        batch = rows[i:i +\
+          \ batch_size]\n        collection.upsert(batch)\n        inserted += len(batch)\n\
+          \        logger.info(\"Upserted batch %d/%d\", i // batch_size + 1,\n  \
+          \                   (len(rows) + batch_size - 1) // batch_size)\n\n    collection.flush()\n\
+          \    logger.info(\"Loaded %d chunks into %s. Total: %d\",\n            \
+          \    inserted, collection_name, collection.num_entities)\n\n"
+        image: python:3.11-slim
+    exec-parse-code:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - parse_code
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'PyYAML==6.0.1'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef parse_code(\n    clone_data: Input[Dataset],\n    parsed_data:\
+          \ Output[Dataset],\n):\n    \"\"\"Parse files into logical code chunks using\
+          \ language-specific parsers.\n\n    Args:\n        clone_data: Input dataset\
+          \ from repo cloner.\n        parsed_data: Output dataset of parsed chunks.\n\
+          \    \"\"\"\n    import ast as pyast\n    import hashlib\n    import json\n\
+          \    import logging\n    import os\n    import re\n\n    import yaml\n\n\
+          \    logging.basicConfig(level=logging.INFO)\n    logger = logging.getLogger(\"\
+          ast_parser\")\n\n    PATH_ALIAS_HINTS = {\n        \"common/istio\": [\n\
+          \            \"istio\", \"service mesh\", \"gateway\", \"authorization policy\"\
+          ,\n            \"peer authentication\", \"virtual service\", \"sidecar\"\
+          , \"envoy\", \"mtls\", \"ingress\",\n        ],\n        \"common/knative\"\
+          : [\n            \"knative\", \"serving\", \"eventing\", \"serverless\"\
+          , \"scale to zero\",\n            \"activator\", \"revision\", \"service\"\
+          , \"net istio\", \"webhook\",\n        ],\n        \"common/dex\": [\n \
+          \           \"dex\", \"oidc\", \"oauth2\", \"authentication\", \"identity\
+          \ provider\",\n            \"connector\", \"login\",\n        ],\n     \
+          \   \"common/cert-manager\": [\n            \"cert manager\", \"certificate\"\
+          , \"issuer\", \"clusterissuer\",\n            \"cainjector\", \"tls\", \"\
+          webhook\",\n        ],\n        \"applications/pipeline\": [\n         \
+          \   \"kubeflow pipelines\", \"kfp\", \"pipeline api server\", \"deployment\"\
+          ,\n            \"service\", \"configmap\", \"role\", \"rolebinding\", \"\
+          serviceaccount\",\n            \"crd\", \"webhook\", \"scheduled workflow\"\
+          ,\n        ],\n        \"applications/profiles\": [\n            \"profiles\"\
+          , \"namespaces\", \"rbac\", \"rolebinding\", \"serviceaccount\", \"user\
+          \ profile\",\n        ],\n        \"tests\": [\"tests\", \"e2e\", \"integration\"\
+          , \"validation\", \"presubmit\"],\n    }\n\n    def gen_id(fp, sym, idx):\n\
+          \        return hashlib.sha256(f\"{fp}::{sym}::{idx}\".encode()).hexdigest()[:32]\n\
+          \n    def split_terms(value):\n        expanded = re.sub(r\"([a-z0-9])([A-Z])\"\
+          , r\"\\1 \\2\", value)\n        normalized = re.sub(r\"[^A-Za-z0-9]+\",\
+          \ \" \", expanded)\n        return [token.lower() for token in normalized.split()\
+          \ if token]\n\n    def unique_terms(values, limit=24):\n        seen = set()\n\
+          \        ordered = []\n        for value in values:\n            for token\
+          \ in split_terms(str(value)):\n                if token not in seen:\n \
+          \                   seen.add(token)\n                    ordered.append(token)\n\
+          \                    if len(ordered) >= limit:\n                       \
+          \ return ordered\n        return ordered\n\n    def summarize_list(values,\
+          \ limit=8):\n        if not isinstance(values, list):\n            return\
+          \ \"\"\n        flattened = [str(item) for item in values if item]\n   \
+          \     return \", \".join(flattened[:limit])\n\n    def get_path_aliases(fp):\n\
+          \        normalized = fp.replace(\"\\\\\", \"/\").lower()\n        aliases\
+          \ = []\n        for prefix, hints in PATH_ALIAS_HINTS.items():\n       \
+          \     if normalized.startswith(prefix):\n                aliases.extend(hints)\n\
+          \        return aliases\n\n    def extract_container_names(parsed):\n  \
+          \      spec = parsed.get(\"spec\")\n        if not isinstance(spec, dict):\n\
+          \            return []\n        template = spec.get(\"template\", {})\n\
+          \        if isinstance(template, dict):\n            template_spec = template.get(\"\
+          spec\", {})\n            if isinstance(template_spec, dict):\n         \
+          \       containers = template_spec.get(\"containers\", [])\n           \
+          \     if isinstance(containers, list):\n                    return [\n \
+          \                       str(container.get(\"name\"))\n                 \
+          \       for container in containers\n                        if isinstance(container,\
+          \ dict) and container.get(\"name\")\n                    ]\n        job_template\
+          \ = spec.get(\"jobTemplate\", {})\n        if isinstance(job_template, dict):\n\
+          \            nested_spec = job_template.get(\"spec\", {})\n            if\
+          \ isinstance(nested_spec, dict):\n                nested_template = nested_spec.get(\"\
+          template\", {})\n                if isinstance(nested_template, dict):\n\
+          \                    nested_template_spec = nested_template.get(\"spec\"\
+          , {})\n                    if isinstance(nested_template_spec, dict):\n\
+          \                        containers = nested_template_spec.get(\"containers\"\
+          , [])\n                        if isinstance(containers, list):\n      \
+          \                      return [\n                                str(container.get(\"\
+          name\"))\n                                for container in containers\n\
+          \                                if isinstance(container, dict) and container.get(\"\
+          name\")\n                            ]\n        return []\n\n    def build_manifest_context(parsed,\
+          \ fp, ctx):\n        metadata = parsed.get(\"metadata\", {})\n        metadata\
+          \ = metadata if isinstance(metadata, dict) else {}\n        kind = str(parsed.get(\"\
+          kind\", \"Unknown\"))\n        api_version = str(parsed.get(\"apiVersion\"\
+          , \"unknown\"))\n        name = str(metadata.get(\"name\", \"unknown\"))\n\
+          \        namespace = str(metadata.get(\"namespace\", \"cluster-scoped\"\
+          ))\n        path_terms = unique_terms([fp, os.path.basename(fp), ctx], limit=18)\n\
+          \        alias_terms = unique_terms(get_path_aliases(fp), limit=18)\n  \
+          \      top_level_keys = summarize_list(list(parsed.keys()))\n        label_keys\
+          \ = summarize_list(list((metadata.get(\"labels\") or {}).keys()))\n    \
+          \    annotation_keys = summarize_list(list((metadata.get(\"annotations\"\
+          ) or {}).keys()))\n\n        lines = [\n            f\"Manifest file path:\
+          \ {fp}\",\n            f\"Folder context: {ctx}\",\n            f\"Resource\
+          \ kind: {kind}\",\n            f\"API version: {api_version}\",\n      \
+          \      f\"Metadata name: {name}\",\n            f\"Namespace: {namespace}\"\
+          ,\n        ]\n        if path_terms:\n            lines.append(f\"Path hints:\
+          \ {' '.join(path_terms)}\")\n        if alias_terms:\n            lines.append(f\"\
+          Domain hints: {' '.join(alias_terms)}\")\n        if top_level_keys:\n \
+          \           lines.append(f\"Top-level keys: {top_level_keys}\")\n      \
+          \  if label_keys:\n            lines.append(f\"Label keys: {label_keys}\"\
+          )\n        if annotation_keys:\n            lines.append(f\"Annotation keys:\
+          \ {annotation_keys}\")\n\n        spec = parsed.get(\"spec\")\n        spec\
+          \ = spec if isinstance(spec, dict) else {}\n\n        if kind.lower() ==\
+          \ \"kustomization\" or os.path.basename(fp).lower() == \"kustomization.yaml\"\
+          :\n            resources = summarize_list(parsed.get(\"resources\"))\n \
+          \           components = summarize_list(parsed.get(\"components\"))\n  \
+          \          bases = summarize_list(parsed.get(\"bases\"))\n            patches\
+          \ = summarize_list(parsed.get(\"patchesStrategicMerge\"))\n            if\
+          \ resources:\n                lines.append(f\"Kustomize resources: {resources}\"\
+          )\n            if components:\n                lines.append(f\"Kustomize\
+          \ components: {components}\")\n            if bases:\n                lines.append(f\"\
+          Kustomize bases: {bases}\")\n            if patches:\n                lines.append(f\"\
+          Kustomize patches: {patches}\")\n\n        if kind in {\"Deployment\", \"\
+          StatefulSet\", \"DaemonSet\", \"Job\", \"CronJob\"}:\n            container_names\
+          \ = summarize_list(extract_container_names(parsed))\n            service_account\
+          \ = spec.get(\"serviceAccountName\")\n            if not service_account\
+          \ and isinstance(spec.get(\"template\"), dict):\n                template_spec\
+          \ = spec.get(\"template\", {}).get(\"spec\", {})\n                if isinstance(template_spec,\
+          \ dict):\n                    service_account = template_spec.get(\"serviceAccountName\"\
+          )\n            if container_names:\n                lines.append(f\"Workload\
+          \ containers: {container_names}\")\n            if service_account:\n  \
+          \              lines.append(f\"Service account: {service_account}\")\n\n\
+          \        if kind == \"Service\":\n            service_type = spec.get(\"\
+          type\")\n            selector = spec.get(\"selector\")\n            ports\
+          \ = spec.get(\"ports\")\n            if service_type:\n                lines.append(f\"\
+          Service type: {service_type}\")\n            if isinstance(selector, dict)\
+          \ and selector:\n                lines.append(f\"Service selector keys:\
+          \ {', '.join(list(selector.keys())[:8])}\")\n            if isinstance(ports,\
+          \ list) and ports:\n                port_values = [str(port.get('port'))\
+          \ for port in ports if isinstance(port, dict) and port.get('port')]\n  \
+          \              if port_values:\n                    lines.append(f\"Service\
+          \ ports: {', '.join(port_values[:8])}\")\n\n        if kind == \"CustomResourceDefinition\"\
+          :\n            names = spec.get(\"names\", {}) if isinstance(spec.get(\"\
+          names\"), dict) else {}\n            versions = spec.get(\"versions\", [])\n\
+          \            if spec.get(\"group\"):\n                lines.append(f\"CRD\
+          \ group: {spec.get('group')}\")\n            if names.get(\"kind\"):\n \
+          \               lines.append(f\"CRD served kind: {names.get('kind')}\")\n\
+          \            if isinstance(versions, list) and versions:\n             \
+          \   version_names = [str(version.get(\"name\")) for version in versions\
+          \ if isinstance(version, dict) and version.get(\"name\")]\n            \
+          \    if version_names:\n                    lines.append(f\"CRD versions:\
+          \ {', '.join(version_names[:8])}\")\n\n        if kind in {\"Role\", \"\
+          ClusterRole\"}:\n            rules = spec.get(\"rules\", parsed.get(\"rules\"\
+          ))\n            if isinstance(rules, list) and rules:\n                resource_names\
+          \ = []\n                verbs = []\n                for rule in rules[:4]:\n\
+          \                    if isinstance(rule, dict):\n                      \
+          \  resource_names.extend(str(item) for item in rule.get(\"resources\", [])[:4])\n\
+          \                        verbs.extend(str(item) for item in rule.get(\"\
+          verbs\", [])[:4])\n                if resource_names:\n                \
+          \    lines.append(f\"RBAC resources: {', '.join(resource_names[:10])}\"\
+          )\n                if verbs:\n                    lines.append(f\"RBAC verbs:\
+          \ {', '.join(verbs[:10])}\")\n\n        if kind in {\"RoleBinding\", \"\
+          ClusterRoleBinding\"}:\n            role_ref = parsed.get(\"roleRef\", {})\n\
+          \            subjects = parsed.get(\"subjects\", [])\n            if isinstance(role_ref,\
+          \ dict) and role_ref.get(\"name\"):\n                lines.append(f\"Binding\
+          \ roleRef: {role_ref.get('name')}\")\n            if isinstance(subjects,\
+          \ list) and subjects:\n                subject_names = [str(subject.get(\"\
+          name\")) for subject in subjects if isinstance(subject, dict) and subject.get(\"\
+          name\")]\n                if subject_names:\n                    lines.append(f\"\
+          Binding subjects: {', '.join(subject_names[:10])}\")\n\n        if kind\
+          \ in {\"AuthorizationPolicy\", \"PeerAuthentication\", \"VirtualService\"\
+          , \"Gateway\", \"DestinationRule\"}:\n            selector = spec.get(\"\
+          selector\", {})\n            if isinstance(selector, dict):\n          \
+          \      match_labels = selector.get(\"matchLabels\", {})\n              \
+          \  if isinstance(match_labels, dict) and match_labels:\n               \
+          \     lines.append(f\"Istio selector labels: {', '.join(list(match_labels.keys())[:8])}\"\
+          )\n            gateways = spec.get(\"gateways\")\n            hosts = spec.get(\"\
+          hosts\")\n            if isinstance(gateways, list) and gateways:\n    \
+          \            lines.append(f\"Istio gateways: {', '.join(str(g) for g in\
+          \ gateways[:8])}\")\n            if isinstance(hosts, list) and hosts:\n\
+          \                lines.append(f\"Istio hosts: {', '.join(str(h) for h in\
+          \ hosts[:8])}\")\n\n        return \"\\n\".join(f\"# {line}\" for line in\
+          \ lines if line)\n\n    def parse_python(content, fp, sha, ctx):\n     \
+          \   chunks, lines = [], content.split(\"\\n\")\n        try:\n         \
+          \   tree = pyast.parse(content)\n        except SyntaxError:\n         \
+          \   return [{\"chunk_id\": gen_id(fp, \"module\", 0), \"file_path\": fp,\n\
+          \                     \"extension\": \".py\", \"language\": \"python\",\n\
+          \                     \"symbol_name\": os.path.basename(fp), \"chunk_text\"\
+          : content,\n                     \"start_line\": 1, \"end_line\": len(lines),\n\
+          \                     \"commit_sha\": sha, \"folder_context\": ctx}]\n \
+          \       idx = 0\n        for node in pyast.walk(tree):\n            if isinstance(node,\
+          \ (pyast.FunctionDef, pyast.AsyncFunctionDef, pyast.ClassDef)):\n      \
+          \          sl, el = node.lineno, node.end_lineno or node.lineno\n      \
+          \          ct = \"\\n\".join(lines[sl - 1:el])\n                tp = \"\
+          class\" if isinstance(node, pyast.ClassDef) else \"function\"\n        \
+          \        chunks.append({\"chunk_id\": gen_id(fp, node.name, idx), \"file_path\"\
+          : fp,\n                               \"extension\": \".py\", \"language\"\
+          : \"python\",\n                               \"symbol_name\": f\"{tp}:{node.name}\"\
+          , \"chunk_text\": ct,\n                               \"start_line\": sl,\
+          \ \"end_line\": el,\n                               \"commit_sha\": sha,\
+          \ \"folder_context\": ctx})\n                idx += 1\n        if not chunks:\n\
+          \            chunks.append({\"chunk_id\": gen_id(fp, \"module\", 0), \"\
+          file_path\": fp,\n                           \"extension\": \".py\", \"\
+          language\": \"python\",\n                           \"symbol_name\": f\"\
+          module:{os.path.basename(fp)}\", \"chunk_text\": content,\n            \
+          \               \"start_line\": 1, \"end_line\": len(lines),\n         \
+          \                  \"commit_sha\": sha, \"folder_context\": ctx})\n    \
+          \    return chunks\n\n    def parse_go(content, fp, sha, ctx):\n       \
+          \ pat = re.compile(r\"^(?:func\\s+(?:\\([^)]+\\)\\s+)?(\\w+)|type\\s+(\\\
+          w+)\\s+struct)\\b\", re.MULTILINE)\n        matches = list(pat.finditer(content))\n\
+          \        if not matches:\n            return [{\"chunk_id\": gen_id(fp,\
+          \ \"file\", 0), \"file_path\": fp,\n                     \"extension\":\
+          \ \".go\", \"language\": \"go\",\n                     \"symbol_name\":\
+          \ f\"file:{os.path.basename(fp)}\", \"chunk_text\": content,\n         \
+          \            \"start_line\": 1, \"end_line\": content.count(\"\\n\") + 1,\n\
+          \                     \"commit_sha\": sha, \"folder_context\": ctx}]\n \
+          \       chunks = []\n        for i, m in enumerate(matches):\n         \
+          \   sym = m.group(1) or m.group(2)\n            s, e = m.start(), matches[i\
+          \ + 1].start() if i + 1 < len(matches) else len(content)\n            ct\
+          \ = content[s:e].rstrip()\n            sl = content[:s].count(\"\\n\") +\
+          \ 1\n            tp = \"struct\" if m.group(2) else \"func\"\n         \
+          \   chunks.append({\"chunk_id\": gen_id(fp, sym, i), \"file_path\": fp,\n\
+          \                           \"extension\": \".go\", \"language\": \"go\"\
+          ,\n                           \"symbol_name\": f\"{tp}:{sym}\", \"chunk_text\"\
+          : ct,\n                           \"start_line\": sl, \"end_line\": sl +\
+          \ ct.count(\"\\n\"),\n                           \"commit_sha\": sha, \"\
+          folder_context\": ctx})\n        return chunks\n\n    def parse_yaml_file(content,\
+          \ fp, sha, ctx):\n        ext = os.path.splitext(fp)[1].lower()\n      \
+          \  docs = content.split(\"\\n---\")\n        chunks = []\n        for idx,\
+          \ doc in enumerate(docs):\n            doc = doc.strip()\n            if\
+          \ not doc:\n                continue\n            try:\n               \
+          \ parsed = yaml.safe_load(doc)\n            except yaml.YAMLError:\n   \
+          \             parsed = None\n            if isinstance(parsed, dict):\n\
+          \                kind = parsed.get(\"kind\", \"Unknown\")\n            \
+          \    md = parsed.get(\"metadata\", {})\n                name = md.get(\"\
+          name\", \"unknown\") if isinstance(md, dict) else \"unknown\"\n        \
+          \        sym = f\"{kind}:{name}\"\n                manifest_context = build_manifest_context(parsed,\
+          \ fp, ctx)\n                chunk_body = f\"{manifest_context}\\n\\n{doc}\"\
+          \ if manifest_context else doc\n            else:\n                sym =\
+          \ f\"fragment:{idx}\"\n                chunk_body = doc\n            pre\
+          \ = \"\\n---\".join(docs[:idx])\n            sl = pre.count(\"\\n\") + 1\
+          \ if pre else 1\n            chunks.append({\"chunk_id\": gen_id(fp, sym,\
+          \ idx), \"file_path\": fp,\n                           \"extension\": ext,\
+          \ \"language\": \"yaml\",\n                           \"symbol_name\": sym,\
+          \ \"chunk_text\": chunk_body,\n                           \"start_line\"\
+          : sl, \"end_line\": sl + doc.count(\"\\n\"),\n                         \
+          \  \"commit_sha\": sha, \"folder_context\": ctx})\n        return chunks\
+          \ or [{\"chunk_id\": gen_id(fp, \"file\", 0), \"file_path\": fp,\n     \
+          \                      \"extension\": ext, \"language\": \"yaml\",\n   \
+          \                        \"symbol_name\": f\"file:{os.path.basename(fp)}\"\
+          , \"chunk_text\": content,\n                           \"start_line\": 1,\
+          \ \"end_line\": content.count(\"\\n\") + 1,\n                          \
+          \ \"commit_sha\": sha, \"folder_context\": ctx}]\n\n    def parse_md(content,\
+          \ fp, sha, ctx):\n        pat = re.compile(r\"^(#{2,3})\\s+(.+)$\", re.MULTILINE)\n\
+          \        matches = list(pat.finditer(content))\n        if not matches:\n\
+          \            return [{\"chunk_id\": gen_id(fp, \"doc\", 0), \"file_path\"\
+          : fp,\n                     \"extension\": \".md\", \"language\": \"markdown\"\
+          ,\n                     \"symbol_name\": f\"doc:{os.path.basename(fp)}\"\
+          , \"chunk_text\": content,\n                     \"start_line\": 1, \"end_line\"\
+          : content.count(\"\\n\") + 1,\n                     \"commit_sha\": sha,\
+          \ \"folder_context\": ctx}]\n        chunks = []\n        for i, m in enumerate(matches):\n\
+          \            h = m.group(2).strip()\n            s = m.start()\n       \
+          \     e = matches[i + 1].start() if i + 1 < len(matches) else len(content)\n\
+          \            text = content[s:e].strip()\n            sl = content[:s].count(\"\
+          \\n\") + 1\n            chunks.append({\"chunk_id\": gen_id(fp, h, i), \"\
+          file_path\": fp,\n                           \"extension\": \".md\", \"\
+          language\": \"markdown\",\n                           \"symbol_name\": f\"\
+          heading:{h[:100]}\", \"chunk_text\": text,\n                           \"\
+          start_line\": sl, \"end_line\": sl + text.count(\"\\n\"),\n            \
+          \               \"commit_sha\": sha, \"folder_context\": ctx})\n       \
+          \ return chunks\n\n    PARSERS = {\".py\": parse_python, \".go\": parse_go,\n\
+          \               \".yaml\": parse_yaml_file, \".yml\": parse_yaml_file, \"\
+          .md\": parse_md}\n\n    files = []\n    with open(clone_data.path) as f:\n\
+          \        for line in f:\n            if line.strip():\n                files.append(json.loads(line))\n\
+          \n    all_chunks = []\n    for fi in files:\n        parser = PARSERS.get(fi[\"\
+          extension\"])\n        if not parser:\n            continue\n        try:\n\
+          \            chunks = parser(fi[\"content\"], fi[\"path\"], fi[\"commit_sha\"\
+          ], fi[\"folder_context\"])\n            all_chunks.extend(chunks)\n    \
+          \    except Exception as ex:\n            logger.warning(\"Error parsing\
+          \ %s: %s\", fi[\"path\"], ex)\n\n    logger.info(\"Parsed %d chunks from\
+          \ %d files\", len(all_chunks), len(files))\n\n    with open(parsed_data.path,\
+          \ \"w\") as f:\n        for c in all_chunks:\n            f.write(json.dumps(c,\
+          \ ensure_ascii=False) + \"\\n\")\n\n"
+        image: python:3.11-slim
+pipelineInfo:
+  description: Run both docs and code ingestion pipelines in parallel
+  name: full-ingestion-pipeline
+root:
+  dag:
+    tasks:
+      code-ingestion-pipeline:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-code-ingestion-pipeline
+        inputs:
+          parameters:
+            branch:
+              componentInputParameter: code_branch
+            collection_name:
+              runtimeValue:
+                constant: code_collection
+            embedding_dim:
+              componentInputParameter: embedding_dim
+            embedding_model:
+              componentInputParameter: embedding_model
+            milvus_host:
+              componentInputParameter: milvus_host
+            milvus_port:
+              componentInputParameter: milvus_port
+            repo_url:
+              componentInputParameter: code_repo_url
+        taskInfo:
+          name: code-ingestion-pipeline
+      docs-ingestion-pipeline:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-docs-ingestion-pipeline
+        inputs:
+          parameters:
+            base_url:
+              componentInputParameter: docs_base_url
+            chunk_overlap:
+              componentInputParameter: chunk_overlap
+            chunk_size:
+              componentInputParameter: chunk_size
+            collection_name:
+              runtimeValue:
+                constant: docs_collection
+            crawl_delay:
+              componentInputParameter: docs_crawl_delay
+            embedding_dim:
+              componentInputParameter: embedding_dim
+            embedding_model:
+              componentInputParameter: embedding_model
+            max_pages:
+              componentInputParameter: docs_max_pages
+            milvus_host:
+              componentInputParameter: milvus_host
+            milvus_port:
+              componentInputParameter: milvus_port
+        taskInfo:
+          name: docs-ingestion-pipeline
+  inputDefinitions:
+    parameters:
+      chunk_overlap:
+        defaultValue: 50.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      chunk_size:
+        defaultValue: 500.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      code_branch:
+        defaultValue: master
+        isOptional: true
+        parameterType: STRING
+      code_repo_url:
+        defaultValue: https://github.com/kubeflow/manifests
+        isOptional: true
+        parameterType: STRING
+      docs_base_url:
+        defaultValue: https://www.kubeflow.org
+        isOptional: true
+        parameterType: STRING
+      docs_crawl_delay:
+        defaultValue: 1.0
+        isOptional: true
+        parameterType: NUMBER_DOUBLE
+      docs_max_pages:
+        defaultValue: 0.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      embedding_dim:
+        defaultValue: 384.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      embedding_model:
+        defaultValue: sentence-transformers/all-MiniLM-L6-v2
+        isOptional: true
+        parameterType: STRING
+      milvus_host:
+        defaultValue: localhost
+        isOptional: true
+        parameterType: STRING
+      milvus_port:
+        defaultValue: '19530'
+        isOptional: true
+        parameterType: STRING
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.16.0
