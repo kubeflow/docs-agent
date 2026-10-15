@@ -31,10 +31,26 @@ def test_split_chunks_and_sources():
 
 
 def test_report_groups_by_owner():
-    md = triage.report([
-        {"layer": "retrieval", "component": "katib", "suggested_repo": "kubeflow/katib", "question": "q1",
-         "reason": "r", "trace_id": "t1", "comment": ""},
-        {"layer": "content_gap_handled", "component": "kserve", "suggested_repo": "kserve/kserve", "question": "q2",
-         "reason": "r", "trace_id": "t2", "comment": "missing"},
-    ])
+    md = triage.report(
+        [
+            {
+                "layer": "retrieval",
+                "component": "katib",
+                "suggested_repo": "kubeflow/katib",
+                "question": "q1",
+                "reason": "r",
+                "trace_id": "t1",
+                "comment": "",
+            },
+            {
+                "layer": "content_gap_handled",
+                "component": "kserve",
+                "suggested_repo": "kserve/kserve",
+                "question": "q2",
+                "reason": "r",
+                "trace_id": "t2",
+                "comment": "missing",
+            },
+        ]
+    )
     assert "## kubeflow/docs-agent" in md and "## kserve/kserve" in md and 'User said: "missing"' in md

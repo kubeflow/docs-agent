@@ -29,6 +29,7 @@ Standard library only, so it runs in a plain python image.
 Env: LANGFUSE_HOST (or LANGFUSE_BASE_URL), LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY,
      MCP_URL, JUDGE_URL, JUDGE_MODEL, AGENT_BASE + AGENT_PATH (ask only).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -45,7 +46,11 @@ import urllib.parse
 import urllib.request
 import uuid
 
-LF = (os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL") or "http://langfuse-web.langfuse.svc.cluster.local:3000").rstrip("/")
+LF = (
+    os.getenv("LANGFUSE_HOST")
+    or os.getenv("LANGFUSE_BASE_URL")
+    or "http://langfuse-web.langfuse.svc.cluster.local:3000"
+).rstrip("/")
 LF_PK, LF_SK = os.getenv("LANGFUSE_PUBLIC_KEY", ""), os.getenv("LANGFUSE_SECRET_KEY", "")
 AGENT = os.getenv("AGENT_BASE", "http://kagent-controller.docs-agent.svc.cluster.local:8083").rstrip("/")
 AGENT_PATH = os.getenv("AGENT_PATH", "/api/a2a/docs-agent/kubeflow-docs-agent/")
@@ -59,7 +64,10 @@ PIPELINE_LAYERS = {"generation", "retrieval", "tool_routing", "agent_skipped_ret
 COMPONENTS = {
     "pipelines": (["pipeline", "kfp", "argo workflow", "components/pipelines"], "kubeflow/pipelines"),
     "notebooks": (["notebook", "jupyter", "workspace", "components/notebooks"], "kubeflow/notebooks"),
-    "trainer": (["trainer", "trainjob", "training operator", "pytorchjob", "tfjob", "distributed training"], "kubeflow/trainer"),
+    "trainer": (
+        ["trainer", "trainjob", "training operator", "pytorchjob", "tfjob", "distributed training"],
+        "kubeflow/trainer",
+    ),
     "katib": (["katib", "hyperparameter", "hpo", "tuning"], "kubeflow/katib"),
     "kserve": (["kserve", "inferenceservice", "model serving"], "kserve/kserve"),
     "spark": (["spark"], "kubeflow/spark-operator"),
@@ -85,9 +93,12 @@ def repo_for(component: str) -> str:
 
 # ----- HTTP ----------------------------------------------------------------------------
 
+
 def http(method: str, url: str, body=None, headers=None, timeout=180):
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json", **(headers or {})})
+    req = urllib.request.Request(
+        url, data=data, method=method, headers={"Content-Type": "application/json", **(headers or {})}
+    )
     with urllib.request.urlopen(req, timeout=timeout) as r:
         raw = r.read()
         return (json.loads(raw) if raw else {}), r.headers
@@ -101,19 +112,33 @@ def lf_get(path: str, **params):
 
 def lf_score(trace_id: str, name: str, value: str, comment: str = ""):
     auth = base64.b64encode(f"{LF_PK}:{LF_SK}".encode()).decode()
-    body = {"id": f"{trace_id}-{name}", "traceId": trace_id, "name": name, "value": value,
-            "dataType": "CATEGORICAL", "comment": comment[:500]}
+    body = {
+        "id": f"{trace_id}-{name}",
+        "traceId": trace_id,
+        "name": name,
+        "value": value,
+        "dataType": "CATEGORICAL",
+        "comment": comment[:500],
+    }
     http("POST", f"{LF}/api/public/scores", body, {"Authorization": f"Basic {auth}"}, timeout=60)
 
 
 # ----- Langfuse reads ------------------------------------------------------------------
 
+
 def thumbs_down(since: dt.datetime) -> list[dict]:
     """user_feedback = 0 scores newer than `since`: [{trace_id, comment, at}]."""
     out, cursor = [], None
     for _ in range(50):
-        page = lf_get("/v3/scores", name="user_feedback", dataType="BOOLEAN", value="false",
-                      fields="core,subject,details", limit=100, cursor=cursor)
+        page = lf_get(
+            "/v3/scores",
+            name="user_feedback",
+            dataType="BOOLEAN",
+            value="false",
+            fields="core,subject,details",
+            limit=100,
+            cursor=cursor,
+        )
         for s in page.get("data", []):
             at = s.get("timestamp") or s.get("createdAt") or ""
             if at and at < since.isoformat().replace("+00:00", "Z"):
@@ -147,7 +172,9 @@ def recent_traces(n: int) -> list[str]:
 def trace_for_session(session_id: str, wait_s: int = 90) -> str | None:
     deadline = time.time() + wait_s
     while True:
-        data = lf_get("/v2/observations", type="AGENT", sessionId=session_id, fields="core,basic", limit=100).get("data", [])
+        data = lf_get("/v2/observations", type="AGENT", sessionId=session_id, fields="core,basic", limit=100).get(
+            "data", []
+        )
         if data:
             return max(data, key=lambda o: o.get("startTime") or "")["traceId"]
         if time.time() >= deadline:
@@ -211,6 +238,7 @@ def sources_of(chunks: list[str]) -> list[str]:
 
 # ----- MCP probe (streamable HTTP, no client library) -----------------------------------
 
+
 def _mcp_post(body: dict, session: str | None) -> tuple[dict, str | None]:
     headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
     if session:
@@ -230,17 +258,33 @@ def _mcp_post(body: dict, session: str | None) -> tuple[dict, str | None]:
 def probe(question: str) -> dict:
     res: dict = {"docs": [], "issues": []}
     try:
-        _, sid = _mcp_post({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
-            "protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "flo-triage", "version": "1"}}}, None)
+        _, sid = _mcp_post(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": {},
+                    "clientInfo": {"name": "flo-triage", "version": "1"},
+                },
+            },
+            None,
+        )
         _mcp_post({"jsonrpc": "2.0", "method": "notifications/initialized"}, sid)
     except (urllib.error.URLError, TimeoutError, ValueError) as e:
         return res | {"init_error": str(e)[:120]}
-    for i, (key, tool, args) in enumerate((
-        ("docs", "search_kubeflow_docs", {"query": question, "top_k": 8}),
-        ("issues", "search_github_issues", {"query": question, "top_k": 5}),
-    ), start=2):
+    for i, (key, tool, args) in enumerate(
+        (
+            ("docs", "search_kubeflow_docs", {"query": question, "top_k": 8}),
+            ("issues", "search_github_issues", {"query": question, "top_k": 5}),
+        ),
+        start=2,
+    ):
         try:
-            r, _ = _mcp_post({"jsonrpc": "2.0", "id": i, "method": "tools/call", "params": {"name": tool, "arguments": args}}, sid)
+            r, _ = _mcp_post(
+                {"jsonrpc": "2.0", "id": i, "method": "tools/call", "params": {"name": tool, "arguments": args}}, sid
+            )
             content = (r.get("result") or {}).get("content") or []
             res[key] = split_chunks(content[0].get("text", "") if content else "")
         except (urllib.error.URLError, TimeoutError, ValueError) as e:  # reported, not fatal
@@ -250,8 +294,14 @@ def probe(question: str) -> dict:
 
 # ----- Judge ---------------------------------------------------------------------------
 
+
 def judge(prompt: str) -> dict:
-    body = {"model": JUDGE_MODEL, "temperature": 0, "max_tokens": 300, "messages": [{"role": "user", "content": prompt}]}
+    body = {
+        "model": JUDGE_MODEL,
+        "temperature": 0,
+        "max_tokens": 300,
+        "messages": [{"role": "user", "content": prompt}],
+    }
     text = (http("POST", JUDGE_URL, body, timeout=180)[0]["choices"][0]["message"]["content"]) or ""
     m = re.search(r"\{.*\}", text, re.S)
     try:
@@ -292,7 +342,11 @@ def diagnose(trace_id: str) -> dict:
     comp = guess_component(q, sources_of(t["chunks"]))
     base = {"trace_id": trace_id, "question": q, "component": comp, "suggested_repo": repo_for(comp)}
     if not q:
-        return {**base, "layer": "unknown", "reason": "Trace has no chat input (not ingested yet, or not an agent trace)."}
+        return {
+            **base,
+            "layer": "unknown",
+            "reason": "Trace has no chat input (not ingested yet, or not an agent trace).",
+        }
     if not t["tool_calls"]:
         return {**base, "layer": "agent_skipped_retrieval", "reason": "No retrieval tool call in the trace."}
 
@@ -314,9 +368,18 @@ def diagnose(trace_id: str) -> dict:
     else:
         handled = bool(chk.get("admits_not_found"))
         layer = "content_gap_handled" if handled else "content_gap_hallucination"
-        reason = "No relevant passage in indexed docs or issues. " + ("The agent said it could not find it." if handled else "The agent answered anyway.")
-    return {**base, "layer": layer, "reason": reason, "agent_relevant": len(agent_rel), "docs_relevant": len(docs_rel),
-            "issues_relevant": len(issues_rel), "probe_errors": [v for k, v in p.items() if k.endswith("_error")]}
+        reason = "No relevant passage in indexed docs or issues. " + (
+            "The agent said it could not find it." if handled else "The agent answered anyway."
+        )
+    return {
+        **base,
+        "layer": layer,
+        "reason": reason,
+        "agent_relevant": len(agent_rel),
+        "docs_relevant": len(docs_rel),
+        "issues_relevant": len(issues_rel),
+        "probe_errors": [v for k, v in p.items() if k.endswith("_error")],
+    }
 
 
 def owner(d: dict) -> str:
@@ -338,20 +401,34 @@ def report(results: list[dict]) -> str:
     for repo, items in sorted(groups.items()):
         lines += [f"## {repo}", ""]
         for d in items:
-            note = f" User said: \"{d['comment']}\"" if d.get("comment") else ""
-            lines.append(f"- **{d['layer']}** ({d['component']}): {d['question'][:160]!r}. {d['reason']}{note} "
-                         f"Trace `{d['trace_id']}`.")
+            note = f' User said: "{d["comment"]}"' if d.get("comment") else ""
+            lines.append(
+                f"- **{d['layer']}** ({d['component']}): {d['question'][:160]!r}. {d['reason']}{note} "
+                f"Trace `{d['trace_id']}`."
+            )
         lines.append("")
     return "\n".join(lines)
 
 
 # ----- Chat (to create test cases) ------------------------------------------------------
 
+
 def ask(question: str) -> str:
     ctx = str(uuid.uuid4())
-    body = {"jsonrpc": "2.0", "id": "1", "method": "message/send",
-            "params": {"message": {"kind": "message", "messageId": str(uuid.uuid4()), "role": "user",
-                                    "contextId": ctx, "parts": [{"kind": "text", "text": question}]}}}
+    body = {
+        "jsonrpc": "2.0",
+        "id": "1",
+        "method": "message/send",
+        "params": {
+            "message": {
+                "kind": "message",
+                "messageId": str(uuid.uuid4()),
+                "role": "user",
+                "contextId": ctx,
+                "parts": [{"kind": "text", "text": question}],
+            }
+        },
+    }
     http("POST", f"{AGENT}{AGENT_PATH}", body, timeout=300)
     return ctx
 

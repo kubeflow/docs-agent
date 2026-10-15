@@ -6,7 +6,9 @@ from pathlib import Path
 
 import pytest
 
-_PATH = Path(__file__).resolve().parents[1] / "docs-agent-mcp" / "charts" / "gateway-guardrails" / "files" / "feedback.py"
+_PATH = (
+    Path(__file__).resolve().parents[1] / "docs-agent-mcp" / "charts" / "gateway-guardrails" / "files" / "feedback.py"
+)
 _spec = importlib.util.spec_from_file_location("feedback", _PATH)
 feedback = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(feedback)
@@ -27,16 +29,19 @@ class TestParse:
     def test_comment_truncated(self):
         assert len(feedback.parse(_body(comment="x" * 1500))["comment"]) == feedback.MAX_COMMENT
 
-    @pytest.mark.parametrize("kw", [
-        {"value": "meh"},
-        {"contextId": ""},
-        {"contextId": "a b"},
-        {"contextId": "x" * 200},
-        {"turn": -1},
-        {"turn": "1"},
-        {"turn": True},
-        {"comment": 5},
-    ])
+    @pytest.mark.parametrize(
+        "kw",
+        [
+            {"value": "meh"},
+            {"contextId": ""},
+            {"contextId": "a b"},
+            {"contextId": "x" * 200},
+            {"turn": -1},
+            {"turn": "1"},
+            {"turn": True},
+            {"comment": 5},
+        ],
+    )
     def test_rejects(self, kw):
         with pytest.raises(feedback.BadRequest):
             feedback.parse(_body(**kw))
