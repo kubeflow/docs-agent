@@ -1,9 +1,35 @@
-# Argo CD (observe-only)
+# Argo CD
 
-Argo CD watches the Helm releases (`docs-agent`, `gateway-guardrails`,
-`llm-runtime`, `llm-judge`, `langfuse`) against `kubeflow/docs-agent` `main`. None of the
-Applications has a `syncPolicy`: Argo reports drift, and a maintainer clicks
-Sync to deploy. GPU releases (`llm-runtime`, `llm-judge`) stay manual.
+Argo CD deploys everything in this repo. The root Application `flo-apps`
+(`root.yaml`) keeps the Applications in `apps/` in line with `main`; each
+Application decides whether it syncs on its own.
+
+| Application | Tracks | Sync |
+|---|---|---|
+| `docs-agent-staging` | `main`, image = each commit's short SHA | automatic; every merge runs the staging eval |
+| `docs-agent`, `gateway-guardrails` | the commit in `# prod-revision` | automatic, so merging a promotion PR deploys it |
+| `otel-collector`, `langfuse-retention` | `main` | automatic |
+| `llm-runtime`, `llm-judge` | `main` | manual: a sync restarts the GPU pod and reloads the model |
+| `langfuse` | chart 2.1.0 + `main` values | manual: stateful, review the diff first |
+
+## Promoting to production
+
+Every merge to `main` builds `ghcr.io/kubeflow/mcp-kubeflow-docs:<short sha>` and
+`ghcr.io/kubeflow/kubeflow-session-issuer:<short sha>`, and staging deploys and
+evaluates that commit. Production moves when someone promotes a commit, usually
+every week or two:
+
+```bash
+deploy/promote.sh            # promote the tip of main
+deploy/promote.sh 9145c31    # or a specific commit
+deploy/promote.sh --open     # also push to your fork and open the PR
+```
+
+The script checks that both images exist, moves the `# prod-revision` lines and
+writes the PR description: the commits since the current production and a table
+for the staging eval of that commit (Langfuse project flo-eval, Experiments, run
+named `<short sha> …`). Reviewers check the eval and approve; after merge, Argo CD
+syncs production to that commit. To roll back, revert the promotion PR.
 
 ## What lives where
 
@@ -33,7 +59,6 @@ are not listed.
 | `docs-agent` | `mcp-langfuse-keys` | Langfuse project keys for MCP tracing |
 | `docs-agent` | `langfuse-otlp` | Langfuse keys for the OTel collector |
 | `docs-agent` | `session-issuer-key` | signing key for chat session tokens |
-| `docs-agent` | `ghcr-session-issuer` | pull secret for the session-issuer image |
 | `langfuse` | `langfuse-app`, `langfuse-postgresql-auth`, `langfuse-clickhouse-auth`, `langfuse-redis-auth`, `langfuse-s3-auth` | Langfuse app secrets and its data stores |
 | `ml-infra` | `milvus-minio` | Milvus object store |
 | `kubeflow` | `milvus-auth`, `github-pat` | ingestion pipelines |
@@ -47,7 +72,7 @@ helm upgrade --install argocd argo/argo-cd -n argocd --create-namespace --versio
   -f deploy/argocd/install-values.yaml
 kubectl apply -f deploy/envs/prod/ingress/        # public HTTPS for Langfuse and Argo (needs A records)
 kubectl apply -f deploy/platform/llm-judge/authz.yaml
-kubectl apply -f deploy/argocd/apps/
+kubectl apply -f deploy/argocd/root.yaml       # flo-apps applies everything in deploy/argocd/apps/
 ```
 
 ## Admin and read-only passwords
@@ -76,10 +101,26 @@ cannot sync, delete or edit. Anonymous access and `exec` are off.
 
 ```bash
 kubectl get applications.argoproj.io -n argocd
+argocd app diff langfuse --grpc-web         # read-only `viewer` login is enough
 ```
 
-Drift that remains is intentional until reviewed. Do not enable auto-sync on
-`llm-runtime` (GPU pod, a restart means a long model reload).
+Do not enable auto-sync on `llm-runtime` or `llm-judge` (GPU pod, a restart
+means a long model reload) or on `langfuse`.
+
+## Langfuse data retention
+
+Self-hosted Langfuse keeps data forever unless you pay for its Enterprise
+retention, so `deploy/platform/langfuse-retention` runs a weekly CronJob
+(Sundays 04:00 UTC). It deletes traces, observations, scores and raw events
+older than each project's window, in ClickHouse and in the S3 store:
+
+| Project | Keeps |
+|---|---|
+| Flo-live (chat traces, user feedback) | 4 weeks |
+| flo-eval (staging eval runs) | 2 weeks; each release's scores stay in its promotion PR |
+
+Datasets (the eval questions) are never deleted. Windows are in
+`configmap.yaml`; set `DRY_RUN` to `"true"` in the CronJob to only print counts.
 
 ## Known gaps
 
