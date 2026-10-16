@@ -22,9 +22,24 @@ function createChatbotElements() {
         const chatbotHeader = document.createElement('div');
         chatbotHeader.className = 'chatbot-header';
 
+        const brand = document.createElement('div');
+        brand.className = 'chatbot-brand';
+        brand.innerHTML = '<span class="chatbot-brand-avatar"><img src="https://cdn.jsdelivr.net/gh/SanthoshToorpu/docs-agent@main/assets/flo_avatar.png" alt="" /></span>';
+
+        const brandText = document.createElement('div');
+        brandText.className = 'chatbot-brand-text';
+
         const title = document.createElement('h3');
         title.className = 'chatbot-title';
-        title.textContent = 'Flo Virtual Assistant';
+        title.textContent = 'Flo';
+
+        const subtitle = document.createElement('span');
+        subtitle.className = 'chatbot-subtitle';
+        subtitle.textContent = 'Kubeflow docs assistant';
+
+        brandText.appendChild(title);
+        brandText.appendChild(subtitle);
+        brand.appendChild(brandText);
 
         const headerActions = document.createElement('div');
         headerActions.className = 'header-actions';
@@ -57,7 +72,7 @@ function createChatbotElements() {
         headerActions.appendChild(expandBtn);
         headerActions.appendChild(closeBtn);
 
-        chatbotHeader.appendChild(title);
+        chatbotHeader.appendChild(brand);
         chatbotHeader.appendChild(headerActions);
 
         // Options dropdown — 3 items only, SVG icons
@@ -174,7 +189,7 @@ function createChatbotElements() {
 
         const disclaimer = document.createElement('div');
         disclaimer.className = 'disclaimer-text';
-        disclaimer.innerHTML = 'AI-generated responses may be inaccurate or misleading. Be sure to double-check responses and sources. Conversations and feedback are recorded to improve answer quality, so please don\'t share personal information. <a href="#">Generative AI User Guidelines.</a>';
+        disclaimer.innerHTML = 'AI answers can be wrong, so check the sources. Chats and feedback are recorded to improve Flo; please don\'t share personal information.';
 
         chatInputContainer.appendChild(inputWrapper);
         chatInputContainer.appendChild(disclaimer);
@@ -688,11 +703,51 @@ document.addEventListener('DOMContentLoaded', async function () {
         const docsWelcomeMsg = "Hello! I'm Flo AI Companion, your friendly Kubeflow documentation assistant. How can I help you today?";
         const debugWelcomeMsg = "Hello! I'm Flo Debugger. Show me your error logs, Python pipelines, or YAML configurations, and I will help you debug them.";
         const welcomeMsg = currentPersona === 'debug' ? debugWelcomeMsg : docsWelcomeMsg;
-        addMessage(welcomeMsg, 'bot');
+        const welcomeDiv = addMessage(welcomeMsg, 'bot');
         messagesHistory.push({
             role: 'assistant',
             content: welcomeMsg
         });
+        addSuggestions(welcomeDiv);
+    }
+
+    // Starter questions under the welcome message; they disappear once the user sends anything.
+    const SUGGESTIONS = {
+        docs: [
+            'How do I install Kubeflow Pipelines?',
+            'Create a Katib hyperparameter tuning experiment',
+            'Serve a model with KServe'
+        ],
+        debug: [
+            'My pipeline pod is stuck in Pending',
+            'ImagePullBackOff on a Notebook server',
+            'Explain this Katib trial error'
+        ]
+    };
+    const SUGGESTION_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 9l1.25-2.75L23 5l-2.75-1.25L19 1l-1.25 2.75L15 5l2.75 1.25L19 9zm-7.5.5L9 4 6.5 9.5 1 12l5.5 2.5L9 20l2.5-5.5L17 12l-5.5-2.5zM19 15l-1.25 2.75L15 19l2.75 1.25L19 23l1.25-2.75L23 19l-2.75-1.25L19 15z"/></svg>';
+
+    function addSuggestions(messageDiv) {
+        const content = messageDiv && messageDiv.querySelector('.message-content');
+        if (!content) return;
+        const chips = document.createElement('div');
+        chips.className = 'suggestion-chips';
+        (SUGGESTIONS[currentPersona] || SUGGESTIONS.docs).forEach(text => {
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = 'suggestion-chip';
+            chip.innerHTML = SUGGESTION_ICON;
+            chip.appendChild(document.createTextNode(text));
+            chip.addEventListener('click', () => {
+                userInput.value = text;
+                handleSendMessage();
+            });
+            chips.appendChild(chip);
+        });
+        content.appendChild(chips);
+    }
+
+    function removeSuggestions() {
+        chatMessages.querySelectorAll('.suggestion-chips').forEach(node => node.remove());
     }
 
     // Auto-save current chat periodically
@@ -1925,6 +1980,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     function handleSendMessage() {
         const message = userInput.value.trim();
         if (!message || isTyping) return;
+        removeSuggestions();
 
         // Add user message to history
         messagesHistory.push({
