@@ -1,4 +1,4 @@
-# Observe-only: plain manifests in deploy/platform/otel-collector.
+# Plain manifests in deploy/platform/otel-collector, synced automatically from main.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -18,3 +18,7 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: docs-agent
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true

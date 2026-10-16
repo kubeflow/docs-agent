@@ -1,0 +1,23 @@
+# App of apps: keeps the Applications in deploy/argocd/apps/ in line with main, so a
+# merged promotion PR (new prod-revision) or a new Application takes effect without
+# anyone running kubectl. Applied once by hand: kubectl apply -f deploy/argocd/root.yaml
+# Whether each Application then syncs its own resources is set in that Application.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: flo-apps
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/kubeflow/docs-agent
+    targetRevision: main
+    path: deploy/argocd/apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      # Removing a file from apps/ must not delete a running Application by accident.
+      prune: false
+      selfHeal: true
