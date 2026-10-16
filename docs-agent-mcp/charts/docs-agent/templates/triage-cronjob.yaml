@@ -1,0 +1,61 @@
+{{- if .Values.triage.enabled }}
+# Nightly triage of thumbs-down answers (tests/feedback/triage.py): which layer failed and
+# which working group owns the fix, stored as scores triage_layer / triage_component on
+# the trace. The Markdown summary is in the Job log; nothing is filed automatically.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-feedback-triage
+  labels:
+    {{- include "docs-agent.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.triage.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 3600
+      template:
+        metadata:
+          labels:
+            app: {{ .Release.Name }}-feedback-triage
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: triage
+              image: {{ .Values.triage.image }}
+              command: ["sh", "-ec"]
+              args:
+                - |
+                  python - <<'PY'
+                  import urllib.request
+                  urllib.request.urlretrieve(
+                      "https://raw.githubusercontent.com/{{ .Values.triage.repo }}/{{ .Values.triage.ref }}/tests/feedback/triage.py",
+                      "/tmp/triage.py")
+                  PY
+                  exec python /tmp/triage.py feedback --since-hours {{ .Values.triage.sinceHours }} --write --report
+              env:
+                - name: LANGFUSE_HOST
+                  value: {{ .Values.triage.langfuseHost | quote }}
+                - name: LANGFUSE_PUBLIC_KEY
+                  valueFrom:
+                    secretKeyRef: {name: {{ .Values.triage.langfuseSecret }}, key: LANGFUSE_PUBLIC_KEY}
+                - name: LANGFUSE_SECRET_KEY
+                  valueFrom:
+                    secretKeyRef: {name: {{ .Values.triage.langfuseSecret }}, key: LANGFUSE_SECRET_KEY}
+                - name: MCP_URL
+                  value: http://mcp-kubeflow-docs.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.mcp.service.port }}/mcp
+                - name: JUDGE_URL
+                  value: {{ .Values.triage.judgeUrl | quote }}
+                - name: JUDGE_MODEL
+                  value: {{ .Values.triage.judgeModel | quote }}
+              resources:
+                requests: {cpu: 50m, memory: 96Mi}
+                limits: {memory: 256Mi}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+{{- end }}

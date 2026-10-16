@@ -28,6 +28,20 @@ spec:
             host: {{ include "gateway-guardrails.issuerHost" . }}
             port:
               number: 8000
+    {{- if .Values.feedback.enabled }}
+    # Thumbs up/down from the widget (session JWT required, see sessionAuth.protectedPaths).
+    - name: feedback
+      match:
+        - uri:
+            exact: /api/feedback
+      {{- include "gateway-guardrails.corsPolicy" . | nindent 6 }}
+      timeout: 20s
+      route:
+        - destination:
+            host: feedback.{{ .Values.namespaces.docsAgent }}.svc.cluster.local
+            port:
+              number: 8000
+    {{- end }}
     {{- end }}
     # A2A streaming only. kagent-ui also serves its admin API (/api/agents,
     # /api/sessions, ...) without auth, so there is deliberately no catch-all:
