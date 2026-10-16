@@ -1,0 +1,23 @@
+# Staging values (namespace docs-agent-staging). Public by design: no secrets here.
+# Staging runs the same chart as production and shares the model (llm-stable),
+# the embeddings service and Milvus. Retrieval only reads, so it uses the production
+# collections until a change to ingestion needs its own collection.
+mcp:
+  image:
+    # Same build as production until a newer main image is tested here.
+    repository: ghcr.io/kubeflow/mcp-kubeflow-docs
+    tag: 0e49ebd
+  # Evaluation-project keys: Secret mcp-langfuse-keys in docs-agent-staging.
+  extraEnv:
+    - name: LANGFUSE_PUBLIC_KEY
+      valueFrom:
+        secretKeyRef: {name: mcp-langfuse-keys, key: LANGFUSE_PUBLIC_KEY}
+    - name: LANGFUSE_SECRET_KEY
+      valueFrom:
+        secretKeyRef: {name: mcp-langfuse-keys, key: LANGFUSE_SECRET_KEY}
+    - name: LANGFUSE_TRACING_ENVIRONMENT
+      value: staging
+tests:
+  enabled: false
+eval:
+  enabled: true
