@@ -1,0 +1,59 @@
+# Weekly data retention for the self-hosted Langfuse (its built-in retention is an
+# Enterprise feature). Windows per project are in configmap.yaml. Set DRY_RUN to "true"
+# to only print what would be deleted.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: langfuse-retention
+  namespace: langfuse
+spec:
+  schedule: "0 4 * * 0"  # Sundays 04:00 UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          restartPolicy: Never
+          # ClickHouse first, then the raw events in S3.
+          initContainers:
+            - name: clickhouse
+              image: docker.io/clickhouse/clickhouse-server:26.4
+              command: [sh, /policy/clickhouse.sh]
+              env:
+                - {name: DRY_RUN, value: "false"}
+                - {name: CH_HOST, value: langfuse-clickhouse-headless}
+                - {name: CH_USER, value: default}
+                - name: CH_PASSWORD
+                  valueFrom:
+                    secretKeyRef: {name: langfuse-clickhouse-auth, key: password}
+              resources:
+                requests: {cpu: 50m, memory: 128Mi}
+                limits: {memory: 512Mi}
+              volumeMounts:
+                - {name: policy, mountPath: /policy}
+          containers:
+            - name: s3
+              image: docker.io/amazon/aws-cli:2.27.50
+              command: [sh, /policy/s3.sh]
+              env:
+                - {name: DRY_RUN, value: "false"}
+                - {name: S3_ENDPOINT, value: "http://langfuse-s3-all-in-one:8333"}
+                - {name: S3_BUCKET, value: langfuse}
+                - {name: AWS_DEFAULT_REGION, value: us-east-1}
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef: {name: langfuse-s3-auth, key: accessKey}
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef: {name: langfuse-s3-auth, key: secretKey}
+              resources:
+                requests: {cpu: 50m, memory: 128Mi}
+                limits: {memory: 256Mi}
+              volumeMounts:
+                - {name: policy, mountPath: /policy}
+          volumes:
+            - name: policy
+              configMap: {name: langfuse-retention}
