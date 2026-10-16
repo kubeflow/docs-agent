@@ -174,7 +174,7 @@ function createChatbotElements() {
 
         const disclaimer = document.createElement('div');
         disclaimer.className = 'disclaimer-text';
-        disclaimer.innerHTML = 'AI-generated responses may be inaccurate or misleading. Be sure to double-check responses and sources. <a href="#">Generative AI User Guidelines.</a>';
+        disclaimer.innerHTML = 'AI-generated responses may be inaccurate or misleading. Be sure to double-check responses and sources. Conversations and feedback are recorded to improve answer quality, so please don\'t share personal information. <a href="#">Generative AI User Guidelines.</a>';
 
         chatInputContainer.appendChild(inputWrapper);
         chatInputContainer.appendChild(disclaimer);
