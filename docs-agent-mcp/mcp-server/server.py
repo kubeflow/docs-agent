@@ -91,17 +91,17 @@ def search_kubeflow_docs(query: str, top_k: int = 5) -> ToolResult:
 @flo_tracing.traced("tool", inputs=("query", "top_k", "repo", "state"))
 def search_github_issues(query: str, top_k: int = 5, repo: str = "", state: str = "") -> ToolResult:
     """Search Kubeflow GitHub issues."""
+    filters = []
     try:
         query, top_k = _search_args(query, top_k)
+        if repo:
+            repo = _safe_filter_value("repo", repo)
+            filters.append(f'repo_name == "{repo}"')
+        if state:
+            state = _safe_filter_value("state", state)
+            filters.append(f'issue_state == "{state}"')
     except ValueError as exc:
         return text_tool_result(f"Search rejected: {exc}")
-    filters = []
-    if repo:
-        repo = _safe_filter_value("repo", repo)
-        filters.append(f'repo_name == "{repo}"')
-    if state:
-        state = _safe_filter_value("state", state)
-        filters.append(f'issue_state == "{state}"')
     filter_expr = " and ".join(filters)
 
     try:
@@ -126,17 +126,17 @@ def search_github_issues(query: str, top_k: int = 5, repo: str = "", state: str 
 @flo_tracing.traced("tool", inputs=("query", "top_k", "resource_kind", "repo"))
 def search_kubeflow_code(query: str, top_k: int = 5, resource_kind: str = "", repo: str = "") -> ToolResult:
     """Search Kubeflow code and YAML manifests."""
+    filters = []
     try:
         query, top_k = _search_args(query, top_k)
+        if resource_kind:
+            resource_kind = _safe_filter_value("resource_kind", resource_kind)
+            filters.append(f"resource_kind == '{resource_kind}'")
+        if repo:
+            repo = _safe_filter_value("repo", repo)
+            filters.append(f'repo_name == "{repo}"')
     except ValueError as exc:
         return text_tool_result(f"Search rejected: {exc}")
-    filters = []
-    if resource_kind:
-        resource_kind = _safe_filter_value("resource_kind", resource_kind)
-        filters.append(f"resource_kind == '{resource_kind}'")
-    if repo:
-        repo = _safe_filter_value("repo", repo)
-        filters.append(f'repo_name == "{repo}"')
     filter_expr = " and ".join(filters)
 
     try:
