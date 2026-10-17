@@ -1,0 +1,90 @@
+# Evaluates the PR running in the preview namespace against main (staging) and posts
+# the comparison on the PR (tests/eval/pr_eval.py). Named after the commit, so a new
+# /eval on a new commit is a new Job.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "pr-eval.name" . }}
+  labels:
+    {{- include "pr-eval.labels" . | nindent 4 }}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ .Values.timeoutSeconds }}
+  template:
+    metadata:
+      labels:
+        app: pr-eval
+        docs-agent/pr: {{ .Values.pr | quote }}
+    spec:
+      serviceAccountName: {{ include "pr-eval.name" . }}
+      restartPolicy: Never
+      containers:
+        - name: eval
+          image: {{ .Values.image }}
+          command: ["sh", "-ec"]
+          args:
+            - |
+              python - <<'PY'
+              import urllib.request
+              base = "https://raw.githubusercontent.com/{{ .Values.repo }}/{{ .Values.scriptRevision }}/tests/eval"
+              for f in ("staging_eval.py", "pr_eval.py", "flo_eval_dataset.json"):
+                  urllib.request.urlretrieve(f"{base}/{f}", f"/tmp/{f}")
+              PY
+              cd /tmp && exec python pr_eval.py
+          env:
+            # Progress lines (waiting for the preview, each run) show up in the log as they happen.
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: PR_NUMBER
+              value: {{ .Values.pr | quote }}
+            - name: HEAD_SHA
+              value: {{ .Values.headSha | quote }}
+            - name: EXPECTED_IMAGE_TAG
+              value: {{ .Values.imageTag | quote }}
+            - name: PREVIEW_NAMESPACE
+              value: {{ .Values.previewNamespace | quote }}
+            - name: BASELINE_NAMESPACE
+              value: {{ .Values.baselineNamespace | quote }}
+            - name: READY_TIMEOUT
+              value: {{ .Values.readyTimeoutSeconds | quote }}
+            - name: EVAL_LABEL
+              value: {{ .Values.label | quote }}
+            - name: GITHUB_REPO
+              value: {{ .Values.repo | quote }}
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.githubSecret.name }}
+                  key: {{ .Values.githubSecret.key }}
+                  optional: true
+            - name: AGENT_BASE
+              value: {{ .Values.agentBase | quote }}
+            - name: JUDGE_URL
+              value: {{ .Values.judgeUrl | quote }}
+            - name: JUDGE_MODEL
+              value: {{ .Values.judgeModel | quote }}
+            - name: LANGFUSE_HOST
+              value: {{ .Values.langfuseHost | quote }}
+            - name: LANGFUSE_UI_URL
+              value: {{ .Values.langfuseUiUrl | quote }}
+            - name: LANGFUSE_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.langfuseSecret }}, key: LANGFUSE_PUBLIC_KEY}
+            - name: LANGFUSE_SECRET_KEY
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.langfuseSecret }}, key: LANGFUSE_SECRET_KEY}
+            - name: MIN_ROUTING
+              value: {{ .Values.minRouting | quote }}
+            - name: MIN_GROUNDED
+              value: {{ .Values.minGrounded | quote }}
+            - name: CONCURRENCY
+              value: {{ .Values.concurrency | quote }}
+            - name: LIMIT
+              value: {{ .Values.limit | quote }}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]

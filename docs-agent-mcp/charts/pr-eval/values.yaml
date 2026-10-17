@@ -1,0 +1,37 @@
+# Set per pull request by the docs-agent-pr-eval ApplicationSet.
+pr: ""
+headSha: ""
+# MCP image tag the preview must run before the eval starts (pr-<number>-<sha8>).
+imageTag: ""
+
+# Where the PR runs (docs-agent-preview ApplicationSet) and the main baseline (staging).
+previewNamespace: docs-agent-preview
+baselineNamespace: docs-agent-staging
+
+image: mirror.gcr.io/library/python:3.12-slim
+# The scripts and dataset always come from main, so a PR cannot change how it is graded.
+# The ApplicationSet sets scriptRevision to the main commit it rendered this chart from.
+repo: kubeflow/docs-agent
+scriptRevision: main
+
+# Token that may comment on and edit labels of PRs in `repo`. Without it the report
+# is only written to the Job log.
+githubSecret:
+  name: pr-eval-github
+  key: token
+label: eval
+
+agentBase: http://kagent-controller.docs-agent.svc.cluster.local:8083
+judgeUrl: http://llm-judge.ml-infra.svc.cluster.local/v1/chat/completions
+judgeModel: flo-judge
+langfuseHost: http://langfuse-web.langfuse.svc.cluster.local:3000
+# Public Langfuse URL for the links in the report.
+langfuseUiUrl: ""
+# Evaluation-project keys (the Secret staging already uses).
+langfuseSecret: mcp-langfuse-keys
+minRouting: "0.85"
+minGrounded: "0.65"
+concurrency: "3"
+limit: "0"
+readyTimeoutSeconds: 1200
+timeoutSeconds: 5400

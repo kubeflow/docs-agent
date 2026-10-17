@@ -1,0 +1,38 @@
+# Read-only access to Deployments: in the preview, to wait until the PR is rolled out;
+# in this namespace, to read which main commit staging runs.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "pr-eval.name" . }}
+  labels:
+    {{- include "pr-eval.labels" . | nindent 4 }}
+{{- range $ns := list .Values.previewNamespace .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "pr-eval.name" $ }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "pr-eval.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "pr-eval.name" $ }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "pr-eval.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "pr-eval.name" $ }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "pr-eval.name" $ }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}

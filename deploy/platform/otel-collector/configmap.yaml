@@ -1,6 +1,8 @@
 # OpenTelemetry collector for agent and MCP spans. Was hand-applied; now in Git.
-# Spans from pods in docs-agent-staging go to the Langfuse evaluation project;
-# everything else goes to the live project. The namespace is looked up by the
+# Only spans from pods in docs-agent (production) go to the live Langfuse project.
+# Everything else goes to the evaluation project: docs-agent-staging, docs-agent-preview
+# (pull requests under /eval, environment "preview") and any namespace added later, so
+# a new environment can never write into production data. The namespace is looked up by the
 # k8sattributes processor from the sending pod's IP (kagent's agent runtime does not
 # apply OTEL_RESOURCE_ATTRIBUTES, so the agents cannot tag themselves). Each project's
 # Basic-auth header comes from the Secret langfuse-otlp (keys never in Git).
@@ -43,14 +45,20 @@ data:
       resource/staging:
         attributes:
           - {key: langfuse.environment, value: staging, action: upsert}
+      resource/preview:
+        attributes:
+          - {key: langfuse.environment, value: preview, action: upsert}
       batch:
     connectors:
       routing:
-        default_pipelines: [traces/live]
+        default_pipelines: [traces/eval]
         table:
           - context: resource
-            condition: attributes["k8s.namespace.name"] == "docs-agent-staging"
-            pipelines: [traces/eval]
+            condition: attributes["k8s.namespace.name"] == "docs-agent"
+            pipelines: [traces/live]
+          - context: resource
+            condition: attributes["k8s.namespace.name"] == "docs-agent-preview"
+            pipelines: [traces/preview]
     exporters:
       otlphttp/live:
         endpoint: http://langfuse-web.langfuse.svc.cluster.local:3000/api/public/otel
@@ -75,4 +83,8 @@ data:
         traces/eval:
           receivers: [routing]
           processors: [resource/staging, batch]
+          exporters: [otlphttp/eval]
+        traces/preview:
+          receivers: [routing]
+          processors: [resource/preview, batch]
           exporters: [otlphttp/eval]

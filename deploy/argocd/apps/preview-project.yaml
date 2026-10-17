@@ -1,0 +1,25 @@
+# Pull-request code deployed by /eval runs under this project: only into the preview
+# namespace, and only the kinds the docs-agent chart creates. Nothing cluster-scoped,
+# no RBAC, no NetworkPolicy changes.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: docs-agent-preview
+  namespace: argocd
+spec:
+  description: Pull requests under pre-merge evaluation (/eval)
+  sourceRepos:
+    - https://github.com/kubeflow/docs-agent
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: docs-agent-preview
+  clusterResourceWhitelist: []
+  namespaceResourceWhitelist:
+    - {group: "", kind: ConfigMap}
+    - {group: "", kind: Secret}
+    - {group: "", kind: Service}
+    - {group: apps, kind: Deployment}
+    - {group: policy, kind: PodDisruptionBudget}
+    - {group: kagent.dev, kind: Agent}
+    - {group: kagent.dev, kind: ModelConfig}
+    - {group: kagent.dev, kind: RemoteMCPServer}

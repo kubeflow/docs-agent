@@ -1,0 +1,53 @@
+# Pre-merge eval, part 2: for the same labelled PR, runs the pr-eval chart from main in
+# docs-agent-staging. Its Job waits for the preview, evaluates it against staging (main),
+# comments on the PR and removes the label, which ends both Applications. The commit
+# under test comes from the `eval-sha:<sha>` label (see docs-agent-preview.yaml).
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: docs-agent-pr-eval
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - pullRequest:
+        github:
+          owner: kubeflow
+          repo: docs-agent
+          labels: [eval]
+        # Anonymous GitHub API: two ApplicationSets at 12 calls an hour each stay under 60.
+        requeueAfterSeconds: 300
+  template:
+    metadata:
+      name: docs-agent-pr-{{ .number }}-eval
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/kubeflow/docs-agent
+        targetRevision: main
+        path: docs-agent-mcp/charts/pr-eval
+        helm:
+          releaseName: pr-eval
+          parameters:
+            - name: pr
+              value: "{{ .number }}"
+            - name: headSha
+              value: '{{ range .labels }}{{ if hasPrefix "eval-sha:" . }}{{ trimPrefix "eval-sha:" . }}{{ end }}{{ end }}'
+            - name: imageTag
+              value: 'pr-{{ .number }}-{{ range .labels }}{{ if hasPrefix "eval-sha:" . }}{{ trimPrefix "eval-sha:" . | trunc 8 }}{{ end }}{{ end }}'
+            - name: langfuseUiUrl
+              value: https://langfuse.kmrrohit.space
+            # The exact main commit this chart was rendered from: the Job downloads the eval
+            # scripts at that commit, not at "main", which GitHub's raw CDN may serve stale.
+            - name: scriptRevision
+              value: $ARGOCD_APP_REVISION
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: docs-agent-staging
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: false
