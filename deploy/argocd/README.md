@@ -59,7 +59,7 @@ are not listed.
 | `docs-agent` | `mcp-langfuse-keys` | Langfuse project keys for MCP tracing |
 | `docs-agent` | `langfuse-otlp` | Langfuse keys for the OTel collector |
 | `docs-agent` | `session-issuer-key` | signing key for chat session tokens |
-| `langfuse` | `langfuse-app`, `langfuse-postgresql-auth`, `langfuse-clickhouse-auth`, `langfuse-redis-auth`, `langfuse-s3-auth` | Langfuse app secrets and its data stores |
+| `langfuse` | `langfuse-app-credentials` (salt, encryption key, NextAuth secret), `langfuse-postgresql-auth`, `langfuse-clickhouse-auth`, `langfuse-redis-auth`, `langfuse-s3-auth` | Langfuse app secrets and its data stores |
 | `ml-infra` | `milvus-minio` | Milvus object store |
 | `kubeflow` | `milvus-auth`, `github-pat` | ingestion pipelines |
 | `argocd` | `argocd-secret` | Argo CD admin password hash and server key |

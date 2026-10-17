@@ -1,7 +1,10 @@
 # Langfuse (chart langfuse/langfuse 2.1.0) on the demo cluster. Captured from
 # `helm get values langfuse` on 2026-10-14 plus the settings that were applied by hand.
 # No secret values: salt, encryption key and NextAuth secret are read from the
-# existing Secret langfuse-app (helm.sh/resource-policy: keep).
+# Secret langfuse-app-credentials, created by an admin and not managed by Argo CD.
+# It must not be langfuse-app: the chart renders that Secret itself, and when a
+# credential is referenced (and Helm `lookup` is unavailable, as under Argo CD) it
+# renders it empty, so a sync would wipe the values Langfuse depends on.
 # LLM connections may call the judge (llm-judge) and the answer model (llm-stable).
 # No node affinity: GPU nodes carry the nvidia.com/gpu NoSchedule taint, so these
 # pods never land on them.
@@ -42,17 +45,17 @@ langfuse:
     enabled: false
   salt:
     secretKeyRef:
-      name: langfuse-app
+      name: langfuse-app-credentials
       key: salt
   encryptionKey:
     secretKeyRef:
-      name: langfuse-app
+      name: langfuse-app-credentials
       key: encryption-key
   nextauth:
     url: https://langfuse.kmrrohit.space
     secret:
       secretKeyRef:
-        name: langfuse-app
+        name: langfuse-app-credentials
         key: nextauth-secret
   image:
     pullPolicy: IfNotPresent
