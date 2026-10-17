@@ -65,6 +65,7 @@ jobs:
       - name: Lint charts
         run: |
           helm lint docs-agent-mcp/charts/docs-agent
+          helm lint docs-agent-mcp/charts/pr-eval --set pr=1 --set headSha=0123456789abcdef
           helm lint docs-agent-mcp/charts/gateway-guardrails \
             --set domain=agent.example.org --set gateway.tls.acme.email=ci@example.org
           # Every catalog profile must lint, not just the active one.
@@ -76,6 +77,12 @@ jobs:
         run: |
           helm template docs-agent docs-agent-mcp/charts/docs-agent \
             --namespace docs-agent --set-string mcp.image.tag=ci-test >/dev/null
+          yq '.spec.template.spec.source.helm.valuesObject' deploy/argocd/apps/docs-agent-preview.yaml > /tmp/preview-values.yaml
+          helm template docs-agent-preview docs-agent-mcp/charts/docs-agent \
+            --namespace docs-agent-preview -f /tmp/preview-values.yaml \
+            --set-string mcp.image.tag=pr-1-01234567 >/dev/null
+          helm template pr-eval docs-agent-mcp/charts/pr-eval --namespace docs-agent-staging \
+            --set pr=1 --set headSha=0123456789abcdef --set imageTag=pr-1-01234567 >/dev/null
           for profile in $(helm show values docs-agent-mcp/charts/llm-runtime | yq '.catalog | keys | .[]'); do
             helm template llm-runtime docs-agent-mcp/charts/llm-runtime \
               --namespace ml-infra --set "model=${profile}" >/dev/null

@@ -1,0 +1,49 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: langfuse-retention
+  namespace: langfuse
+data:
+  # One line per Langfuse project: <project id> <days to keep>. Projects not listed are
+  # kept forever. Datasets (the eval questions) are never deleted.
+  policy.txt: |
+    cmur247f3000hxd07zzm7wzio 28   # Flo-live: chat traces and user feedback
+    cmv72w95l0005wz07dsb2kans 14   # flo-eval: staging eval runs (each release's scores are kept in its promotion PR)
+
+  # Traces, observations, scores and raw events older than the window, per project.
+  # Lightweight DELETEs; ClickHouse merges the rows away in the background.
+  clickhouse.sh: |
+    set -eu
+    q() { clickhouse-client --host "$CH_HOST" --user "$CH_USER" --password "$CH_PASSWORD" -q "$1"; }
+    sed 's/#.*//' /policy/policy.txt | while read -r project days; do
+      [ -n "$project" ] || continue
+      for spec in events_full:start_time events_core:start_time observations:start_time \
+                  traces:timestamp scores:timestamp blob_storage_file_log:created_at; do
+        table=${spec%%:*}; column=${spec#*:}
+        where="project_id = '$project' AND $column < now() - INTERVAL $days DAY"
+        n=$(q "SELECT count() FROM $table WHERE $where")
+        echo "$project $table: $n rows older than $days days"
+        if [ "$n" -gt 0 ] && [ "$DRY_RUN" != "true" ]; then q "DELETE FROM $table WHERE $where"; fi
+      done
+    done
+
+  # Raw OTLP payloads (otel/<project>/...) and score events (<project>/...) in the S3 store.
+  s3.sh: |
+    set -eu
+    sed 's/#.*//' /policy/policy.txt | while read -r project days; do
+      [ -n "$project" ] || continue
+      cutoff=$(date -u -d "-$days days" +%Y-%m-%dT%H:%M:%SZ)
+      for prefix in "otel/$project/" "$project/"; do
+        aws s3api list-objects-v2 --endpoint-url "$S3_ENDPOINT" --bucket "$S3_BUCKET" --prefix "$prefix" \
+          --query "Contents[?LastModified<'$cutoff'].Key" --output text | tr '\t' '\n' | grep -v '^None$' | grep . > /tmp/keys || true
+        echo "$project s3://$S3_BUCKET/$prefix: $(wc -l < /tmp/keys) objects older than $days days"
+        [ "$DRY_RUN" = "true" ] && continue
+        split -l 1000 /tmp/keys /tmp/batch.
+        for batch in /tmp/batch.*; do
+          [ -e "$batch" ] || continue
+          { printf '{"Quiet":true,"Objects":['; sed 's/.*/{"Key":"&"}/' "$batch" | paste -sd, -; printf ']}'; } > /tmp/delete.json
+          aws s3api delete-objects --endpoint-url "$S3_ENDPOINT" --bucket "$S3_BUCKET" --delete file:///tmp/delete.json
+          rm -f "$batch"
+        done
+      done
+    done

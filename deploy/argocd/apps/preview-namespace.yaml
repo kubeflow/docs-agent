@@ -1,0 +1,19 @@
+# The docs-agent-preview Namespace and its Pod Security level (deploy/platform/preview).
+# Never pruned: deleting the Namespace would delete the Secrets an admin put in it.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: preview-namespace
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/kubeflow/docs-agent
+    targetRevision: main
+    path: deploy/platform/preview
+  destination:
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true

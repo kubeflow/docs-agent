@@ -1,4 +1,5 @@
-# Observe-only: no syncPolicy, so Argo CD reports drift but never changes the cluster.
+# Production: pinned to a commit that passed the staging eval, and synced automatically.
+# Promote with deploy/promote.sh, which moves every `# prod-revision` line to a newer commit.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -10,14 +11,18 @@ spec:
   # deploy/envs/prod/ is public and holds no secrets; secrets are Kubernetes Secrets referenced by name.
   sources:
     - repoURL: https://github.com/kubeflow/docs-agent
-      targetRevision: main
+      targetRevision: 9145c31077524f98658d9f47f1e5d6bb8689919f  # prod-revision
       path: docs-agent-mcp/charts/gateway-guardrails
       helm:
         releaseName: gateway-guardrails
         valueFiles:
           - $values/deploy/envs/prod/gateway-guardrails.yaml
+        # CI tags every main build with the short commit SHA, so the image follows the commit.
+        parameters:
+          - name: sessionAuth.image
+            value: ghcr.io/kubeflow/kubeflow-session-issuer:$ARGOCD_APP_REVISION_SHORT
     - repoURL: https://github.com/kubeflow/docs-agent
-      targetRevision: main
+      targetRevision: 9145c31077524f98658d9f47f1e5d6bb8689919f  # prod-revision
       ref: values
   # Objects adopted from Helm have no Argo tracking-id until the first sync, which would flag every
   # resource OutOfSync on that annotation alone. Ignore it so only real drift shows.
@@ -29,3 +34,8 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: docs-agent
+  # The pinned commit is the approval gate, so syncing it is automatic.
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true

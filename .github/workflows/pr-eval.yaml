@@ -1,0 +1,144 @@
+# Pre-merge eval on request. A maintainer comments `/eval` on a pull request; this
+# builds the PR's MCP image and labels the PR `eval`. Argo CD then deploys the PR into
+# docs-agent-preview and a Job from main evaluates it against main and comments the
+# result here (deploy/argocd/apps/docs-agent-preview.yaml, docs-agent-pr-eval.yaml).
+#
+# Not a PR check: the eval needs the shared GPU model, so it runs only when asked.
+# Only OWNERS approvers (or repo admins/maintainers) can start it, and only one PR at a
+# time holds the preview. The commit evaluated is the PR head at the time of /eval,
+# pinned in the label `eval-sha:<sha>`; later pushes need a new /eval.
+name: PR eval
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+env:
+  LABEL: eval
+  # An eval that has held the preview this long has died without cleaning up.
+  STALE_HOURS: "3"
+
+jobs:
+  eval:
+    if: >-
+      github.event.issue.pull_request &&
+      (github.event.comment.body == '/eval' || startsWith(github.event.comment.body, '/eval '))
+    runs-on: ubuntu-latest
+    # Job-level, so ordinary PR comments (skipped above) never queue behind or cancel it.
+    concurrency:
+      group: pr-eval
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+      issues: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PR: ${{ github.event.issue.number }}
+      ACTOR: ${{ github.event.comment.user.login }}
+    steps:
+      # The default branch, not the PR: OWNERS is read from here.
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check the commenter may start an eval
+        id: auth
+        run: |
+          set -euo pipefail
+          approvers=$(python3 -c 'import yaml; print(" ".join(yaml.safe_load(open("OWNERS")).get("approvers", [])))')
+          permission=$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${ACTOR}/permission" --jq .permission 2>/dev/null || echo none)
+          if [[ " ${approvers,,} " == *" ${ACTOR,,} "* || "$permission" == admin || "$permission" == maintain ]]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::${ACTOR} is not an OWNERS approver; ignoring /eval"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Acknowledge
+        if: steps.auth.outputs.ok == 'true'
+        run: gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${{ github.event.comment.id }}/reactions" -f content=eyes >/dev/null
+
+      - name: Check the preview is free
+        id: free
+        if: steps.auth.outputs.ok == 'true'
+        run: |
+          set -euo pipefail
+          free=true
+          for n in $(gh pr list --repo "$GITHUB_REPOSITORY" --label "$LABEL" --state open --json number --jq '.[].number'); do
+            since=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${n}/events" --paginate \
+              --jq ".[] | select(.event == \"labeled\" and .label.name == \"${LABEL}\") | .created_at" | tail -1)
+            age=$(( $(date +%s) - $(date -d "${since:-now}" +%s) ))
+            if (( age > STALE_HOURS * 3600 )); then
+              gh pr edit "$n" --repo "$GITHUB_REPOSITORY" --remove-label "$LABEL"
+              gh pr comment "$n" --repo "$GITHUB_REPOSITORY" --body "The eval of this PR did not finish within ${STALE_HOURS} hours and was abandoned; a maintainer can run \`/eval\` again."
+            elif [[ "$n" == "$PR" ]]; then
+              gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "An eval of this PR is already running; its report will be posted here."
+              free=false
+            else
+              gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "The preview is busy with #${n}. Comment \`/eval\` again once that report is posted."
+              free=false
+            fi
+          done
+          echo "ok=${free}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve the PR head
+        id: head
+        if: steps.free.outputs.ok == 'true'
+        run: |
+          set -euo pipefail
+          sha=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq .headRefOid)
+          owner=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          # The ApplicationSets derive the same tag from the eval-sha label (first 8 characters).
+          echo "image=ghcr.io/${owner}/mcp-kubeflow-docs:pr-${PR}-${sha::8}" >> "$GITHUB_OUTPUT"
+
+      # The PR's code is only built here, never run with credentials: no token is
+      # persisted in the checkout, and the registry login happens after the build.
+      - name: Check out the PR
+        if: steps.free.outputs.ok == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.head.outputs.sha }}
+          path: pr
+          persist-credentials: false
+
+      - name: Build the MCP image
+        if: steps.free.outputs.ok == 'true'
+        run: docker build -t "${{ steps.head.outputs.image }}" -f pr/docs-agent-mcp/mcp-server/Dockerfile pr/docs-agent-mcp/mcp-server
+
+      - name: Push the MCP image
+        if: steps.free.outputs.ok == 'true'
+        run: |
+          set -euo pipefail
+          echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker push "${{ steps.head.outputs.image }}"
+          docker logout ghcr.io
+
+      - name: Hand over to Argo CD
+        if: steps.free.outputs.ok == 'true'
+        run: |
+          set -euo pipefail
+          sha="${{ steps.head.outputs.sha }}"
+          # Only one eval runs at a time, so any older eval-sha label is finished with.
+          for old in $(gh label list --repo "$GITHUB_REPOSITORY" --search "eval-sha:" --limit 100 --json name --jq '.[].name | select(startswith("eval-sha:"))'); do
+            gh label delete "$old" --repo "$GITHUB_REPOSITORY" --yes
+          done
+          gh label create "$LABEL" --repo "$GITHUB_REPOSITORY" --color 5319e7 \
+            --description "Pre-merge eval running (/eval)" 2>/dev/null || true
+          gh label create "eval-sha:${sha}" --repo "$GITHUB_REPOSITORY" --color ededed \
+            --description "Commit under /eval for #${PR}"
+          # The pin first: the ApplicationSets act once `eval` is present.
+          gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --add-label "eval-sha:${sha}"
+          gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --add-label "$LABEL"
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "Eval of \`${sha::8}\` requested by @${ACTOR}. Argo CD deploys it to the preview within a few minutes; the comparison with main is posted here when the run finishes (usually 10–20 minutes)."
+
+      - name: Report a failed start
+        if: failure() && steps.free.outputs.ok == 'true'
+        run: |
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" \
+            --body "Could not start the eval: see ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"

@@ -1,0 +1,12 @@
+# Namespace for pull requests under /eval. Owned by this trusted Application, not by the
+# PR's (whose AppProject cannot create or change Namespaces). Pod Security "baseline" is
+# enforced by the API server: no privileged containers, host paths, host network/PID or
+# extra capabilities, so a PR's pods cannot reach the node. The pods kagent creates for
+# the PR's Agents are covered too.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: docs-agent-preview
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/warn: restricted

@@ -1,0 +1,79 @@
+# Pre-merge eval, part 1: deploys a pull request labelled `eval` (added by /eval, see
+# .github/workflows/pr-eval.yaml) into the shared preview namespace. One PR at a time:
+# the /eval workflow refuses while another PR holds the label. Removing the label
+# deletes the Application and everything it deployed.
+#
+# The commit deployed is the one the maintainer reviewed, pinned by the workflow in a
+# second label `eval-sha:<sha>`, not the PR's head: commits pushed after /eval are not
+# deployed. The sha is read from the labels in each field below.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: docs-agent-preview
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - pullRequest:
+        github:
+          owner: kubeflow
+          repo: docs-agent
+          labels: [eval]
+        # Anonymous GitHub API: two ApplicationSets at 12 calls an hour each stay under 60.
+        requeueAfterSeconds: 300
+  template:
+    metadata:
+      name: docs-agent-pr-{{ .number }}
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: docs-agent-preview
+      # The PR's chart (templates and agent prompts) and image, with values from this
+      # file, i.e. from main. (Argo CD cannot read a $values file from the same repository
+      # at a different revision, so the preview values live here rather than in deploy/envs/.)
+      # Like staging, the preview shares the model, the embeddings service and the
+      # production Milvus collections. An admin creates its Secrets once:
+      # mcp-server-secret (the PR's code can read it; a read-only Milvus user once Milvus
+      # authorization is on) and mcp-langfuse-keys with the evaluation project's keys.
+      source:
+        repoURL: https://github.com/kubeflow/docs-agent
+        targetRevision: '{{ range .labels }}{{ if hasPrefix "eval-sha:" . }}{{ trimPrefix "eval-sha:" . }}{{ end }}{{ end }}'
+        path: docs-agent-mcp/charts/docs-agent
+        helm:
+          releaseName: docs-agent-preview
+          parameters:
+            - name: mcp.image.tag
+              value: 'pr-{{ .number }}-{{ range .labels }}{{ if hasPrefix "eval-sha:" . }}{{ trimPrefix "eval-sha:" . | trunc 8 }}{{ end }}{{ end }}'
+          valuesObject:
+            mcp:
+              image:
+                repository: ghcr.io/kubeflow/mcp-kubeflow-docs
+              extraEnv:
+                - name: LANGFUSE_PUBLIC_KEY
+                  valueFrom:
+                    secretKeyRef: {name: mcp-langfuse-keys, key: LANGFUSE_PUBLIC_KEY}
+                - name: LANGFUSE_SECRET_KEY
+                  valueFrom:
+                    secretKeyRef: {name: mcp-langfuse-keys, key: LANGFUSE_SECRET_KEY}
+                - name: LANGFUSE_TRACING_ENVIRONMENT
+                  value: preview
+            tests:
+              enabled: false
+            # The PR is graded by the pr-eval Job from main (docs-agent-pr-eval.yaml).
+            eval:
+              enabled: false
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: docs-agent-preview
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        # The /eval workflow may still be pushing the image when the label appears.
+        retry:
+          limit: 6
+          backoff:
+            duration: 1m
+            factor: 2
+            maxDuration: 10m

@@ -24,6 +24,11 @@ spec:
         - '.metadata.annotations."argocd.argoproj.io/tracking-id"'
     # The chart keeps generated credentials with Helm `lookup`, which Argo CD cannot run,
     # so every render produces new random passwords. Never overwrite the live ones.
+    # Rendered empty because the credentials live in langfuse-app-credentials; keep the
+    # old copy's data rather than blanking it.
+    - kind: Secret
+      name: langfuse-app
+      jsonPointers: [/data]
     - kind: Secret
       name: langfuse-clickhouse-auth
       jsonPointers: [/data]
