@@ -11,7 +11,7 @@ spec:
   # deploy/envs/prod/ is public and holds no secrets; secrets are Kubernetes Secrets referenced by name.
   sources:
     - repoURL: https://github.com/kubeflow/docs-agent
-      targetRevision: 9145c31077524f98658d9f47f1e5d6bb8689919f  # prod-revision
+      targetRevision: 44cc6c82cf5c955236ed8947cb2250ff14de41d1  # prod-revision
       path: docs-agent-mcp/charts/gateway-guardrails
       helm:
         releaseName: gateway-guardrails
@@ -22,7 +22,7 @@ spec:
           - name: sessionAuth.image
             value: ghcr.io/kubeflow/kubeflow-session-issuer:$ARGOCD_APP_REVISION_SHORT
     - repoURL: https://github.com/kubeflow/docs-agent
-      targetRevision: 9145c31077524f98658d9f47f1e5d6bb8689919f  # prod-revision
+      targetRevision: 44cc6c82cf5c955236ed8947cb2250ff14de41d1  # prod-revision
       ref: values
   # Objects adopted from Helm have no Argo tracking-id until the first sync, which would flag every
   # resource OutOfSync on that annotation alone. Ignore it so only real drift shows.
