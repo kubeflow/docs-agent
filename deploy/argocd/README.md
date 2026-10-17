@@ -33,6 +33,12 @@ for the staging eval of that commit (Langfuse project flo-eval, Experiments, run
 named `<short sha> …`). Reviewers check the eval and approve; after merge, Argo CD
 syncs production to that commit. To roll back, revert the promotion PR.
 
+**First promotion.** MCP images built from #266 up to the commit that fixed the
+Dockerfile (`flo_tracing.py` was not copied) crash on start, so the pin in this
+directory must not be synced. After this change merges, promote its merge commit
+(`deploy/promote.sh <merge sha> --open`), merge that PR, and only then apply
+`root.yaml`. Until then production keeps running `0e49ebd`.
+
 ## Pre-merge eval (`/eval`)
 
 The staging eval runs after a merge. To see whether a PR helps before merging it, a
