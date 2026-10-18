@@ -21,6 +21,7 @@ from milvus_search import search_collection, search_docs_auto
 PORT = int(os.getenv("PORT", "8000"))
 MAX_QUERY_CHARS = int(os.getenv("MAX_QUERY_CHARS", "512"))
 MAX_TOP_K = int(os.getenv("MAX_TOP_K", "20"))
+DOCS_CONTEXT_MAX_CHARS = int(os.getenv("DOCS_CONTEXT_MAX_CHARS", "2000"))
 
 SAFE_FILTER = re.compile(r"^[A-Za-z0-9_/.\-]+$")
 
@@ -82,6 +83,10 @@ def search_kubeflow_docs(query: str, top_k: int = 5) -> ToolResult:
 
     if not hits:
         return text_tool_result("No results found for your query.")
+
+    import compressor
+
+    hits = compressor.compress_hits(query, hits, DOCS_CONTEXT_MAX_CHARS)
 
     body, citations = format_docs_hits(hits)
     return search_tool_result(body, citations, retrieval=retrieval_meta)

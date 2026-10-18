@@ -9,9 +9,11 @@ data:
   ISSUES_COLLECTION_NAME: {{ .Values.mcp.config.issuesCollection | quote }}
   CODE_COLLECTION_NAME: {{ .Values.mcp.config.codeCollection | quote }}
   EMBEDDINGS_URL: {{ .Values.mcp.config.embeddingsUrl | quote }}
+  RERANKER_URL: {{ .Values.mcp.config.rerankerUrl | quote }}
   MILVUS_URI: {{ .Values.mcp.config.milvusUri | quote }}
   MILVUS_USER: {{ .Values.mcp.config.milvusUser | quote }}
   MAX_QUERY_CHARS: {{ .Values.mcp.config.maxQueryChars | quote }}
+  DOCS_CONTEXT_MAX_CHARS: {{ .Values.mcp.config.docsContextMaxChars | quote }}
   MAX_TOP_K: {{ .Values.mcp.config.maxTopK | quote }}
   MAX_CANDIDATE_HITS: {{ .Values.mcp.config.maxCandidateHits | quote }}
   SEARCH_MODE: {{ .Values.mcp.config.searchMode | quote }}

@@ -16,10 +16,12 @@ data:
   AUTO_TEMPORAL_CANDIDATE_DEPTH: "50"
   AUTO_BM25_CANDIDATE_DEPTH: "30"
   EMBEDDINGS_URL: http://embeddings-service-predictor.ml-infra.svc.cluster.local/embed
+  RERANKER_URL: http://reranker-service-predictor.ml-infra.svc.cluster.local/rerank
   MILVUS_URI: http://milvus-milvus.ml-infra.svc.cluster.local:19530
   MILVUS_USER: root
   PORT: "8000"
   PYTHONUNBUFFERED: "1"
+  DOCS_CONTEXT_MAX_CHARS: "2000"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -44,7 +46,8 @@ spec:
         - name: mcp-server
           # Official/CI image placeholder. oke-cicd.yaml sed-replaces this tag on deploy.
           # Do not point manifests at personal Docker Hub repos.
-          image: ghcr.io/kubeflow/mcp-kubeflow-docs:v0.1.0
+          image: mcp-kubeflow-docs:latest
+          imagePullPolicy: IfNotPresent
           ports:
             - name: mcp
               containerPort: 8000

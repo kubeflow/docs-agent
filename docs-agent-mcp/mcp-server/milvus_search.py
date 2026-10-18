@@ -226,19 +226,22 @@ def search_docs_auto(
                 COLLECTION_NAME,
                 query,
                 embedding,
-                top_k,
+                fetch_limit,
                 output_fields,
                 filter_expr=filter_expr,
                 candidate_depth=plan.candidate_depth,
             )
         else:
-            hits = dense_search(COLLECTION_NAME, embedding, top_k, output_fields, filter_expr=filter_expr)
+            hits = dense_search(COLLECTION_NAME, embedding, fetch_limit, output_fields, filter_expr=filter_expr)
     except Exception as exc:
         kind = "hybrid_search" if plan.retrieval_mode == "hybrid" else "search"
         raise RuntimeError(f"Milvus {kind} failed for {COLLECTION_NAME}: {exc}") from exc
 
+    import reranker_client
+
     if plan.retrieval_mode == "bm25":
-        hits = rerank_hits_after_search(plan, hits, query, top_k)
+        hits = rerank_hits_after_search(plan, hits, query, fetch_limit)
+        hits = reranker_client.rerank_hits(query, hits)[:top_k]
         meta = retrieval_metadata(
             plan,
             candidate_depth=fetch_limit,
@@ -247,12 +250,15 @@ def search_docs_auto(
         )
         return hits, meta
     if plan.retrieval_mode == "hybrid":
+        hits = reranker_client.rerank_hits(query, hits)[:top_k]
         meta = retrieval_metadata(
             plan,
-            candidate_depth=plan.candidate_depth or top_k,
+            candidate_depth=fetch_limit,
             filter_expr=filter_expr or None,
         )
         return hits, meta
+
+    hits = reranker_client.rerank_hits(query, hits)[:top_k]
     return hits, retrieval_metadata(plan)
 
 
