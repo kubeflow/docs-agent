@@ -87,7 +87,6 @@ kubeflow/docs-agent/
 
 ### Phase 1: Ingestion & Foundation
 **Focus: Data Pipeline and Vector Persistence**
-*   **KFP Ingestion:** Create robust Kubeflow Pipelines to crawl, heavily chunk, and embed the official Kubeflow documentation directly from [kubeflow.org](https://www.kubeflow.org/).
 *   **Code Ingestion:** Implement a parallel KFP pipeline to parse standard Kubeflow release code repositories—starting explicitly with [kubeflow/manifests](https://github.com/kubeflow/manifests)—capturing Abstract Syntax Trees (AST) and configuration context.
 *   **Backend:** Stand up the Vector Database with declarative schemas. 
 *   **Deliverable:** A functional database loaded with fresh embeddings that update on a schedule via KFP.
