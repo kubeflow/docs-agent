@@ -1,104 +1,296 @@
-"""Extractive sentence compression for RAG hits."""
+"""Structure-aware, extractive sentence & block compressor for RAG hits."""
 
 from __future__ import annotations
 
 import re
 
-import embeddings_client
+# Common English stop words to ignore during lexical term matching
+STOP_WORDS = {
+    "a",
+    "an",
+    "the",
+    "in",
+    "on",
+    "at",
+    "to",
+    "for",
+    "of",
+    "with",
+    "by",
+    "from",
+    "up",
+    "about",
+    "into",
+    "over",
+    "after",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "have",
+    "has",
+    "had",
+    "do",
+    "does",
+    "did",
+    "and",
+    "or",
+    "but",
+    "if",
+    "then",
+    "else",
+    "when",
+    "where",
+    "why",
+    "how",
+    "all",
+    "any",
+    "both",
+    "each",
+    "few",
+    "more",
+    "most",
+    "other",
+    "some",
+    "such",
+    "no",
+    "nor",
+    "not",
+    "only",
+    "own",
+    "same",
+    "so",
+    "than",
+    "too",
+    "very",
+    "can",
+    "will",
+    "just",
+    "should",
+    "now",
+    "it",
+    "its",
+    "this",
+    "that",
+    "these",
+    "those",
+    "what",
+    "which",
+    "who",
+    "whom",
+    "whose",
+    "i",
+    "you",
+    "he",
+    "she",
+    "we",
+    "they",
+}
+
+# Regex to detect fenced code blocks (```...```)
+CODE_BLOCK_RE = re.compile(r"(```[a-zA-Z0-9_\-\.]*\n[\s\S]*?\n```)", re.MULTILINE)
+
+# Sentence boundary regex
+SENTENCE_SPLIT_RE = re.compile(r'(?<=[.?!])\s+(?=[A-Z0-9"`\'])')
+ABBREVIATIONS = ("e.g.", "i.e.", "etc.", "vs.", "fig.", "v1.", "v2.", "vol.", "no.")
+
+
+def _split_into_blocks(text: str) -> list[str]:
+    """Split text into atomic blocks (fenced code blocks, tables, sentences)."""
+    if not text:
+        return []
+
+    # 1. Separate code blocks from non-code text
+    segments: list[tuple[bool, str]] = []
+    last_end = 0
+    for match in CODE_BLOCK_RE.finditer(text):
+        start, end = match.span()
+        if start > last_end:
+            segments.append((False, text[last_end:start]))
+        segments.append((True, match.group(0)))
+        last_end = end
+    if last_end < len(text):
+        segments.append((False, text[last_end:]))
+
+    blocks: list[str] = []
+    for is_code, segment in segments:
+        if is_code:
+            stripped = segment.strip()
+            if stripped:
+                blocks.append(stripped)
+            continue
+
+        paragraphs = re.split(r"\n\s*\n+", segment)
+        for para in paragraphs:
+            para = para.strip()
+            if not para:
+                continue
+
+            # Detect Markdown tables as single atomic blocks
+            lines = [line.strip() for line in para.split("\n") if line.strip()]
+            if len(lines) >= 2 and all(line.startswith("|") and line.endswith("|") for line in lines):
+                blocks.append(para)
+                continue
+
+            # Split prose paragraph into sentences
+            raw_sentences = [s.strip() for s in SENTENCE_SPLIT_RE.split(para) if s.strip()]
+            sentences: list[str] = []
+            for s in raw_sentences:
+                if sentences and any(sentences[-1].lower().endswith(abbr) for abbr in ABBREVIATIONS):
+                    sentences[-1] = f"{sentences[-1]} {s}"
+                else:
+                    sentences.append(s)
+
+            for s in sentences:
+                if "\n" in s:
+                    sub_lines = [line.strip() for line in s.split("\n") if line.strip()]
+                    blocks.extend(sub_lines)
+                else:
+                    blocks.append(s)
+
+    return blocks
+
+
+def _extract_query_terms(query: str) -> list[str]:
+    """Extract informative non-stopword tokens from the query."""
+    tokens = re.findall(r"[A-Za-z0-9_\-\.]+", query.lower())
+    informative = [t for t in tokens if t not in STOP_WORDS and len(t) > 1]
+    return informative or tokens
+
+
+def _score_block(block: str, query: str, query_terms: list[str], is_lead: bool = False) -> float:
+    """Score a block using in-memory lexical matching and structural heuristics."""
+    block_lower = block.lower()
+    score = 0.0
+
+    # 1. Lead sentence context anchoring bonus
+    if is_lead:
+        score += 1.5
+
+    # 2. Exact full query phrase match bonus
+    q_clean = query.lower().strip()
+    if len(q_clean) > 3 and q_clean in block_lower:
+        score += 5.0
+
+    # 3. Informative query term matches
+    term_hits = 0
+    for term in query_terms:
+        if term in block_lower:
+            term_hits += 1
+            if re.search(rf"\b{re.escape(term)}\b", block_lower):
+                score += 2.0
+            else:
+                score += 1.0
+
+    if query_terms:
+        score += (term_hits / len(query_terms)) * 3.0
+
+    # 4. Code block bonus if query seeks examples/manifests/config
+    is_code = block.startswith("```") and block.endswith("```")
+    if is_code:
+        code_intent_words = {"example", "yaml", "manifest", "config", "spec", "code", "command", "args"}
+        if any(w in q_clean for w in code_intent_words) or term_hits > 0:
+            score += 2.5
+
+    return score
+
+
+def _allocate_budgets(hits: list[dict], max_chars: int) -> list[int]:
+    """Allocate character budget per hit based on rank decay weights."""
+    n = len(hits)
+    if n == 0:
+        return []
+    if n == 1:
+        return [max_chars]
+
+    weights = [1.0 / ((i + 1) ** 0.6) for i in range(n)]
+    total_weight = sum(weights)
+    budgets = [max(100, int((w / total_weight) * max_chars)) for w in weights]
+
+    diff = max_chars - sum(budgets)
+    budgets[0] += diff
+    return budgets
 
 
 def compress_hits(query: str, hits: list[dict], max_chars: int) -> list[dict]:
     """Compress hits extractively to fit within max_chars.
 
-    Splits each hit's text into sentences, embeds them, scores them against
-    the query embedding, and keeps only the highest-scoring sentences until
-    the character limit is reached.
+    Uses structure-aware segmentation (protecting code blocks and tables),
+    lead-sentence anchoring, in-memory lexical scoring, and rank-weighted
+    budget allocation to prevent document starvation and eliminate network latency.
     """
     if not hits or max_chars <= 0:
         return hits
 
-    try:
-        query_embedding = embeddings_client.embed_query(query)
-    except Exception as exc:
-        print(f"Failed to embed query for compression: {exc}")
+    # Early exit pass-through if all hits already fit within budget
+    total_chars = sum(len(hit.get("entity", {}).get("content_text", "")) for hit in hits)
+    if total_chars <= max_chars:
         return hits
 
-    # Sentence boundary regex (basic approximation)
-    # Matches punctuation followed by whitespace and a capital letter, or newlines
-    sentence_splitter = re.compile(r"(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?|\!)\s+(?=[A-Z])|\n+")
+    query_terms = _extract_query_terms(query)
+    budgets = _allocate_budgets(hits, max_chars)
 
-    all_sentences = []
-    # Keep track of which hit and which sentence index each sentence belongs to
+    compressed_hits = []
+    surplus_budget = 0
+
     for hit_idx, hit in enumerate(hits):
         content = hit.get("entity", {}).get("content_text", "")
         if not content:
             continue
 
-        sentences = [s.strip() for s in sentence_splitter.split(content) if s.strip()]
-        for sent_idx, text in enumerate(sentences):
-            all_sentences.append(
-                {
-                    "hit_idx": hit_idx,
-                    "sent_idx": sent_idx,
-                    "text": text,
-                }
-            )
+        allocated_budget = budgets[hit_idx] + surplus_budget
+        surplus_budget = 0
 
-    if not all_sentences:
-        return hits
-
-    # Embed all sentences
-    texts = [s["text"] for s in all_sentences]
-    try:
-        sent_embeddings = embeddings_client.embed_texts(texts)
-    except Exception as exc:
-        print(f"Failed to embed sentences for compression: {exc}")
-        return hits
-
-    # Compute cosine similarity
-    for s_info, s_emb in zip(all_sentences, sent_embeddings):
-        # dot product for cosine similarity (assuming normalized vectors, which TEI all-mpnet usually does)
-        # TEI all-mpnet-base-v2 returns normalized vectors.
-        score = sum(a * b for a, b in zip(query_embedding, s_emb))
-        s_info["score"] = score
-
-    # Sort sentences globally by score descending
-    all_sentences.sort(key=lambda x: x["score"], reverse=True)
-
-    # Select sentences until budget is reached
-    selected_sentences = []
-    current_chars = 0
-    for s_info in all_sentences:
-        text_len = len(s_info["text"])
-        if current_chars + text_len > max_chars and current_chars > 0:
-            # We skip this sentence. If we haven't added anything yet, add at least one.
+        # If document already fits inside allocated budget, keep it intact
+        if len(content) <= allocated_budget:
+            compressed_hits.append(hit)
+            surplus_budget = allocated_budget - len(content)
             continue
-        selected_sentences.append(s_info)
-        current_chars += text_len
-        if current_chars >= max_chars:
-            break
 
-    # Group selected sentences back by hit
-    hits_to_keep = {}
-    for s_info in selected_sentences:
-        h_idx = s_info["hit_idx"]
-        if h_idx not in hits_to_keep:
-            hits_to_keep[h_idx] = []
-        hits_to_keep[h_idx].append(s_info)
+        blocks = _split_into_blocks(content)
+        if not blocks:
+            compressed_hits.append(hit)
+            continue
 
-    # Reconstruct the hits
-    compressed_hits = []
-    for h_idx in sorted(hits_to_keep.keys()):
-        # Sort sentences in this hit back to their original document order
-        hit_sentences = sorted(hits_to_keep[h_idx], key=lambda x: x["sent_idx"])
-        combined_text = " ... ".join(s["text"] for s in hit_sentences)
+        scored_blocks = []
+        for idx, block in enumerate(blocks):
+            is_lead = idx == 0
+            score = _score_block(block, query, query_terms, is_lead=is_lead)
+            scored_blocks.append({"idx": idx, "text": block, "score": score, "len": len(block)})
 
-        hit_copy = hits[h_idx].copy()
+        scored_blocks_sorted = sorted(scored_blocks, key=lambda x: x["score"], reverse=True)
+
+        selected = []
+        used_chars = 0
+
+        lead_block = scored_blocks[0]
+        if lead_block["len"] <= allocated_budget:
+            selected.append(lead_block)
+            used_chars += lead_block["len"]
+
+        for b in scored_blocks_sorted:
+            if b["idx"] == 0 and lead_block in selected:
+                continue
+            if used_chars + b["len"] > allocated_budget:
+                if not selected:
+                    selected.append(b)
+                    used_chars += b["len"]
+                continue
+            selected.append(b)
+            used_chars += b["len"]
+
+        selected.sort(key=lambda x: x["idx"])
+        surplus_budget = max(0, allocated_budget - used_chars)
+
+        parts = [b["text"] for b in selected]
+        combined_text = "\n\n".join(parts) if any(p.startswith("```") for p in parts) else " ".join(parts)
+
+        hit_copy = hit.copy()
         hit_copy["entity"] = hit_copy["entity"].copy()
         hit_copy["entity"]["content_text"] = combined_text
         compressed_hits.append(hit_copy)
 
-    print(
-        f"Compressor: reduced {len(all_sentences)} sentences to {len(selected_sentences)} ({current_chars}/{max_chars} chars)"
-    )
     return compressed_hits

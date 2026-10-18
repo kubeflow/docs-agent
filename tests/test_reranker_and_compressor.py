@@ -42,29 +42,90 @@ def test_reranker_client_bypasses_if_no_url():
         assert reranked == hits
 
 
-def test_compressor_compresses_hits():
+def test_compressor_compresses_hits_lexically():
     hits = [
-        {"entity": {"content_text": "First sentence. Second sentence. Third sentence."}},
+        {
+            "entity": {
+                "content_text": (
+                    "KServe is a standard Model Inference Platform on Kubernetes. "
+                    "Unrelated boilerplate sentence that should be discarded when budget is tight. "
+                    "An InferenceService defines Predictor, Transformer, and Explainer components."
+                )
+            }
+        },
     ]
-    with patch("compressor.embeddings_client.embed_query") as mock_embed_query:
-        with patch("compressor.embeddings_client.embed_texts") as mock_embed_texts:
-            mock_embed_query.return_value = [1.0, 0.0]
-            # First and third sentences match the query perfectly
-            mock_embed_texts.return_value = [
-                [1.0, 0.0],  # First sentence
-                [0.0, 1.0],  # Second sentence
-                [1.0, 0.0],  # Third sentence
-            ]
+    # Query mentions InferenceService components
+    query = "What is an InferenceService and its Predictor?"
+    max_chars = 180  # Enough for intro + target sentence, but not boilerplate
 
-            # Allow only enough chars for the first and third sentences (approx 35 chars)
-            max_chars = 35
-            compressed = compressor.compress_hits("query", hits, max_chars)
+    compressed = compressor.compress_hits(query, hits, max_chars)
 
-            assert len(compressed) == 1
-            # Note: "First sentence." + "Third sentence." = 15 + 15 = 30 chars
-            assert "First sentence." in compressed[0]["entity"]["content_text"]
-            assert "Third sentence." in compressed[0]["entity"]["content_text"]
-            assert "Second sentence." not in compressed[0]["entity"]["content_text"]
+    assert len(compressed) == 1
+    content = compressed[0]["entity"]["content_text"]
+    assert "KServe is a standard Model Inference Platform" in content  # Lead anchor
+    assert "InferenceService defines Predictor" in content
+    assert "Unrelated boilerplate sentence" not in content
+
+
+def test_compressor_preserves_atomic_code_blocks():
+    yaml_code = "```yaml\napiVersion: serving.kserve.io/v1beta1\nkind: InferenceService\nspec:\n  predictor:\n    model:\n      modelFormat:\n        name: sklearn\n```"
+    hits = [
+        {
+            "entity": {
+                "content_text": (
+                    "Here is the manifest for serving an sklearn model with KServe.\n\n"
+                    f"{yaml_code}\n\n"
+                    "Some trailing notes that can be dropped if context budget is exceeded."
+                )
+            }
+        }
+    ]
+    query = "InferenceService sklearn YAML manifest"
+    max_chars = len(yaml_code) + 80
+
+    compressed = compressor.compress_hits(query, hits, max_chars)
+
+    assert len(compressed) == 1
+    content = compressed[0]["entity"]["content_text"]
+    # The entire code block must remain intact without broken lines or regex mutilation
+    assert yaml_code in content
+
+
+def test_compressor_budget_prevents_document_starvation():
+    hits = [
+        {
+            "entity": {
+                "content_text": ("Doc 1 has a very long explanation about Kubeflow Pipelines architecture. " * 10)
+            }
+        },
+        {
+            "entity": {
+                "content_text": (
+                    "Doc 2 explains external MySQL configuration. "
+                    "Set external mysql secret credentials in the ml-pipeline config."
+                )
+            }
+        },
+    ]
+    query = "How to configure external MySQL in Pipelines?"
+    max_chars = 400
+
+    compressed = compressor.compress_hits(query, hits, max_chars)
+
+    # Both documents must be represented in compressed output (no starvation)
+    assert len(compressed) == 2
+    assert "Doc 1" in compressed[0]["entity"]["content_text"]
+    assert "external MySQL" in compressed[1]["entity"]["content_text"]
+
+
+def test_compressor_passes_through_when_under_budget():
+    hits = [
+        {"entity": {"content_text": "Short hit 1."}},
+        {"entity": {"content_text": "Short hit 2."}},
+    ]
+    # Total chars is ~26, budget is 500
+    compressed = compressor.compress_hits("query", hits, 500)
+    assert compressed == hits
 
 
 def test_compressor_bypasses_if_no_hits():
