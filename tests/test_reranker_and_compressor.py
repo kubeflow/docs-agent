@@ -137,3 +137,22 @@ def test_compressor_bypasses_if_max_chars_zero():
     hits = [{"entity": {"content_text": "doc1"}}]
     compressed = compressor.compress_hits("query", hits, 0)
     assert compressed == hits
+
+
+def test_wrapped_list_item_stays_one_block():
+    text = (
+        "- **parallelTrialCount**: The maximum number of HP sets that Katib\n"
+        "  should train in parallel. The default value is 3.\n"
+    )
+    blocks = compressor._split_into_blocks(text)
+    assert any("Katib should train in parallel. The default value is 3." in b for b in blocks)
+
+
+def test_wrapped_sentence_is_not_cut():
+    text = (
+        "Katib searches the latest reported\n`accuracy` metrics for each Trial. Check the\nmetrics strategies example."
+    )
+    assert compressor._split_into_blocks(text) == [
+        "Katib searches the latest reported `accuracy` metrics for each Trial.",
+        "Check the metrics strategies example.",
+    ]

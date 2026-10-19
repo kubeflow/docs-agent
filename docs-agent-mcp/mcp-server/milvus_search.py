@@ -241,7 +241,9 @@ def search_docs_auto(
 
     if plan.retrieval_mode == "bm25":
         hits = rerank_hits_after_search(plan, hits, query, fetch_limit)
-        hits = reranker_client.rerank_hits(query, hits)[:top_k]
+        if not plan.rerank_by_release_date:
+            hits = reranker_client.rerank_hits(query, hits)
+        hits = hits[:top_k]
         meta = retrieval_metadata(
             plan,
             candidate_depth=fetch_limit,

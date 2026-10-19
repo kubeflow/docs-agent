@@ -98,8 +98,30 @@ SENTENCE_SPLIT_RE = re.compile(r'(?<=[.?!])\s+(?=[A-Z0-9"`\'])')
 ABBREVIATIONS = ("e.g.", "i.e.", "etc.", "vs.", "fig.", "v1.", "v2.", "vol.", "no.")
 
 
+BLOCK_START_RE = re.compile(r"^(\s*([-*+]|\d+\.)\s|#{1,6}\s|\||>)")
+LIST_OR_HEADING_RE = re.compile(r"^(\s*([-*+]|\d+\.)\s|#{1,6}\s)")
+
+
+def _is_heading(line: str) -> bool:
+    return bool(re.match(r"^#{1,6}\s", line))
+
+
+def _logical_lines(para: str) -> list[str]:
+    """Merge hard-wrapped lines; a new line starts only at a list item, heading, table row or quote."""
+    out: list[str] = []
+    for line in para.split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if out and not _is_heading(out[-1]) and not BLOCK_START_RE.match(line):
+            out[-1] = f"{out[-1]} {stripped}"
+        else:
+            out.append(stripped)
+    return out
+
+
 def _split_into_blocks(text: str) -> list[str]:
-    """Split text into atomic blocks (fenced code blocks, tables, sentences)."""
+    """Split text into atomic blocks (fenced code blocks, tables, list items, sentences)."""
     if not text:
         return []
 
@@ -135,21 +157,24 @@ def _split_into_blocks(text: str) -> list[str]:
                 blocks.append(para)
                 continue
 
-            # Split prose paragraph into sentences
-            raw_sentences = [s.strip() for s in SENTENCE_SPLIT_RE.split(para) if s.strip()]
-            sentences: list[str] = []
-            for s in raw_sentences:
-                if sentences and any(sentences[-1].lower().endswith(abbr) for abbr in ABBREVIATIONS):
-                    sentences[-1] = f"{sentences[-1]} {s}"
-                else:
-                    sentences.append(s)
+            # Merge hard-wrapped lines into logical lines
+            logical_lines = _logical_lines(para)
+            for line in logical_lines:
+                # Keep list items (- **key**: ...) and headings whole as single blocks
+                if LIST_OR_HEADING_RE.match(line):
+                    blocks.append(line)
+                    continue
 
-            for s in sentences:
-                if "\n" in s:
-                    sub_lines = [line.strip() for line in s.split("\n") if line.strip()]
-                    blocks.extend(sub_lines)
-                else:
-                    blocks.append(s)
+                # Plain prose lines: split into sentences
+                raw_sentences = [s.strip() for s in SENTENCE_SPLIT_RE.split(line) if s.strip()]
+                sentences: list[str] = []
+                for s in raw_sentences:
+                    if sentences and any(sentences[-1].lower().endswith(abbr) for abbr in ABBREVIATIONS):
+                        sentences[-1] = f"{sentences[-1]} {s}"
+                    else:
+                        sentences.append(s)
+
+                blocks.extend(sentences)
 
     return blocks
 

@@ -21,7 +21,7 @@ data:
   MILVUS_USER: root
   PORT: "8000"
   PYTHONUNBUFFERED: "1"
-  DOCS_CONTEXT_MAX_CHARS: "2000"
+  DOCS_CONTEXT_MAX_CHARS: "4000"
 ---
 apiVersion: apps/v1
 kind: Deployment

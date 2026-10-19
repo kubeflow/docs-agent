@@ -20,7 +20,7 @@ mcp:
     milvusUri: http://milvus-milvus.ml-infra.svc.cluster.local:19530
     milvusUser: root
     maxQueryChars: 512
-    docsContextMaxChars: 2000
+    docsContextMaxChars: 4000
     maxTopK: 10
     maxCandidateHits: 40
     # auto = intent router picks bm25/hybrid/dense per query (needs the v4 hybrid collection).
