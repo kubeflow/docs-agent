@@ -5,3 +5,10 @@ fastmcp==3.4.2
 langchain-text-splitters==0.3.8
 pyyaml==6.0.2
 PyJWT[crypto]==2.10.1
+# docs ingest (hugo_ingest / canonical_rag_ingest); pinned to match
+# docs-agent-mcp/pipelines/requirements.txt and Dockerfile.pipeline
+beautifulsoup4==4.15.0
+python-frontmatter==1.1.0
+markdownify==1.2.0
+html-table-rescuer==0.3.1
+toml==0.10.2
