@@ -3,33 +3,28 @@
 **Author**: Santhosh Toorpu
 
 [![KEP-867](https://img.shields.io/badge/KEP-867-Documentation%20AI%20Assistant-blue)](https://github.com/kubeflow/community/issues/867)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Python](https://img.shields.io/badge/Python-3.11-blue.svg)](https://www.python.org/downloads/release/python-3110/)
+[![Milvus](https://img.shields.io/badge/Milvus-v2.6%2B-blue.svg)](https://milvus.io/)
+[![Kubeflow Pipelines](https://img.shields.io/badge/KFP-Supported-blue.svg)](https://www.kubeflow.org/docs/components/pipelines/v2/)
 
 The official LLM implementation of the Kubeflow Documentation Assistant powered by Retrieval-Augmented Generation (RAG). This repository provides a comprehensive solution for Kubeflow users to search across documentation and get accurate, contextual answers to their queries.
+
+Built with modern infrastructure, the system leverages **Model Context Protocol (MCP)**, **Kagent**, and **Text Embeddings Inference (TEI)** to deliver a production-ready assistant.
 
 ## Table of Contents
 
 - [Overview](#overview)
-- [Architecture](#architecture)
+- [Architecture & Design](#architecture--design)
+- [Repository layout](#repository-layout)
 - [Prerequisites](#prerequisites)
-- [Installation](#installation)
-  - [Milvus Vector Database](#milvus-vector-database)
-  - [KServe Inference Service](#kserve-inference-service)
-  - [Kubeflow Pipelines](#kubeflow-pipelines)
-  - [API Server](#api-server)
-- [Usage](#usage)
+- [Installation & Deployment](#installation--deployment)
+- [API Server & Usage](#api-server)
 - [Configuration](#configuration)
+- [Chat History and Persistence](#chat-history-and-persistence)
 - [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
-
-## Repository layout
-
-| Path | Purpose |
-|------|---------|
-| `docs-agent-mcp/` | MCP server, Kagent manifests, RAG pipelines, and Terraform platform stack |
-| `docs/agents/` | Issue-triage instruction Markdown, labels (`area/mcp`, …), architecture map |
-| `legacy/` | Historical FastAPI servers, older manifests, and Feast-era pipeline copies |
-| `frontend/` | Docs site chatbot assets (`docs_scripts/`, `docs_styles/`) |
-| `.github/workflows/` | CI/CD (`oke-cicd.yaml` builds MCP, runs tests, deploys to OKE) |
+- [License & Acknowledgments](#license)
 
 ## Overview
 
@@ -52,7 +47,7 @@ Kubeflow users often struggle to find relevant information across the extensive 
 - 🚀 **Kubernetes Native**: Built for cloud-native environments
 - 🔄 **Automated ETL**: Kubeflow Pipelines for data processing
 
-## Architecture
+## Architecture & Design
 
 ### High-Level Architecture
 
@@ -62,8 +57,8 @@ Kubeflow users often struggle to find relevant information across the extensive 
 
 ![Data Flow](assets/querying.svg)
 
-## RAG v4
 
+### RAG v4 & Intent Routing
 Production docs retrieval uses Milvus v4 hybrid search (768-d MPNet + native
 BM25), typed `release_date`, and a deterministic MCP intent router
 (`SEARCH_MODE=auto`). Structured citations flow to the chatbot UI; the LLM
@@ -79,6 +74,25 @@ Full architecture, eval numbers, and artifact trail:
 | MCP router + citations | `docs-agent-mcp/mcp-server/server.py` |
 | Milvus infra | `docs-agent-mcp/terraform/milvus.tf` |
 
+### Model Context Protocol (MCP) & Kagent
+The project has evolved to utilize the Model Context Protocol (MCP) and **kagent** to route queries intelligently. The infrastructure is heavily automated using Terraform and GitHub Actions.
+
+### Gateway Guardrails Helm Chart (`docs-agent-mcp/charts/gateway-guardrails/`)
+Guardrails protecting the publicly shared chatbot, all tunable via `values.yaml`:
+*   **Rate limiting**: 60 req/min global token bucket on the chatbot HTTPS listener.
+*   **CORS lockdown**: only the published widget origin may embed the chatbot; a 30s route timeout caps hung LLM calls.
+*   **Mesh policies**: the RAG-stack AuthorizationPolicies (Milvus, LLM, MCP, embeddings).
+
+## Repository layout
+
+| Path | Purpose |
+|------|---------|
+| `docs-agent-mcp/` | MCP server, Kagent manifests, RAG pipelines, and Terraform platform stack |
+| `docs/agents/` | Issue-triage instruction Markdown, labels (`area/mcp`, …), architecture map |
+| `legacy/` | Historical FastAPI servers, older manifests, and Feast-era pipeline copies |
+| `frontend/` | Docs site chatbot assets (`docs_scripts/`, `docs_styles/`) |
+| `.github/workflows/` | CI/CD (`oke-cicd.yaml` builds MCP, runs tests, deploys to OKE) |
+
 ## Prerequisites
 
 - Kubernetes cluster (1.20+)
@@ -87,354 +101,42 @@ Full architecture, eval numbers, and artifact trail:
 - GPU nodes (for LLM inference)
 - SSL certificate (for HTTPS API)
 
-## Installation
+## Installation & Deployment
 
-### Milvus Vector Database
+The infrastructure is heavily automated using Terraform and GitHub Actions (e.g. `docs-agent-mcp/terraform/` for OKE declarative deployment). Below are the core components:
 
-#### What is Milvus?
+### 1. Milvus Vector Database
+Milvus is an open-source vector database optimized for AI applications. We deploy a lightweight Milvus Standalone instance scheduled strictly on CPU nodes, reserving GPUs purely for LLM inference.
+<details><summary><b>View Milvus Installation Details</b></summary>
 
-Milvus is an open-source vector database designed for AI applications. It provides:
+#
+</details>
 
-- **High Performance**: Optimized for vector similarity search
-- **Scalability**: Horizontal scaling capabilities
-- **Multiple Index Types**: Support for various vector indexing algorithms
-- **Cloud Native**: Built for Kubernetes environments
-- **Multiple APIs**: REST, gRPC, and Python SDK support
-
-#### Installation Steps
-
-1. **Add Helm Repository**:
-   ```bash
-   helm repo add milvus https://milvus-io.github.io/milvus-helm/
-   helm repo update
-   ```
-
-2. **Install Milvus**:
-   ```bash
-   helm upgrade --install my-release zilliztech/milvus -n docs-agent \
-     --set cluster.enabled=false \
-     --set standalone.enabled=true \
-     --set etcd.replicaCount=1 \
-     --set etcd.persistence.enabled=false \
-     --set minio.mode=standalone \
-     --set minio.replicas=1 \
-     --set pulsar.enabled=false \
-     --set pulsarv3.enabled=false \
-     --set standalone.podAnnotations."sidecar\.istio\.io/inject"="false"
-   ```
-
-#### Configuration Rationale
-
-- **Standalone Mode**: Single-node deployment for development/testing
-- **Single etcd Replica**: Reduced resource usage with `etcd.persistence.enabled=false`
-- **Standalone MinIO**: Single MinIO instance for object storage
-- **Disabled Pulsar**: Not needed for standalone deployment
-- **Istio Sidecar Injection**: Disabled to avoid networking issues
-
-3. **Test Connection**:
-   ```python
-   from pymilvus import connections
-   connections.connect("default", host="my-release-milvus.docs-agent.svc.cluster.local", port="19530")
-   print("Connected to Milvus successfully!")
-   ```
-
-4. **External Access** (if needed for different clusters):
-   ```bash
-   kubectl expose service my-release-milvus \
-     --name milvus-external \
-     --type=NodePort \
-     --port=19530
-   ```
-
-### KServe Inference Service
+### 2. KServe Inference Service
+The LLM inference is handled by KServe with vLLM backend for high-performance serving, enabling features like `auto-tool-choice`.
+<details><summary><b>View KServe Configuration & Manifests</b></summary>
 
 The LLM inference is handled by KServe with vLLM backend for high-performance serving.
 
-#### Serving Runtime Configuration
+#
+</details>
 
-```yaml
-# manifests/serving-runtime.yaml
-apiVersion: serving.kserve.io/v1alpha1
-kind: ServingRuntime
-metadata:
-  name: llm-runtime
-  namespace: docs-agent
-spec:
-  supportedModelFormats:
-    - name: huggingface
-      version: "1"
-      autoSelect: true
-  containers:
-    - name: kserve-container
-      image: kserve/huggingfaceserver:latest-gpu
-      command: ["python", "-m", "huggingfaceserver"]
-      resources:
-        requests:
-          cpu: "4"
-          memory: "16Gi"
-          nvidia.com/gpu: "1"
-        limits:
-          cpu: "6"
-          memory: "24Gi"
-          nvidia.com/gpu: "1"
-```
-
-#### Inference Service Configuration
-
-```yaml
-# manifests/inference-service.yaml
-apiVersion: serving.kserve.io/v1beta1
-kind: InferenceService
-metadata:
-  name: llama
-  namespace: docs-agent
-spec:
-  predictor:
-    model:
-      modelFormat:
-        name: huggingface
-        version: "1"
-      runtime: llm-runtime
-      args:
-        - --model_name=llama3.1-8B
-        - --model_id=RedHatAI/Llama-3.1-8B-Instruct
-        - --backend=vllm
-        - --max-model-len=32768
-        - --gpu-memory-utilization=0.90
-        - --enable-auto-tool-choice
-        - --tool-call-parser=llama3_json
-        - --enable-tool-call-parser
-      env:
-        - name: HF_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: huggingface-secret
-              key: token
-        - name: CUDA_VISIBLE_DEVICES
-          value: "0"
-      resources:
-        requests:
-          cpu: "4"
-          memory: "16Gi"
-          nvidia.com/gpu: "1"
-        limits:
-          cpu: "6"
-          memory: "24Gi"
-          nvidia.com/gpu: "1"
-```
-
-#### Key Configuration Points
-
-- **Tool Calling**: Enabled with `--enable-auto-tool-choice` and `--enable-tool-call-parser`
-- **Custom Template**: vLLM supports custom templates for different model formats
-- **Resource Allocation**: GPU memory utilization set to 90% for optimal performance
-- **HuggingFace Token**: Required for accessing the model
-
-**Connection Details**:
-```python
-KSERVE_URL = os.getenv("KSERVE_URL", "http://llama.docs-agent.svc.cluster.local/openai/v1/chat/completions")
-MODEL = os.getenv("MODEL", "llama3.1-8B")
-```
-
-For more details, refer to [KServe documentation](https://kserve.github.io/website/) and [vLLM documentation](https://docs.vllm.ai/).
-
-### Kubeflow Pipelines
+### 3. Kubeflow Pipelines & TEI Embeddings
+The ETL process (Extract, Transform, Load) is implemented as a Kubeflow Pipeline for automated, scalable data processing. It has been modernized to use direct Milvus insertions and TEI embedding inference.
+<details><summary><b>View Pipeline Details & Code</b></summary>
 
 The ETL (Extract, Transform, Load) process is implemented as a Kubeflow Pipeline for automated, scalable data processing.
 
-#### Why Kubeflow Pipelines?
+#
+</details>
 
-- **Infrastructure Management**: Kubernetes handles all infrastructure automatically
-- **Scalability**: Auto-scaling based on workload demands
-- **Reproducibility**: Version-controlled pipeline definitions
-- **Integration**: Seamless integration with other Kubeflow components
-- **CI/CD Ready**: Can be triggered via GitHub Actions or other automation tools
-
-#### Pipeline Components
-
-The pipeline consists of three main phases:
-
-##### 1. Repository Fetching
-
-```python
-@dsl.component(
-    base_image="python:3.9",
-    packages_to_install=["requests", "beautifulsoup4"]
-)
-def download_github_directory(
-    repo_owner: str,
-    repo_name: str,
-    directory_path: str,
-    github_token: str,
-    github_data: dsl.Output[dsl.Dataset]
-):
-    # Fetches documentation files from GitHub repositories
-    # Supports .md and .html files
-    # Handles authentication and recursive directory traversal
-```
-
-##### 2. Text Chunking and Embedding
-
-```python
-@dsl.component(
-    base_image="pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime",
-    packages_to_install=["sentence-transformers", "langchain"]
-)
-def chunk_and_embed(
-    github_data: dsl.Input[dsl.Dataset],
-    repo_name: str,
-    base_url: str,
-    target_tokens: int,
-    overlap_tokens: int,
-    embedded_data: dsl.Output[dsl.Dataset]
-):
-    # Uses canonical Hugo/Markdown parsing and release_date extraction
-    # Calls the deployed TEI service for 768-dimensional embeddings
-    # Emits token-aware chunks with native BM25 input text
-```
-
-##### 3. Vector Database Storage
-
-```python
-@dsl.component(
-    base_image="python:3.9",
-    packages_to_install=["pymilvus", "numpy"]
-)
-def store_milvus(
-    embedded_data: dsl.Input[dsl.Dataset],
-    milvus_host: str,
-    milvus_port: str,
-    collection_name: str
-):
-    # Creates the v4 hybrid schema with dense and native BM25 vectors
-    # Inserts vectors in batches for efficiency
-    # Creates dense and sparse indexes for hybrid retrieval
-```
-
-#### RBAC Configuration
-
-For Kubeflow Pipelines to access Milvus, proper RBAC permissions are required:
-
-```bash
-# Create role for Milvus access
-kubectl create role milvus-access \
-  --namespace docs-agent \
-  --verb=get,list,watch \
-  --resource=services,endpoints
-
-# Bind role to KFP service account
-kubectl create rolebinding kfp-to-milvus-editor \
-  --namespace docs-agent \
-  --role=milvus-access \
-  --serviceaccount=kubeflow:default-editor
-```
-
-**Note**: Without these permissions, you'll encounter RBAC errors during the embedding phase.
-
-#### Future Improvements
-
-A better improvement would be using the embedding model as a service where users could call the service instead of installing heavy sentence transformers package every time. This would:
-
-- Reduce pipeline execution time
-- Lower resource requirements
-- Enable better caching and optimization
-- Improve scalability
-
-### API Server
+## API Server
+Two API implementations are provided for different use cases: WebSocket (real-time streaming) and HTTPS (RESTful integrations).
+<details><summary><b>View API Server Endpoints & Usage Examples</b></summary>
 
 Two API implementations are provided for different use cases:
 
-#### WebSocket API (`server/app.py`)
-
-**Use Case**: Real-time chat applications, interactive interfaces
-
-**Features**:
-- Bidirectional communication
-- Real-time streaming responses
-- Tool call execution with live updates
-- Connection management and error handling
-
-**Key Components**:
-```python
-async def handle_websocket(websocket, path):
-    """Handle WebSocket connections with tool calling support"""
-    # Manages connection lifecycle
-    # Handles message routing and tool execution
-    # Provides real-time streaming responses
-
-async def stream_llm_response(payload, websocket, citations_collector):
-    """Stream LLM responses with tool call handling"""
-    # Processes streaming responses from KServe
-    # Manages tool call accumulation and execution
-    # Handles follow-up requests after tool execution
-```
-
-#### HTTPS API (`server-https/app.py`)
-
-**Use Case**: RESTful integrations, server-to-server communication, web applications
-
-**Key Features**:
-- **Dual Response Modes**: Both streaming (Server-Sent Events) and non-streaming JSON responses
-- **RAG Integration**: Automatic tool calling for Kubeflow documentation search
-- **CORS Support**: Full cross-origin resource sharing for web applications
-- **FastAPI Framework**: Automatic OpenAPI documentation and type validation
-- **Production Ready**: Health checks, error handling, and Kubernetes integration
-- **Citation Management**: Automatic collection and deduplication of source citations
-
-**API Endpoints**:
-
-**Main Chat Endpoint**:
-```python
-@app.post("/chat")
-async def chat(request: ChatRequest):
-    """Main chat endpoint with RAG capabilities"""
-    # Supports both streaming and non-streaming responses
-    # Handles tool calling and citation collection
-    # Returns structured JSON responses
-```
-
-**Health Check Endpoint**:
-```python
-@app.get("/health")
-async def health_check():
-    """Health check for Kubernetes probes"""
-    # Essential for production deployments
-    # Used by readiness and liveness probes
-```
-
-**Request/Response Models**:
-```python
-class ChatRequest(BaseModel):
-    message: str
-    stream: Optional[bool] = True  # Default to streaming
-
-# Streaming Response (SSE)
-data: {"type": "content", "content": "response text"}
-data: {"type": "tool_result", "tool_name": "search_kubeflow_docs", "content": "search results"}
-data: {"type": "citations", "citations": ["url1", "url2"]}
-data: {"type": "done"}
-
-# Non-streaming Response
-{
-    "response": "Complete response text",
-    "citations": ["url1", "url2"]  # or null if no citations
-}
-```
-
-**Advanced Features**:
-
-- **Intelligent Tool Calling**: Automatically determines when to search documentation based on query context
-- **Streaming Tool Execution**: Real-time tool call execution with live updates
-- **Citation Tracking**: Automatic collection and deduplication of source URLs
-- **Error Handling**: Comprehensive error handling with detailed error messages
-- **CORS Configuration**: Full CORS support for web application integration
-- **Resource Management**: Proper connection pooling and cleanup for Milvus and KServe
-
-#### SSL Certificate Requirements
-
-**Critical**: Both APIs require SSL certificates from a trusted Certificate Authority. Without proper SSL certificates, browsers will block WebSocket connections and HTTPS requests.
-
-## Usage
+#
 
 ### Starting the Services
 
@@ -564,6 +266,8 @@ print(f"Response: {data['response']}")
 if data.get('citations'):
     print(f"Sources: {data['citations']}")
 ```
+
+</details>
 
 ## Configuration
 
@@ -717,7 +421,6 @@ We welcome contributions! Please see our [contributing guidelines](CONTRIBUTING.
 5. Submit a pull request
 
 ## License
-
 This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
 
 ## Acknowledgments
@@ -739,36 +442,3 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 - [vLLM](https://github.com/vllm-project/vllm) for high-performance LLM inference
 
 ---
-
-## Modern Infrastructure & CI/CD (Kagent & MCP)
-
-The project has evolved to utilize the Model Context Protocol (MCP) and **kagent** to route queries intelligently. The infrastructure is heavily automated using Terraform and GitHub Actions.
-
-### Terraform (`docs-agent-mcp/terraform/`)
-We use Terraform for declarative, reproducible cluster infrastructure on OKE.
-*   **`variables.tf`**: Single source of truth for component versions (Knative, Istio, KServe, etc.) and namespace names.
-*   **`namespaces.tf`**: Manages the `ml-infra` and `docs-agent` namespaces.
-*   **`knative.tf`**: Installs `cert-manager`, Knative Serving (Core & CRDs), Istio base/istiod, and KServe, applying crucial ConfigMap patches for scheduling.
-*   **`kubeflow_pipelines.tf`**: Deploys Kubeflow Pipelines (Standalone) into the `kubeflow` namespace without Istio sidecars (to prevent routing conflicts), persisting `fsGroup` patches for SeaweedFS.
-*   **`milvus.tf`**: Uses the Milvus Operator to deploy a lightweight Milvus Standalone instance strictly scheduled on CPU nodes, reserving GPU nodes purely for LLM inference.
-*   **`kagent.tf`**: Installs official `kagent-crds` and the `kagent` controller via OCI Helm charts, with bundled agents cleanly disabled.
-*   **`gateway_guardrails.tf`**: Installs the local `charts/gateway-guardrails` Helm chart — the single source of truth for the public edge: Istio Gateway + TLS, CORS-locked VirtualService, rate limits, and the zero-trust AuthorizationPolicies that explicitly allow internal cluster traffic where needed (e.g., KFP Pipeline to Milvus, Kagent to Milvus). Replaces the former inline `istio_policies.tf` / `kagent_ingress.tf`.
-
-### Gateway Guardrails Helm Chart (`docs-agent-mcp/charts/gateway-guardrails/`)
-Guardrails protecting the publicly shared chatbot, all tunable via `values.yaml`:
-*   **Rate limiting**: 60 req/min global token bucket on the chatbot HTTPS listener (EnvoyFilter), plus an optional per-client-IP layer (Envoy ratelimit service + Redis, off until the ingress preserves client IPs).
-*   **CORS lockdown**: only the published widget origin may embed the chatbot; a 30s route timeout caps hung LLM calls.
-*   **Mesh policies**: the RAG-stack AuthorizationPolicies (Milvus, LLM, MCP, embeddings), previously raw YAML heredocs inside Terraform.
-
-### Pipeline Optimizations (`docs-agent-mcp/pipelines/`)
-The ingestion pipeline was rewritten to maximize efficiency and avoid Kubernetes ephemeral storage eviction:
-*   **Feast Removal**: The pipeline now writes embeddings directly to Milvus using `pymilvus`, dramatically lowering complexity.
-*   **TEI Embeddings**: Chunking components call the in-cluster TEI embeddings service over HTTP instead of loading a model in-process, so `Dockerfile.pipeline` stays a plain `python:3.11-slim` image with no PyTorch/model weights baked in — avoiding both the OKE pod eviction and Hugging Face rate-limit issues without the multi-GB image.
-
-### GitHub Actions CI/CD (`.github/workflows/`)
-| Workflow | When it runs | Purpose |
-|----------|----------------|---------|
-| **`oke-cicd.yaml`** | Every PR and push to `main` | Compile pipelines, ruff, pytest; build/push MCP image to GHCR and optional OKE deploy when repo var `ENABLE_OKE_DEPLOY=true` |
-| **`tests.yml`** | Every PR and push to `main` | Ruff lint/format + pytest (no cluster) |
-
-Operator forks set `ENABLE_OKE_DEPLOY=true` and configure the `kubeflow` GitHub Environment (OCI secrets) for cluster deploy and `smoke_tools.py` validation. GHCR push uses the built-in `GITHUB_TOKEN`; optional `GHCR_TOKEN` / `GHCR_USERNAME` are only needed if the package is private.
