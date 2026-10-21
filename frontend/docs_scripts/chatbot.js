@@ -1513,7 +1513,7 @@ document.addEventListener('DOMContentLoaded', async function () {
         const pillHtml = `
             <div class="flo-tool-status" id="active-tool-status">
                 <div class="flo-tool-status-icon">${iconSvg}</div>
-                <span class="flo-tool-status-text">${escapeHtml(text)}</span>
+                <span class="flo-tool-status-text">${escapeMarkdownHtml(text)}</span>
             </div>
         `;
 
@@ -2214,8 +2214,8 @@ document.addEventListener('DOMContentLoaded', async function () {
                         </svg>
                     </div>
                     <div class="citation-pill-text">
-                        <span class="citation-pill-title">${escapeHtml(info.title)}</span>
-                        <span class="citation-pill-sub">${escapeHtml(info.domain)}</span>
+                        <span class="citation-pill-title">${escapeMarkdownHtml(info.title)}</span>
+                        <span class="citation-pill-sub">${escapeMarkdownHtml(info.domain)}</span>
                     </div>
                 </div>
                 <span class="citation-external-icon">
