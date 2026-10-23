@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Docs Bot — Local Demo</title>
+<link rel="stylesheet" href="../docs_styles/chatbot.css">
+<style>
+  body { font-family: sans-serif; max-width: 700px; margin: 60px auto; padding: 0 20px; }
+</style>
+</head>
+<body>
+  <h1>Kubeflow Docs Site (stand-in)</h1>
+  <p>This page stands in for the real docs site. Click the "Docs Bot" button in the
+     bottom corner to open the chat widget. It's wired to a local mock agent
+     (<code>mock_server.py</code>) that fakes a KAgent A2A streaming response.</p>
+
+  <script>
+    // Point the widget at our local mock backend instead of a real Kagent cluster.
+    window.KUBEFLOW_DOCS_AGENT_URL = 'http://localhost:8000/mock-agent';
+  </script>
+  <script src="../docs_scripts/chatbot.js" defer></script>
+</body>
+</html>

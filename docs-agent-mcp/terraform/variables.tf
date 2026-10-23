@@ -85,3 +85,23 @@ variable "embeddings_max_batch_tokens" {
   type        = string
   default     = "16384"
 }
+
+# --- TEI Reranker (ml-infra) -------------------------------------------------
+
+variable "reranker_model_id" {
+  description = "Hugging Face cross-encoder model ID served by TEI"
+  type        = string
+  default     = "BAAI/bge-reranker-base"
+}
+
+variable "reranker_max_client_batch_size" {
+  description = "TEI --max-client-batch-size for reranker"
+  type        = string
+  default     = "32"
+}
+
+variable "reranker_max_batch_tokens" {
+  description = "TEI --max-batch-tokens for reranker"
+  type        = string
+  default     = "16384"
+}
