@@ -181,18 +181,17 @@ def rerank_by_release_date(hits: list[dict], top_k: int) -> list[dict]:
     return (dated + undated)[:top_k]
 
 
+def _version_pattern(version: str) -> re.Pattern:
+    """Match the version as a whole number: 1.1 is in v1.1.0, but not in 1.10 or v2.1.1."""
+    core = re.escape(version.lower().lstrip("v"))
+    return re.compile(rf"(?<![\d.])v?{core}(?!\d)", re.I)
+
+
 def entity_matches_version(entity: dict, versions: list[str]) -> bool:
-    entity_version = str(entity.get("version", "")).lower()
-    content = str(entity.get("content_text", "")).lower()
-    file_path = str(entity.get("file_path", "")).lower()
+    fields = [str(entity.get(key, "")) for key in ("version", "content_text", "file_path")]
     for version in versions:
-        normalized = version.lower().lstrip("v")
-        if (
-            normalized in entity_version
-            or normalized in content
-            or normalized in file_path
-            or version.lower() in content
-        ):
+        pattern = _version_pattern(version)
+        if any(pattern.search(field) for field in fields):
             return True
     return False
 
