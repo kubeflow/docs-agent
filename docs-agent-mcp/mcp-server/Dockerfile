@@ -5,7 +5,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY citations.py embeddings_client.py flo_tracing.py intent_router.py milvus_search.py rag_collections.py server.py smoke_tools.py .
+COPY citations.py compressor.py embeddings_client.py flo_tracing.py intent_router.py milvus_search.py rag_collections.py reranker_client.py server.py smoke_tools.py .
 
 ENV PORT=8000
 

@@ -16,10 +16,12 @@ data:
   AUTO_TEMPORAL_CANDIDATE_DEPTH: "50"
   AUTO_BM25_CANDIDATE_DEPTH: "30"
   EMBEDDINGS_URL: http://embeddings-service-predictor.ml-infra.svc.cluster.local/embed
+  RERANKER_URL: http://reranker-service-predictor.ml-infra.svc.cluster.local/rerank
   MILVUS_URI: http://milvus-milvus.ml-infra.svc.cluster.local:19530
   MILVUS_USER: root
   PORT: "8000"
   PYTHONUNBUFFERED: "1"
+  DOCS_CONTEXT_MAX_CHARS: "4000"
 ---
 apiVersion: apps/v1
 kind: Deployment
