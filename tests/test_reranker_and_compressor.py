@@ -156,3 +156,36 @@ def test_wrapped_sentence_is_not_cut():
         "Katib searches the latest reported `accuracy` metrics for each Trial.",
         "Check the metrics strategies example.",
     ]
+
+
+def test_allocate_budgets_never_negative_or_over_cap():
+    # Regression: the per-hit floor must not push any budget negative or the
+    # total above max_chars, even when many hits compete for a modest budget
+    # (i.e. top_k * floor > max_chars).
+    for n, max_chars in [(12, 1000), (20, 1500), (8, 500), (20, 4000), (3, 50)]:
+        budgets = compressor._allocate_budgets([{}] * n, max_chars)
+        assert len(budgets) == n
+        assert all(b >= 0 for b in budgets), (n, max_chars, budgets)
+        assert sum(budgets) <= max_chars, (n, max_chars, budgets)
+
+
+def test_compressor_respects_budget_with_many_hits():
+    # Regression: with many hits and a modest cap the assembled output must stay
+    # within max_chars. Previously the top-ranked hit received a negative budget
+    # and the joined output overshot the cap it exists to enforce.
+    hits = [
+        {
+            "entity": {
+                "content_text": (
+                    f"Section {i}. Kubeflow Pipelines orchestrates ML workflows on "
+                    f"Kubernetes. Paragraph {i} covers deployment, scaling and serving. "
+                )
+                * 2
+            }
+        }
+        for i in range(12)
+    ]
+    max_chars = 1000
+    compressed = compressor.compress_hits("kubeflow pipelines serving", hits, max_chars)
+    total = sum(len(h["entity"]["content_text"]) for h in compressed)
+    assert total <= max_chars, total
