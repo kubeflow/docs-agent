@@ -203,6 +203,28 @@ async def run_pipeline():
         assert chunks[1]["content"].startswith("@decorator")
         assert chunks[1]["file_type"] == "python"
 
+    def test_decorated_first_node_not_duplicated_in_header(self):
+        # Regression: the first node's decorator must belong to the function
+        # chunk only. Previously the module header (which stops at the def line,
+        # not the decorator line) also captured the decorator, duplicating it --
+        # common for Kubeflow code using @dsl.component / @dsl.pipeline.
+        content = (
+            "import os\n"
+            "import sys\n"
+            "\n"
+            "@dsl.component\n"
+            "def my_comp(a):\n"
+            "    return a + 1\n"
+        )
+
+        chunks = parse_python_ast(content, "pipeline.py")
+
+        header = next(c for c in chunks if c["resource_kind"] == "module_header")
+        func = next(c for c in chunks if c["resource_name"] == "my_comp")
+        assert "@dsl.component" not in header["content"]
+        assert header["content"] == "import os\nimport sys"
+        assert func["content"].startswith("@dsl.component")
+
     def test_returns_module_chunk_when_no_top_level_defs(self):
         content = "PIPELINE_ROOT = '/tmp/pipeline'\nDEFAULT_TIMEOUT = 30\n"
 
