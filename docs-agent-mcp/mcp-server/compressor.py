@@ -233,10 +233,26 @@ def _allocate_budgets(hits: list[dict], max_chars: int) -> list[int]:
 
     weights = [1.0 / ((i + 1) ** 0.6) for i in range(n)]
     total_weight = sum(weights)
-    budgets = [max(100, int((w / total_weight) * max_chars)) for w in weights]
 
+    # Per-hit floor to avoid starving tail hits, but never larger than an even
+    # split -- otherwise the floors alone can exceed max_chars.
+    min_per_hit = min(100, max_chars // n)
+    budgets = [max(min_per_hit, int((w / total_weight) * max_chars)) for w in weights]
+
+    # If the floor pushed the total over budget, reclaim from the lowest-ranked
+    # hits first (down to the floor) so higher-ranked hits keep their share.
+    overflow = sum(budgets) - max_chars
+    i = n - 1
+    while overflow > 0 and i >= 0:
+        take = min(budgets[i] - min_per_hit, overflow)
+        budgets[i] -= take
+        overflow -= take
+        i -= 1
+
+    # Hand any remaining surplus to the top hit (keeps sum == max_chars).
     diff = max_chars - sum(budgets)
-    budgets[0] += diff
+    if diff > 0:
+        budgets[0] += diff
     return budgets
 
 
@@ -299,13 +315,16 @@ def compress_hits(query: str, hits: list[dict], max_chars: int) -> list[dict]:
         for b in scored_blocks_sorted:
             if b["idx"] == 0 and lead_block in selected:
                 continue
-            if used_chars + b["len"] > allocated_budget:
+            # Blocks are later joined with a 1- or 2-char separator; count the
+            # worst case so the assembled text still respects the budget.
+            sep = 2 if selected else 0
+            if used_chars + sep + b["len"] > allocated_budget:
                 if not selected:
                     selected.append(b)
                     used_chars += b["len"]
                 continue
             selected.append(b)
-            used_chars += b["len"]
+            used_chars += sep + b["len"]
 
         selected.sort(key=lambda x: x["idx"])
         surplus_budget = max(0, allocated_budget - used_chars)
