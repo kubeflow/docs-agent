@@ -12,6 +12,7 @@ from typing import Any, Sequence
 
 from pymilvus import CollectionSchema, DataType, FieldSchema, Function, FunctionType, MilvusClient
 
+from lease_coordination import CollectionLeaseProvider
 from canonical_rag_ingest import (
     DEFAULT_OVERLAP_TOKENS,
     DEFAULT_TARGET_TOKENS,
@@ -300,6 +301,8 @@ def store_embedded_records(
     clean_rebuild_confirmation: str,
     maintenance_lock_token: str,
     client: MilvusClient | None = None,
+    lease_provider: CollectionLeaseProvider | None = None,
+    lease_ttl_seconds: int = 300,
 ) -> dict[str, Any]:
     """Read embedded JSONL and write the docs collection."""
     validate_production_collection_name(collection_name)
@@ -308,6 +311,10 @@ def store_embedded_records(
         clean_rebuild_confirmation=clean_rebuild_confirmation,
         maintenance_lock_token=maintenance_lock_token,
     )
+
+    lease_token: str | None = None
+    if lease_provider is not None:
+        lease_token = lease_provider.acquire(collection_name, ttl_seconds=lease_ttl_seconds)
 
     milvus_user = os.environ.get("MILVUS_USER", "root")
     milvus_password = os.environ.get("MILVUS_PASSWORD", "")
@@ -358,55 +365,62 @@ def store_embedded_records(
 
     rows = [prepare_v4_insert_row(record) for record in records]
 
-    if not clean_rebuild:
-        unique_ids = sorted({row[DOCUMENT_ID_FIELD] for row in rows})
-        deleted = 0
-        for start in range(0, len(unique_ids), DELETE_BATCH_SIZE):
-            batch_ids = unique_ids[start : start + DELETE_BATCH_SIZE]
-            quoted = ", ".join(f'"{doc_id}"' for doc_id in batch_ids)
-            result = milvus.delete(
-                collection_name=collection_name,
-                filter=f"{DOCUMENT_ID_FIELD} in [{quoted}]",
-            )
-            deleted += int(result.get("delete_count", 0) or 0)
-        if deleted:
-            print(f"Deleted {deleted} existing chunks for {len(unique_ids)} documents")
+    if lease_provider is not None and lease_token is not None:
+        lease_provider.validate(collection_name, lease_token)
 
-    inserted_count = 0
-    batch: list[dict[str, Any]] = []
-    for row in rows:
-        batch.append(row)
-        if len(batch) >= INSERT_BATCH_SIZE:
+    try:
+        if not clean_rebuild:
+            unique_ids = sorted({row[DOCUMENT_ID_FIELD] for row in rows})
+            deleted = 0
+            for start in range(0, len(unique_ids), DELETE_BATCH_SIZE):
+                batch_ids = unique_ids[start : start + DELETE_BATCH_SIZE]
+                quoted = ", ".join(f'"{doc_id}"' for doc_id in batch_ids)
+                result = milvus.delete(
+                    collection_name=collection_name,
+                    filter=f"{DOCUMENT_ID_FIELD} in [{quoted}]",
+                )
+                deleted += int(result.get("delete_count", 0) or 0)
+            if deleted:
+                print(f"Deleted {deleted} existing chunks for {len(unique_ids)} documents")
+
+        inserted_count = 0
+        batch: list[dict[str, Any]] = []
+        for row in rows:
+            batch.append(row)
+            if len(batch) >= INSERT_BATCH_SIZE:
+                milvus.insert(collection_name=collection_name, data=batch)
+                inserted_count += len(batch)
+                batch.clear()
+        if batch:
             milvus.insert(collection_name=collection_name, data=batch)
             inserted_count += len(batch)
-            batch.clear()
-    if batch:
-        milvus.insert(collection_name=collection_name, data=batch)
-        inserted_count += len(batch)
 
-    milvus.flush(collection_name)
-    milvus.load_collection(collection_name)
+        milvus.flush(collection_name)
+        milvus.load_collection(collection_name)
 
-    stats = milvus.get_collection_stats(collection_name)
-    entity_count = int(stats.get("row_count", 0) or 0)
+        stats = milvus.get_collection_stats(collection_name)
+        entity_count = int(stats.get("row_count", 0) or 0)
 
-    indexes = milvus.list_indexes(collection_name=collection_name)
-    index_names = set()
-    for item in indexes:
-        if isinstance(item, str):
-            index_names.add(item)
-        elif isinstance(item, dict):
-            index_names.add(item.get("index_name") or item.get("field_name"))
+        indexes = milvus.list_indexes(collection_name=collection_name)
+        index_names = set()
+        for item in indexes:
+            if isinstance(item, str):
+                index_names.add(item)
+            elif isinstance(item, dict):
+                index_names.add(item.get("index_name") or item.get("field_name"))
 
-    metrics = compute_validation_metrics(
-        collection_name=collection_name,
-        records=records,
-        inserted_count=inserted_count,
-        entity_count=entity_count,
-        dense_ready=DENSE_FIELD in index_names,
-        sparse_ready=SPARSE_FIELD in index_names,
-        clean_rebuild=clean_rebuild,
-    )
-    print("VALIDATION_METRICS=" + json.dumps(metrics, ensure_ascii=False, separators=(",", ":")))
-    return metrics
+        metrics = compute_validation_metrics(
+            collection_name=collection_name,
+            records=records,
+            inserted_count=inserted_count,
+            entity_count=entity_count,
+            dense_ready=DENSE_FIELD in index_names,
+            sparse_ready=SPARSE_FIELD in index_names,
+            clean_rebuild=clean_rebuild,
+        )
+        print("VALIDATION_METRICS=" + json.dumps(metrics, ensure_ascii=False, separators=(",", ":")))
+        return metrics
+    finally:
+        if lease_provider is not None and lease_token is not None:
+            lease_provider.release(collection_name, lease_token)
 
