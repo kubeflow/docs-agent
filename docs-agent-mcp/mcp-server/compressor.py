@@ -293,7 +293,13 @@ def compress_hits(query: str, hits: list[dict], max_chars: int) -> list[dict]:
 
         blocks = _split_into_blocks(content)
         if not blocks:
-            compressed_hits.append(hit)
+            # Preserve a bounded plain-text fallback when segmentation yields
+            # no blocks; never pass an oversized hit through unchanged.
+            if allocated_budget > 0:
+                hit_copy = hit.copy()
+                hit_copy["entity"] = hit_copy["entity"].copy()
+                hit_copy["entity"]["content_text"] = content[:allocated_budget]
+                compressed_hits.append(hit_copy)
             continue
 
         scored_blocks = []
@@ -319,9 +325,6 @@ def compress_hits(query: str, hits: list[dict], max_chars: int) -> list[dict]:
             # worst case so the assembled text still respects the budget.
             sep = 2 if selected else 0
             if used_chars + sep + b["len"] > allocated_budget:
-                if not selected:
-                    selected.append(b)
-                    used_chars += b["len"]
                 continue
             selected.append(b)
             used_chars += sep + b["len"]
