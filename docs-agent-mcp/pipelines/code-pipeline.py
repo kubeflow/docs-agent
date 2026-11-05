@@ -248,9 +248,11 @@ def chunk_and_embed_code(
                 "file_type": "python",
             }]
 
-        first_node_line = nodes[0].lineno
-        if first_node_line > 1:
-            header = "\n".join(lines[:first_node_line - 1]).strip()
+        first_start_line = nodes[0].lineno
+        if nodes[0].decorator_list:
+            first_start_line = nodes[0].decorator_list[0].lineno
+        if first_start_line > 1:
+            header = "\n".join(lines[:first_start_line - 1]).strip()
             if header and len(header) >= 10:
                 chunks.append({
                     "content": header,

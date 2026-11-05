@@ -115,6 +115,49 @@ def test_compiled_code_pipeline_injects_required_secrets(tmp_path):
     assert "github-pat" in compiled
 
 
+def test_inline_code_pipeline_does_not_duplicate_first_decorator(monkeypatch, tmp_path):
+    """The KFP component's inline parser must keep decorators out of the header."""
+    module = load_code_pipeline_module()
+    source = (
+        "import os\n"
+        "import sys\n"
+        "\n"
+        "@dsl.component\n"
+        "def my_comp(a):\n"
+        "    return a + 1\n"
+    )
+    input_path = tmp_path / "code.jsonl"
+    input_path.write_text(
+        json.dumps({
+            "content": source,
+            "path": "pipeline.py",
+            "repo": "kubeflow/pipelines",
+            "file_name": "pipeline.py",
+        }) + "\n"
+    )
+    monkeypatch.setattr(
+        "requests.post",
+        lambda *args, **kwargs: FakeResponse([[0.1], [0.2]]),
+    )
+    output_path = tmp_path / "embedded.jsonl"
+
+    module.chunk_and_embed_code.python_func(
+        code_data=SimpleNamespace(path=str(input_path)),
+        chunk_size=1000,
+        chunk_overlap=100,
+        embeddings_service_url="http://embeddings.test/embed",
+        embedding_batch_size=8,
+        embedded_data=SimpleNamespace(path=str(output_path)),
+    )
+
+    chunks = [json.loads(line) for line in output_path.read_text().splitlines()]
+    header = next(chunk for chunk in chunks if chunk["resource_kind"] == "module_header")
+    function = next(chunk for chunk in chunks if chunk["resource_name"] == "my_comp")
+    assert header["content_text"] == "import os\nimport sys"
+    assert "@dsl.component" not in header["content_text"]
+    assert function["content_text"].startswith("@dsl.component")
+
+
 class TestParseYamlDocuments:
     """Tests for Kubernetes YAML-aware chunking."""
 
@@ -202,6 +245,28 @@ async def run_pipeline():
         ]
         assert chunks[1]["content"].startswith("@decorator")
         assert chunks[1]["file_type"] == "python"
+
+    def test_decorated_first_node_not_duplicated_in_header(self):
+        # Regression: the first node's decorator must belong to the function
+        # chunk only. Previously the module header (which stops at the def line,
+        # not the decorator line) also captured the decorator, duplicating it --
+        # common for Kubeflow code using @dsl.component / @dsl.pipeline.
+        content = (
+            "import os\n"
+            "import sys\n"
+            "\n"
+            "@dsl.component\n"
+            "def my_comp(a):\n"
+            "    return a + 1\n"
+        )
+
+        chunks = parse_python_ast(content, "pipeline.py")
+
+        header = next(c for c in chunks if c["resource_kind"] == "module_header")
+        func = next(c for c in chunks if c["resource_name"] == "my_comp")
+        assert "@dsl.component" not in header["content"]
+        assert header["content"] == "import os\nimport sys"
+        assert func["content"].startswith("@dsl.component")
 
     def test_returns_module_chunk_when_no_top_level_defs(self):
         content = "PIPELINE_ROOT = '/tmp/pipeline'\nDEFAULT_TIMEOUT = 30\n"
