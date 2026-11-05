@@ -119,12 +119,12 @@ def test_inline_code_pipeline_does_not_duplicate_first_decorator(monkeypatch, tm
     """The KFP component's inline parser must keep decorators out of the header."""
     module = load_code_pipeline_module()
     source = (
-        "import os\\n"
-        "import sys\\n"
-        "\\n"
-        "@dsl.component\\n"
-        "def my_comp(a):\\n"
-        "    return a + 1\\n"
+        "import os\n"
+        "import sys\n"
+        "\n"
+        "@dsl.component\n"
+        "def my_comp(a):\n"
+        "    return a + 1\n"
     )
     input_path = tmp_path / "code.jsonl"
     input_path.write_text(
@@ -133,7 +133,7 @@ def test_inline_code_pipeline_does_not_duplicate_first_decorator(monkeypatch, tm
             "path": "pipeline.py",
             "repo": "kubeflow/pipelines",
             "file_name": "pipeline.py",
-        }) + "\\n"
+        }) + "\n"
     )
     monkeypatch.setattr(
         "requests.post",
@@ -153,7 +153,7 @@ def test_inline_code_pipeline_does_not_duplicate_first_decorator(monkeypatch, tm
     chunks = [json.loads(line) for line in output_path.read_text().splitlines()]
     header = next(chunk for chunk in chunks if chunk["resource_kind"] == "module_header")
     function = next(chunk for chunk in chunks if chunk["resource_name"] == "my_comp")
-    assert header["content_text"] == "import os\\nimport sys"
+    assert header["content_text"] == "import os\nimport sys"
     assert "@dsl.component" not in header["content_text"]
     assert function["content_text"].startswith("@dsl.component")
 
