@@ -115,6 +115,49 @@ def test_compiled_code_pipeline_injects_required_secrets(tmp_path):
     assert "github-pat" in compiled
 
 
+def test_inline_code_pipeline_does_not_duplicate_first_decorator(monkeypatch, tmp_path):
+    """The KFP component's inline parser must keep decorators out of the header."""
+    module = load_code_pipeline_module()
+    source = (
+        "import os\\n"
+        "import sys\\n"
+        "\\n"
+        "@dsl.component\\n"
+        "def my_comp(a):\\n"
+        "    return a + 1\\n"
+    )
+    input_path = tmp_path / "code.jsonl"
+    input_path.write_text(
+        json.dumps({
+            "content": source,
+            "path": "pipeline.py",
+            "repo": "kubeflow/pipelines",
+            "file_name": "pipeline.py",
+        }) + "\\n"
+    )
+    monkeypatch.setattr(
+        "requests.post",
+        lambda *args, **kwargs: FakeResponse([[0.1], [0.2]]),
+    )
+    output_path = tmp_path / "embedded.jsonl"
+
+    module.chunk_and_embed_code.python_func(
+        code_data=SimpleNamespace(path=str(input_path)),
+        chunk_size=1000,
+        chunk_overlap=100,
+        embeddings_service_url="http://embeddings.test/embed",
+        embedding_batch_size=8,
+        embedded_data=SimpleNamespace(path=str(output_path)),
+    )
+
+    chunks = [json.loads(line) for line in output_path.read_text().splitlines()]
+    header = next(chunk for chunk in chunks if chunk["resource_kind"] == "module_header")
+    function = next(chunk for chunk in chunks if chunk["resource_name"] == "my_comp")
+    assert header["content_text"] == "import os\\nimport sys"
+    assert "@dsl.component" not in header["content_text"]
+    assert function["content_text"].startswith("@dsl.component")
+
+
 class TestParseYamlDocuments:
     """Tests for Kubernetes YAML-aware chunking."""
 
