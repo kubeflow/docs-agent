@@ -135,6 +135,8 @@
     {"id": "docs-katib-trial-limits", "agent": "docs", "group": "docs_routing", "q": "Where do I set resource limits for a Katib trial template?", "expect": {"type": "call", "tools": ["search_kubeflow_docs"], "keep": ["trial"]}},
     {"id": "docs-kfp-caching", "agent": "docs", "group": "docs_routing", "q": "How does KFP caching work and how do I disable it for one task?", "expect": {"type": "call", "tools": ["search_kubeflow_docs"], "keep": ["cach"]}},
     {"id": "docs-notebook-default-size", "agent": "docs", "group": "docs_routing", "q": "What is the default workspace volume size for Kubeflow notebooks?", "expect": {"type": "call", "tools": ["search_kubeflow_docs"], "keep": ["notebook"]}},
+    {"id": "docs-helm-chart-short", "agent": "docs", "group": "docs_routing", "q": "do we have a helm chart?", "expect": {"type": "call", "tools": ["search_kubeflow_docs"], "keep": ["helm"]}},
+    {"id": "docs-workspaces-new-release", "agent": "docs", "group": "docs_routing", "q": "Are the new workspaces in the new release?", "expect": {"type": "call", "tools": ["search_kubeflow_docs"], "keep": ["workspace", "release"]}},
 
     {"id": "fid-latest-release", "agent": "docs", "group": "query_fidelity", "q": "What is the latest Kubeflow release?", "expect": {"type": "call", "tools": ["search_kubeflow_docs"], "keep": ["latest"]}},
     {"id": "fid-current-kfp", "agent": "docs", "group": "query_fidelity", "q": "What is the current version of Kubeflow Pipelines?", "expect": {"type": "call", "tools": ["search_kubeflow_docs"], "keep_any": ["current", "latest"]}},

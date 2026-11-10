@@ -1,17 +1,17 @@
+# Ingest image: the chunk/embed/store steps of the docs pipeline import the helpers in
+# /app, and the chart's ingest Job runs /app/pipelines/ingest_schedule.py from it to
+# register the recurring runs. Build context: docs-agent-mcp/pipelines.
 FROM python:3.11-slim
 
 WORKDIR /app
 
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
 COPY utils/hugo_ingest.py utils/canonical_rag_ingest.py utils/utils.py utils/milvus_store.py /app/
+COPY kubeflow-pipeline.py issues-pipeline.py code-pipeline.py ingest_schedule.py /app/pipelines/
+COPY utils/ /app/pipelines/utils/
 
-RUN pip install --no-cache-dir \
-    requests \
-    beautifulsoup4 \
-    toml \
-    pyyaml \
-    python-frontmatter==1.1.0 \
-    markdownify==1.2.0 \
-    html-table-rescuer==0.3.1 \
-    pymilvus==2.6.14
-
-ENV PYTHONPATH=/app
+ENV PYTHONPATH=/app \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
