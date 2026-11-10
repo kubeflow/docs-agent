@@ -10,6 +10,7 @@ data:
   CODE_COLLECTION_NAME: {{ .Values.mcp.config.codeCollection | quote }}
   EMBEDDINGS_URL: {{ .Values.mcp.config.embeddingsUrl | quote }}
   RERANKER_URL: {{ .Values.mcp.config.rerankerUrl | quote }}
+  RERANK_CANDIDATE_DEPTH: {{ .Values.mcp.config.rerankCandidateDepth | quote }}
   MILVUS_URI: {{ .Values.mcp.config.milvusUri | quote }}
   MILVUS_USER: {{ .Values.mcp.config.milvusUser | quote }}
   MAX_QUERY_CHARS: {{ .Values.mcp.config.maxQueryChars | quote }}

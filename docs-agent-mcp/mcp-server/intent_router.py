@@ -19,7 +19,7 @@ KEYWORD_FETCH_LIMIT = int(os.getenv("AUTO_BM25_CANDIDATE_DEPTH", "30"))
 COMPARE_WORDS = re.compile(r"\b(compare|versus|vs\.?|difference between)\b", re.I)
 RELEASE_DATE_WORDS = re.compile(r"\b(when was|release date|ga date|released)\b", re.I)
 LATEST_OR_CURRENT_WORDS = re.compile(
-    r"\b(latest|current|newest|most recent|supported)\b",
+    r"\b(latest|current|newest|most recent|supported|(?:new|recent|upcoming|next|last) release)\b",
     re.I,
 )
 HOW_WHY_EXPLAIN_WORDS = re.compile(r"\b(how|why|explain|overview|architecture)\b", re.I)
@@ -48,6 +48,10 @@ class RetrievalPlan:
     filter_expr: str = ""
     rerank_by_release_date: bool = False
     prefer_version_match: bool = False
+    # Also run an unfiltered hybrid search and keep some of its hits. A "latest" question
+    # is often about a component ("is X in the latest release?"), and the release notes
+    # alone do not answer it.
+    add_general_hits: bool = False
 
 
 def downgrade_plan_for_collection(
@@ -81,6 +85,7 @@ def downgrade_plan_for_collection(
             filter_expr="",
             rerank_by_release_date=False,
             prefer_version_match=False,
+            add_general_hits=False,
         )
 
     return plan
@@ -118,6 +123,7 @@ def pick_search_plan(query: str) -> RetrievalPlan:
             candidate_depth=LATEST_RELEASE_FETCH_LIMIT,
             filter_expr='doc_type == "release"',
             rerank_by_release_date=True,
+            add_general_hits=True,
         )
 
     # Exact version, dotted config key, or error wording — keyword search.
@@ -223,6 +229,29 @@ def rerank_hits_after_search(
     if plan.prefer_version_match:
         return rerank_for_version_match(hits, query, top_k)
     return hits[:top_k]
+
+
+def merge_release_and_general_hits(
+    release_hits: list[dict],
+    general_hits: list[dict],
+    top_k: int,
+) -> list[dict]:
+    """Release notes first, then general hits, sharing top_k.
+
+    General hits get up to half the slots (rounded down), so the newest release notes
+    still lead. Either side fills the other's unused slots.
+    """
+
+    def key(hit: dict):
+        entity = hit.get("entity", {})
+        return hit.get("id") or (entity.get("file_path"), entity.get("content_text"))
+
+    seen = {key(hit) for hit in release_hits}
+    general = [hit for hit in general_hits if key(hit) not in seen]
+    general_slots = min(len(general), top_k // 2)
+    release_slots = min(len(release_hits), top_k - general_slots)
+    general_slots = min(len(general), top_k - release_slots)
+    return release_hits[:release_slots] + general[:general_slots]
 
 
 def retrieval_metadata(plan: RetrievalPlan, **extra: object) -> dict:

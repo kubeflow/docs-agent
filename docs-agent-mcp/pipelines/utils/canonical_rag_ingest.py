@@ -672,6 +672,17 @@ def extract_release_date(
     return None
 
 
+# "[Figure: FOSSA Status](https://...)" (a linked badge) or a bare "Figure: alt text".
+BADGE_OR_FIGURE_RE = re.compile(r"\[Figure: [^\]]*\]\([^)]*\)|Figure: [^\n\]]*")
+MIN_CHUNK_WORD_CHARS = 20
+
+
+def is_badge_only_chunk(text: str) -> bool:
+    """True for a chunk that is only badges or figure captions (no sentence to retrieve)."""
+    remaining = BADGE_OR_FIGURE_RE.sub("", text or "")
+    return sum(ch.isalnum() for ch in remaining) < MIN_CHUNK_WORD_CHARS
+
+
 def build_milvus_records(
     file_data: dict[str, Any],
     *,
@@ -679,15 +690,20 @@ def build_milvus_records(
     base_url: str,
     target_tokens: int = DEFAULT_TARGET_TOKENS,
     overlap_tokens: int = DEFAULT_OVERLAP_TOKENS,
+    doc_type: str = "",
 ) -> list[dict[str, Any]]:
-    """Parse and chunk one downloaded file record into Milvus-ready dicts."""
+    """Parse and chunk one downloaded file record into Milvus-ready dicts.
+
+    doc_type: set for sources that are not the Hugo website (for example "distribution"
+    for kubeflow/community-distribution). Empty = infer from the path and frontmatter.
+    """
     content = file_data.get("content", "") or ""
     file_path = file_data.get("path", "") or ""
     file_name = file_data.get("file_name") or os.path.basename(file_path)
 
     parsed = parse_canonical_document(content)
     frontmatter = parsed.frontmatter
-    doc_type = infer_doc_type(file_path, frontmatter)
+    doc_type = (doc_type or "").strip() or infer_doc_type(file_path, frontmatter)
     release_date = extract_release_date(
         doc_type=doc_type,
         source_text=content,
@@ -730,10 +746,17 @@ def build_milvus_records(
             target_tokens=target_tokens,
             overlap_tokens=overlap_tokens,
         )
+        chunks = [chunk for chunk in chunks if not is_badge_only_chunk(chunk["content_text"])]
 
     citation_url = build_citation_url(file_path, base_url)
     if doc_type == "redirect" and frontmatter.get("manualLink"):
         citation_url = str(frontmatter["manualLink"])[:1024]
+
+    # Plain READMEs have no frontmatter title: use the first top-level heading.
+    title = parsed.title
+    if not title:
+        first_heading = re.search(r"^#\s+(.+?)\s*$", content, flags=re.MULTILINE)
+        title = first_heading.group(1) if first_heading else file_path
 
     file_unique_id = f"{repo_name}:{file_path}"
     doc_status = infer_doc_status(file_path)
@@ -749,7 +772,7 @@ def build_milvus_records(
                 "citation_url": citation_url,
                 "chunk_index": chunk_idx,
                 "content_text": chunk["content_text"][:MAX_CONTENT_TEXT_CHARS],
-                "title": parsed.title[:256],
+                "title": title[:256],
                 "weight": parsed.weight,
                 "doc_type": doc_type[:32],
                 "version": str(frontmatter.get("version") or "")[:32],
@@ -808,6 +831,7 @@ __all__ = [
     "CanonicalSection",
     "build_citation_url",
     "build_milvus_records",
+    "is_badge_only_chunk",
     "chunk_canonical_document",
     "extract_release_date",
     "dumps_jsonl",

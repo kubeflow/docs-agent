@@ -40,7 +40,7 @@ cd docs-agent-mcp/pipelines
 Docs (only if gate 1 missed the Katib page):
 
 ```python
-# same pattern as submit_run.py
+# docs-agent-mcp/pipelines/ingest_schedule.py run --name docs-website --set ...
 # directory_path="content/en/docs/components/katib"
 # collection_name="kubeflow_docs"
 ```

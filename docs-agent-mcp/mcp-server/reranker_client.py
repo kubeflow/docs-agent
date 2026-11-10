@@ -9,6 +9,11 @@ import requests
 DEFAULT_TIMEOUT_SEC = int(os.getenv("RERANKER_TIMEOUT_SEC", "30"))
 
 
+def enabled() -> bool:
+    """True when a reranker is configured; callers then fetch extra candidates for it."""
+    return bool((os.getenv("RERANKER_URL") or "").strip())
+
+
 def rerank_hits(query: str, hits: list[dict], timeout: int = DEFAULT_TIMEOUT_SEC) -> list[dict]:
     """Score Milvus hits using the cross-encoder and reorder them."""
     if not hits:
