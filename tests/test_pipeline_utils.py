@@ -207,7 +207,7 @@ class TestCleanContentEdgeCases:
 class TestTruncateForTei:
     def test_truncates_long_text(self):
         long = "word " * 500
-        assert len(truncate_for_tei(long)) == 1000
+        assert len(truncate_for_tei(long)) == 2000
 
 
 class TestEmbedTexts:
@@ -248,4 +248,4 @@ class TestEmbedTexts:
         monkeypatch.setattr("utils.requests.post", fake_post)
         long = "x" * 5000
         embed_texts([long], "http://embeddings/embed", batch_size=1)
-        assert len(sent[0]) == 1000
+        assert len(sent[0]) == 2000

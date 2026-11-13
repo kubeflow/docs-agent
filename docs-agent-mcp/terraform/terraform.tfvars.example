@@ -12,6 +12,6 @@
 # ]
 
 # --- TEI embeddings (ml-infra) ---
-# embeddings_model_id              = "sentence-transformers/all-mpnet-base-v2"
+# embeddings_model_id              = "BAAI/bge-base-en-v1.5"
 # embeddings_max_client_batch_size = "64"
 # embeddings_max_batch_tokens      = "16384"

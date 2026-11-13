@@ -17,15 +17,15 @@ DEFAULT_EMBEDDINGS_URL = (
     "http://embeddings-service-predictor.ml-infra.svc.cluster.local/embed"
 )
 DEFAULT_MILVUS_HOST = "milvus-milvus.ml-infra.svc.cluster.local"
-# all-mpnet-base-v2 output size; other TEI models may differ — pass embedding_dim.
+# BAAI/bge-base-en-v1.5 output size; other TEI models may differ — pass embedding_dim.
 DEFAULT_EMBEDDING_DIM = 768
-# Docs defaults: YAML-heavy pages tokenize denser than prose, so keep TEI inputs
-# well under the 384-token ceiling (1000 chars produced HTTP 413 on Katib docs).
-DEFAULT_DOCS_CHUNK_SIZE = 600
-DEFAULT_DOCS_CHUNK_OVERLAP = 60
-DEFAULT_DOCS_MAX_TEI_CHARS = 600
-# Generic TEI ceiling used by non-docs pipelines / helpers.
-MAX_TEI_INPUT_CHARS = 1000
+# Docs defaults: BAAI/bge-base-en-v1.5 supports 512 tokens (~2000 chars), cleanly
+# accommodating full canonical documentation and code chunks (MAX_CONTENT_TEXT_CHARS = 2000).
+DEFAULT_DOCS_CHUNK_SIZE = 2000
+DEFAULT_DOCS_CHUNK_OVERLAP = 200
+DEFAULT_DOCS_MAX_TEI_CHARS = 2000
+# Generic TEI ceiling used by non-docs pipelines / helpers (bge-base-en-v1.5 512-token ceiling).
+MAX_TEI_INPUT_CHARS = 2000
 # Batch count only; per-input size is limited by max_tei_chars / MAX_TEI_INPUT_CHARS.
 DEFAULT_EMBEDDING_BATCH_SIZE = 8
 

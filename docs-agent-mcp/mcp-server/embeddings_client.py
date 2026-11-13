@@ -10,8 +10,8 @@ import requests
 import flo_tracing
 
 DEFAULT_TIMEOUT_SEC = int(os.getenv("EMBEDDINGS_TIMEOUT_SEC", "60"))
-# TEI all-mpnet-base-v2: each input must be <384 tokens.
-MAX_TEI_INPUT_CHARS = int(os.getenv("MAX_TEI_INPUT_CHARS", "1000"))
+# TEI BAAI/bge-base-en-v1.5: inputs up to 512 tokens (~2000 chars).
+MAX_TEI_INPUT_CHARS = int(os.getenv("MAX_TEI_INPUT_CHARS", "2000"))
 
 
 def embed_texts(
@@ -21,7 +21,7 @@ def embed_texts(
     batch_size: int = 8,
     timeout: int = DEFAULT_TIMEOUT_SEC,
 ) -> list[list[float]]:
-    """Return embedding vectors for each input string (768-dim for all-mpnet-base-v2)."""
+    """Return embedding vectors for each input string (768-dim for BAAI/bge-base-en-v1.5)."""
     if not texts:
         return []
 
