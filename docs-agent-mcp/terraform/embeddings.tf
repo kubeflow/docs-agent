@@ -1,6 +1,6 @@
 # =============================================================================
 # embeddings.tf
-# Deploys the sentence-transformers/all-mpnet-base-v2 model as a CPU-based
+# Deploys the BAAI/bge-base-en-v1.5 model as a CPU-based
 # KServe InferenceService using Hugging Face Text Embeddings Inference (TEI).
 # =============================================================================
 
@@ -23,7 +23,7 @@ spec:
           - ${var.embeddings_model_id}
           - --port
           - "8080"
-          # Truncate inputs to model max tokens instead of HTTP 413 (mpnet = 384 tokens).
+          # Truncate inputs to model max tokens instead of HTTP 413 (bge-base = 512 tokens).
           - --auto-truncate
           - --max-client-batch-size
           - "${var.embeddings_max_client_batch_size}"

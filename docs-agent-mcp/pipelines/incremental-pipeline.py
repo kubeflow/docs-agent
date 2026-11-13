@@ -274,8 +274,8 @@ def chunk_and_embed_incremental(
 
     print(f"Created {len(records)} total chunks for incremental update; requesting embeddings from TEI service...")
 
-    # TEI all-mpnet-base-v2 rejects any input >=384 tokens (~1000 chars).
-    max_tei_chars = 1000
+    # TEI BAAI/bge-base-en-v1.5 accommodates up to 512 tokens (~2000 chars).
+    max_tei_chars = 2000
     for i in range(0, len(records), embedding_batch_size):
         batch = records[i:i + embedding_batch_size]
         texts = [r["content_text"][:max_tei_chars] for r in batch]

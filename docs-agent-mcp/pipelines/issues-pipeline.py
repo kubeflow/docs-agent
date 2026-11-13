@@ -423,7 +423,7 @@ def chunk_and_embed_issues(
 
     print(f"Total chunks: {len(records)}; requesting embeddings from TEI service...")
 
-    max_tei_chars = 1000
+    max_tei_chars = 2000
     for i in range(0, len(records), embedding_batch_size):
         batch = records[i:i + embedding_batch_size]
         texts = [r["content_text"][:max_tei_chars] for r in batch]
