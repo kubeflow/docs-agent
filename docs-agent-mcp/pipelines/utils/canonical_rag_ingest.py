@@ -489,10 +489,6 @@ def _chunk_block(
     overlap_tokens: int,
 ) -> list[tuple[str, str, list[LinkRef]]]:
     """Return (chunk_type, content_text, links) tuples for one canonical block."""
-    heading_prefix = ""
-    if section.heading:
-        heading_prefix = f"{section.section_path}\n\n"
-
     if block.block_type == "code_fence":
         content = block.content.strip()
         if len(content) > MAX_CONTENT_TEXT_CHARS:
@@ -523,7 +519,7 @@ def _chunk_block(
         )
         output: list[tuple[str, str, list[LinkRef]]] = []
         for piece in prose_chunks:
-            content = heading_prefix + piece if heading_prefix else piece
+            content = piece
             if len(content) > MAX_CONTENT_TEXT_CHARS:
                 content = content[: MAX_CONTENT_TEXT_CHARS]
             chunk_type = "admonition" if content.lstrip().startswith(("NOTE:", "WARNING:")) else "text"
@@ -588,6 +584,83 @@ def chunk_canonical_document(
                     }
                 )
     return chunks
+
+
+def build_document_breadcrumb(file_path: str, title: str = "") -> str:
+    """Build a human-readable document breadcrumb path from repository path and title.
+
+    Examples:
+        content/en/docs/components/katib/early-stopping.md ->
+        'Kubeflow Documentation > Components > Katib > Early Stopping'
+    """
+    parts = ["Kubeflow Documentation"]
+    normalized = file_path.replace("\\", "/")
+    if "content/en/docs" in normalized:
+        rel = normalized.split("content/en/docs", 1)[1].lstrip("/")
+        rel = re.sub(r"(/_index)?\.(md|html)$", "", rel)
+        segments = [s.strip() for s in rel.split("/") if s.strip()]
+        if segments:
+            nice_segments = [
+                re.sub(r"[-_]+", " ", s).strip().title()
+                for s in segments
+            ]
+            if title and title.strip():
+                nice_segments[-1] = title.strip()
+            parts.extend(nice_segments)
+        elif title and title.strip():
+            parts.append(title.strip())
+    elif title and title.strip():
+        parts.append(title.strip())
+    elif file_path:
+        base = os.path.basename(normalized)
+        clean_base = re.sub(r"\.(md|html)$", "", base)
+        parts.append(re.sub(r"[-_]+", " ", clean_base).strip().title())
+
+    return SECTION_PATH_SEP.join(parts)
+
+
+def format_contextual_text(
+    content: str,
+    *,
+    document_breadcrumb: str,
+    section_heading: str = "",
+) -> str:
+    """Prepend document breadcrumb and section heading to chunk content.
+
+    Creates structured context:
+        Document: Kubeflow Documentation > Katib > Early Stopping
+        Section: Configuring the Median Stopping Rule
+        Content:
+        [clean chunk content]
+    """
+    clean_content = content.strip()
+    if not clean_content:
+        return ""
+
+    lines = []
+    if document_breadcrumb:
+        lines.append(f"Document: {document_breadcrumb}")
+    heading = section_heading.strip() if section_heading else ""
+    if heading and heading != document_breadcrumb:
+        lines.append(f"Section: {heading}")
+    lines.append("Content:")
+    header = "\n".join(lines) + "\n"
+
+    if len(header) + len(clean_content) <= MAX_CONTENT_TEXT_CHARS:
+        return f"{header}{clean_content}"
+
+    budget = max(50, MAX_CONTENT_TEXT_CHARS - len(header))
+    return f"{header}{clean_content[:budget]}"
+
+
+def extract_clean_content(text: str) -> str:
+    """Extract original clean content if text contains a contextual prefix."""
+    if not text:
+        return ""
+    marker = "\nContent:\n"
+    if str(text).startswith("Document:") and marker in str(text):
+        return str(text).split(marker, 1)[1].strip()
+    return str(text)
 
 
 def build_citation_url(file_path: str, base_url: str) -> str:
@@ -739,7 +812,18 @@ def build_milvus_records(
     doc_status = infer_doc_status(file_path)
     records: list[dict[str, Any]] = []
 
+    doc_breadcrumb = build_document_breadcrumb(file_path, parsed.title)
+
     for chunk_idx, chunk in enumerate(chunks):
+        clean_text = chunk["content_text"].strip()
+        section_heading = chunk.get("heading") or chunk.get("section_path") or ""
+
+        contextual_text = format_contextual_text(
+            clean_text,
+            document_breadcrumb=doc_breadcrumb,
+            section_heading=section_heading,
+        )
+
         records.append(
             {
                 "file_unique_id": file_unique_id,
@@ -748,7 +832,8 @@ def build_milvus_records(
                 "file_name": file_name,
                 "citation_url": citation_url,
                 "chunk_index": chunk_idx,
-                "content_text": chunk["content_text"][:MAX_CONTENT_TEXT_CHARS],
+                "content_text": contextual_text[:MAX_CONTENT_TEXT_CHARS],
+                "clean_content": clean_text,
                 "title": parsed.title[:256],
                 "weight": parsed.weight,
                 "doc_type": doc_type[:32],
@@ -807,11 +892,14 @@ __all__ = [
     "CanonicalDocument",
     "CanonicalSection",
     "build_citation_url",
+    "build_document_breadcrumb",
     "build_milvus_records",
     "chunk_canonical_document",
+    "extract_clean_content",
     "extract_release_date",
     "dumps_jsonl",
     "estimate_tokens",
+    "format_contextual_text",
     "parse_and_chunk_file",
     "parse_canonical_document",
     "split_prose_by_tokens",
