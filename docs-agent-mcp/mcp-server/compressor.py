@@ -102,6 +102,15 @@ BLOCK_START_RE = re.compile(r"^(\s*([-*+]|\d+\.)\s|#{1,6}\s|\||>)")
 LIST_OR_HEADING_RE = re.compile(r"^(\s*([-*+]|\d+\.)\s|#{1,6}\s)")
 
 
+def extract_clean_content(text: object) -> str:
+    """Extract original clean content if text contains a contextual prefix."""
+    raw = str(text or "")
+    marker = "\nContent:\n"
+    if raw.startswith("Document:") and marker in raw:
+        return raw.split(marker, 1)[1].strip()
+    return raw
+
+
 def _is_heading(line: str) -> bool:
     return bool(re.match(r"^#{1,6}\s", line))
 
@@ -262,7 +271,9 @@ def compress_hits(query: str, hits: list[dict], max_chars: int) -> list[dict]:
     surplus_budget = 0
 
     for hit_idx, hit in enumerate(hits):
-        content = hit.get("entity", {}).get("content_text", "")
+        content = hit.get("entity", {}).get("clean_content") or extract_clean_content(
+            hit.get("entity", {}).get("content_text", "")
+        )
         if not content:
             continue
 
