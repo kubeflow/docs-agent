@@ -201,12 +201,15 @@ ingest:
         base_url: https://github.com/kubeflow/community-distribution/blob/master
         doc_type: distribution
     # Issues updated in the last day, every six hours (the overlap covers a missed run).
-    # First backfill: ingest_schedule.py run --name issues --set updated_within_hours=0
+    # initial_arguments triggers an automatic full backfill (updated_within_hours: 0) when
+    # the schedule is registered in the experiment for the first time.
     - name: issues
       pipeline: issues
       cron: "0 0 */6 * * *"
       arguments:
         updated_within_hours: 24
+      initial_arguments:
+        updated_within_hours: 0
     # Manifests and Helm charts, weekly.
     - name: code
       pipeline: code

@@ -339,3 +339,40 @@ def test_set_overrides_parse_json_values():
         "collection_name": "kubeflow_docs_staging",
         "prune_removed": False,
     }
+
+
+def test_register_triggers_initial_backfill_only_for_new_schedules(tmp_path, monkeypatch):
+    config = ingest_schedule.load_config(
+        write_config(
+            tmp_path,
+            [
+                {
+                    "name": "issues",
+                    "pipeline": "issues",
+                    "cron": "0 0 */6 * * *",
+                    "arguments": {"updated_within_hours": 24},
+                    "initial_arguments": {"updated_within_hours": 0},
+                },
+            ],
+        )
+    )
+    monkeypatch.setattr(ingest_schedule, "compile_pipeline", lambda key, out_dir: f"{out_dir}/{key}.yaml")
+    client = MagicMock()
+    client.create_experiment.return_value = SimpleNamespace(experiment_id="exp")
+    client.get_pipeline_id.return_value = "pipe"
+    client.upload_pipeline_version.return_value = SimpleNamespace(pipeline_version_id="ver")
+
+    # First registration (no existing "issues" recurring run): starts initial backfill with updated_within_hours=0
+    client.list_recurring_runs.return_value = SimpleNamespace(recurring_runs=[], next_page_token="")
+    ingest_schedule.register(client, config, "abc1234-1")
+    client.create_run_from_pipeline_package.assert_called_once()
+    assert client.create_run_from_pipeline_package.call_args.kwargs["arguments"] == {"updated_within_hours": 0}
+
+    # Subsequent registration ("issues" already exists): updates recurring run without re-triggering backfill
+    client.create_run_from_pipeline_package.reset_mock()
+    client.list_recurring_runs.return_value = SimpleNamespace(
+        recurring_runs=[SimpleNamespace(recurring_run_id="old-issues", display_name="issues")],
+        next_page_token="",
+    )
+    ingest_schedule.register(client, config, "abc1234-2")
+    client.create_run_from_pipeline_package.assert_not_called()

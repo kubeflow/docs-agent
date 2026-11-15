@@ -36,10 +36,54 @@ def test_reranker_client_reranks_hits():
 
 
 def test_reranker_client_bypasses_if_no_url():
+    reranker_client.reset_circuit_breaker()
     hits = [{"entity": {"content_text": "doc1"}}]
     with patch.dict("os.environ", {"RERANKER_URL": ""}):
         reranked = reranker_client.rerank_hits("query", hits)
         assert reranked == hits
+
+
+def test_reranker_client_scales_timeout_truncates_and_trips_circuit_breaker():
+    reranker_client.reset_circuit_breaker()
+    long_text = "x" * 2500
+    hits = [{"entity": {"content_text": long_text}} for _ in range(5)]
+
+    with patch("reranker_client.requests.post") as mock_post:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = [{"index": i, "score": float(i)} for i in range(5)]
+        mock_post.return_value = mock_response
+
+        with patch.dict(
+            "os.environ",
+            {"RERANKER_URL": "http://mock-scale", "RERANKER_MAX_CHARS": "1200"},
+            clear=False,
+        ):
+            reranked = reranker_client.rerank_hits("query", hits)
+
+        sent_texts = mock_post.call_args.kwargs["json"]["texts"]
+        sent_timeout = mock_post.call_args.kwargs["timeout"]
+        assert all(len(t) == 1200 for t in sent_texts)
+        # Original hit content_text is preserved in returned hits
+        assert all(len(h["entity"]["content_text"]) == 2500 for h in reranked)
+        assert isinstance(sent_timeout, tuple) and sent_timeout[0] == 1.0
+        assert 2.0 <= sent_timeout[1] <= 6.0
+
+    # Verify circuit breaker trips on failure and skips subsequent calls during cooldown
+    with patch("reranker_client.requests.post", side_effect=RuntimeError("connection timed out")) as mock_fail:
+        with patch.dict(
+            "os.environ",
+            {"RERANKER_URL": "http://mock-cb", "RERANKER_COOLDOWN_SEC": "30"},
+            clear=False,
+        ):
+            assert reranker_client.enabled() is True
+            fallback1 = reranker_client.rerank_hits("query", hits)
+            assert fallback1 == hits
+            assert reranker_client.enabled() is False
+            fallback2 = reranker_client.rerank_hits("query", hits)
+            assert fallback2 == hits
+            assert mock_fail.call_count == 1
+    reranker_client.reset_circuit_breaker()
 
 
 def test_compressor_compresses_hits_lexically():

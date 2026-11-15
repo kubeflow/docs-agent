@@ -421,7 +421,9 @@ def store_code_milvus(
     embedded_data: dsl.Input[dsl.Dataset],
     milvus_host: str,
     milvus_port: str,
-    collection_name: str
+    collection_name: str,
+    active_repos: str = "",
+    exclude_resource_kinds: str = "",
 ):
     """Store code embeddings in the code_rag Milvus collection.
 
@@ -527,6 +529,28 @@ def store_code_milvus(
                 if deleted:
                     collection.flush()
                     print(f"Deleted {deleted} old chunks for {len(unique_ids)} files")
+
+                # Automatically prune chunks from retired/renamed repos (e.g. kubeflow/manifests)
+                # and from newly excluded resource kinds (e.g. CustomResourceDefinition).
+                allowed_repos = sorted({r.strip() for r in active_repos.split(",") if r.strip()})
+                if allowed_repos:
+                    quoted_repos = ", ".join(f'"{r}"' for r in allowed_repos)
+                    retired_expr = f"repo_name not in [{quoted_repos}]"
+                    retired = collection.query(expr=retired_expr, output_fields=["id"], limit=16384)
+                    if retired:
+                        collection.delete(retired_expr)
+                        collection.flush()
+                        print(f"Pruned {len(retired)} chunks from retired repos (active: {allowed_repos})")
+
+                excluded_kinds = sorted({k.strip() for k in exclude_resource_kinds.split(",") if k.strip()})
+                if excluded_kinds:
+                    quoted_kinds = ", ".join(f'"{k}"' for k in excluded_kinds)
+                    kind_expr = f"resource_kind in [{quoted_kinds}]"
+                    stale_kinds = collection.query(expr=kind_expr, output_fields=["id"], limit=16384)
+                    if stale_kinds:
+                        collection.delete(kind_expr)
+                        collection.flush()
+                        print(f"Pruned {len(stale_kinds)} chunks of excluded kinds: {excluded_kinds}")
             except Exception as e:
                 print(f"ERROR during delete phase: {e}")
                 print(f"Failed batch unique_ids: {unique_ids[i:i + DELETE_BATCH_SIZE]}")
@@ -566,8 +590,8 @@ def store_code_milvus(
     description="RAG pipeline for ingesting Kubeflow code and YAML manifests"
 )
 def code_rag_pipeline(
-    # kubeflow/manifests was renamed; chunks indexed under the old repo name need a
-    # one-time delete (repo_name == "kubeflow/manifests") after the first run.
+    # Chunks indexed under retired repo names (such as kubeflow/manifests) or excluded
+    # resource kinds are automatically pruned by store_code_milvus.
     repos: str = "kubeflow/community-distribution",
     directory_paths: str = "applications,common,experimental/helm",
     file_extensions: str = "yaml,yml,py,json",
@@ -611,6 +635,8 @@ def code_rag_pipeline(
         milvus_host=milvus_host,
         milvus_port=milvus_port,
         collection_name=collection_name,
+        active_repos=repos,
+        exclude_resource_kinds=exclude_resource_kinds,
     )
 
     if k8s is not None:

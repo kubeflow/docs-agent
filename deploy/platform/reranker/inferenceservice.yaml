@@ -11,7 +11,7 @@ metadata:
 spec:
   predictor:
     minReplicas: 1
-    maxReplicas: 1
+    maxReplicas: 2
     containers:
       - name: kserve-container
         image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.7
@@ -30,7 +30,7 @@ spec:
             protocol: TCP
         resources:
           requests:
-            cpu: 500m
+            cpu: "2"
             memory: 1Gi
           limits:
             cpu: "4"

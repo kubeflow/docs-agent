@@ -59,6 +59,8 @@ def load_config(path: str) -> dict:
             raise ValueError(f"{schedule['name']}: cron needs six fields (seconds first)")
         if not isinstance(schedule.get("arguments", {}), dict):
             raise ValueError(f"{schedule['name']}: arguments must be an object")
+        if "initial_arguments" in schedule and not isinstance(schedule["initial_arguments"], dict):
+            raise ValueError(f"{schedule['name']}: initial_arguments must be an object")
     config.setdefault("experiment", "flo-ingest")
     return config
 
@@ -104,31 +106,51 @@ def register(client, config: dict, version: str) -> None:
     experiment = client.create_experiment(config["experiment"])
     experiment_id = experiment.experiment_id
 
+    old = existing_recurring_runs(client, experiment_id)
+    old_names = {run.display_name for run in old}
+
     with tempfile.TemporaryDirectory() as out_dir:
+        packages = {}
         versions = {}
         for key in sorted({schedule["pipeline"] for schedule in config["schedules"]}):
-            versions[key] = upload_version(client, key, compile_pipeline(key, out_dir), version)
+            packages[key] = compile_pipeline(key, out_dir)
+            versions[key] = upload_version(client, key, packages[key], version)
             print(f"uploaded flo-ingest-{key} version {version}")
 
-    # Create the new recurring runs first, then delete the old ones, so a failure half
-    # way leaves the previous schedule in place rather than none.
-    old = existing_recurring_runs(client, experiment_id)
-    for schedule in config["schedules"]:
-        pipeline_id, version_id = versions[schedule["pipeline"]]
-        client.create_recurring_run(
-            experiment_id=experiment_id,
-            job_name=schedule["name"],
-            description=f"flo ingest ({version})",
-            cron_expression=schedule["cron"],
-            max_concurrency=1,
-            no_catchup=True,
-            params=schedule.get("arguments", {}),
-            pipeline_id=pipeline_id,
-            version_id=version_id,
-            enabled=schedule.get("enabled", True),
-            enable_caching=False,
-        )
-        print(f"scheduled {schedule['name']}: {schedule['cron']}")
+        # Create the new recurring runs first, then delete the old ones, so a failure half
+        # way leaves the previous schedule in place rather than none.
+        for schedule in config["schedules"]:
+            pipeline_id, version_id = versions[schedule["pipeline"]]
+            client.create_recurring_run(
+                experiment_id=experiment_id,
+                job_name=schedule["name"],
+                description=f"flo ingest ({version})",
+                cron_expression=schedule["cron"],
+                max_concurrency=1,
+                no_catchup=True,
+                params=schedule.get("arguments", {}),
+                pipeline_id=pipeline_id,
+                version_id=version_id,
+                enabled=schedule.get("enabled", True),
+                enable_caching=False,
+            )
+            print(f"scheduled {schedule['name']}: {schedule['cron']}")
+            # When a schedule with initial_arguments is registered for the first time,
+            # automatically trigger its initial backfill run so no manual CLI step is needed.
+            if (
+                schedule.get("enabled", True)
+                and isinstance(schedule.get("initial_arguments"), dict)
+                and schedule["name"] not in old_names
+            ):
+                init_args = {**schedule.get("arguments", {}), **schedule["initial_arguments"]}
+                client.create_run_from_pipeline_package(
+                    pipeline_file=packages[schedule["pipeline"]],
+                    arguments=init_args,
+                    run_name=f"{schedule['name']}-initial-{version}",
+                    experiment_name=config["experiment"],
+                    enable_caching=False,
+                )
+                print(f"started initial backfill run for {schedule['name']} with {init_args}")
     for run in old:
         client.delete_recurring_run(run.recurring_run_id)
         print(f"removed previous recurring run {run.display_name}")

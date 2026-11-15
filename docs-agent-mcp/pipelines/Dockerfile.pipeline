@@ -2,6 +2,7 @@
 # /app, and the chart's ingest Job runs /app/pipelines/ingest_schedule.py from it to
 # register the recurring runs. Build context: docs-agent-mcp/pipelines.
 FROM python:3.11-slim
+LABEL org.opencontainers.image.source="https://github.com/kubeflow/docs-agent"
 
 WORKDIR /app
 
