@@ -16,6 +16,7 @@ spec:
         protocol: HTTP
       hosts:
         - {{ include "gateway-guardrails.domain" . | quote }}
+        - {{ printf "chat.%s" (include "gateway-guardrails.domain" .) | quote }}
       tls:
         httpsRedirect: {{ .Values.gateway.tls.enabled }}
     {{- if .Values.gateway.tls.enabled }}
@@ -25,6 +26,7 @@ spec:
         protocol: HTTPS
       hosts:
         - {{ include "gateway-guardrails.domain" . | quote }}
+        - {{ printf "chat.%s" (include "gateway-guardrails.domain" .) | quote }}
       tls:
         mode: SIMPLE
         credentialName: {{ .Values.gateway.tls.credentialName }}

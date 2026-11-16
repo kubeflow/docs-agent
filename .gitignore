@@ -229,3 +229,14 @@ kube.md*.swp
 
 # Local eval run outputs (summarised in tests/eval/SLM_EVALS.md)
 tests/eval/slm_results/
+
+# docs-cli local state, generated tfvars, kubeconfig, and Terraform state
+.docs-cli/
+deployments/charts/kubeflow-manifests/
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfvars
+**/*.tfvars.json
+!**/*.tfvars.example
+

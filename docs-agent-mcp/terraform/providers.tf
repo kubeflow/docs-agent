@@ -25,7 +25,7 @@ terraform {
 }
 
 locals {
-  kubeconfig = pathexpand("~/.kube/config")
+  kubeconfig = pathexpand(var.kubeconfig_path)
 }
 
 provider "kubernetes" {

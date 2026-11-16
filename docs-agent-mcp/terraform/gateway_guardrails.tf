@@ -56,7 +56,7 @@ variable "enforce_session_auth" {
 variable "session_issuer_image" {
   description = "Container image for the session-token issuer"
   type        = string
-  default     = "ghcr.io/kubeflow/kubeflow-session-issuer:latest"
+  default     = "ghcr.io/kubeflow/kubeflow-session-issuer:145409a"
 }
 
 # RS256 signing key for session JWTs, generated in-state and delivered as the

@@ -5,6 +5,32 @@
 # to every file that references it — no need to hunt through multiple TF files.
 # =============================================================================
 
+# --- Kubeconfig & Ingress Gateway --------------------------------------------
+
+variable "kubeconfig_path" {
+  description = "Path to kubeconfig file used by kubernetes, helm, and kubectl providers"
+  type        = string
+  default     = "~/.kube/config"
+}
+
+variable "enable_istio_ingressgateway" {
+  description = "Install the Istio ingressgateway Helm release in istio-system (required by gateway-guardrails)"
+  type        = bool
+  default     = true
+}
+
+variable "oci_lb_min_bandwidth_mbps" {
+  description = "Minimum bandwidth in Mbps for the OCI flexible LoadBalancer backing istio-ingressgateway"
+  type        = string
+  default     = "10"
+}
+
+variable "oci_lb_max_bandwidth_mbps" {
+  description = "Maximum bandwidth in Mbps for the OCI flexible LoadBalancer backing istio-ingressgateway"
+  type        = string
+  default     = "100"
+}
+
 # --- Namespace Names ---------------------------------------------------------
 
 variable "namespace_ml_infra" {
@@ -52,9 +78,27 @@ variable "kserve_version" {
 }
 
 variable "kfp_version" {
-  description = "Kubeflow Pipelines standalone version"
+  description = "Kubeflow Pipelines standalone version (used when use_kubeflow_helm_charts is false)"
   type        = string
   default     = "2.15.0"
+}
+
+variable "use_kubeflow_helm_charts" {
+  description = "Deploy Kubeflow components using the new experimental Kubeflow Helm charts from kubeflow/manifests instead of raw Kustomize"
+  type        = bool
+  default     = true
+}
+
+variable "kubeflow_pipelines_scenario" {
+  description = "Scenario for the experimental Kubeflow Pipelines Helm chart (platform-database or platform-k8s-native)"
+  type        = string
+  default     = "platform-database"
+}
+
+variable "enable_kubeflow_full_platform_helm" {
+  description = "Also deploy additional experimental Kubeflow Helm charts (Dashboard, Notebooks, Katib, Trainer, Hub, KServe UI)"
+  type        = bool
+  default     = false
 }
 
 variable "milvus_version" {

@@ -1,0 +1,20 @@
+# Copy to terraform.tfvars (or let `docs-cli template --write-tfvars` generate it)
+
+compartment_ocid   = "ocid1.compartment.oc1..CHANGEME"
+cluster_name       = "docs-agent-dev"
+region             = "us-ashburn-1"
+oci_profile        = "DEFAULT"
+kubernetes_version = ""
+
+# CPU pool (Milvus, KFP, TEI embeddings/reranker, Kagent, MCP)
+cpu_node_shape      = "VM.Standard.E4.Flex"
+cpu_node_count      = 2
+cpu_node_ocpus      = 4
+cpu_node_memory_gbs = 32
+cpu_boot_volume_gbs = 100
+
+# GPU pool (vLLM serving Gemma 4 / Qwen via llm-runtime chart)
+enable_gpu_pool     = true
+gpu_node_shape      = "VM.GPU.A10.1"
+gpu_node_count      = 1
+gpu_boot_volume_gbs = 250

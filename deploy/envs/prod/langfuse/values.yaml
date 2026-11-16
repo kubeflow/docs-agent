@@ -71,8 +71,8 @@ postgresql:
     requestedSize: 10Gi
 s3:
   global:
-    imageRegistry: docker.io
+    imageRegistry: ghcr.io
   image:
-    registry: docker.io
+    registry: ghcr.io
     repository: chrislusf/seaweedfs
-    tag: '4.23'
+    tag: '4.51'

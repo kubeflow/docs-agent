@@ -25,6 +25,8 @@ The official LLM implementation of the Kubeflow Documentation Assistant powered 
 
 | Path | Purpose |
 |------|---------|
+| `cli/` (`./bin/docs-cli`) | Full-lifecycle OCI OKE + Kubeflow Dashboard + Netlify dev cluster CLI (`up`, `expose-dashboard`, `scale-down`, `update`, `verify`, `destroy` — see [`cli/README.md`](cli/README.md)) |
+| `deployments/` | OKE cluster Terraform (`deployments/terraform/oke-cluster`) and Kubeflow Helm charts (`deployments/charts/kubeflow-manifests`) |
 | `docs-agent-mcp/` | MCP server, Kagent manifests, RAG pipelines, and Terraform platform stack |
 | `docs/agents/` | Issue-triage instruction Markdown, labels (`area/mcp`, …), architecture map |
 | `legacy/` | Historical FastAPI servers, older manifests, and Feast-era pipeline copies |

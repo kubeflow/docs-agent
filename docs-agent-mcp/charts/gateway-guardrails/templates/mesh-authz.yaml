@@ -44,19 +44,19 @@ spec:
 apiVersion: security.istio.io/v1beta1
 kind: AuthorizationPolicy
 metadata:
-  name: allow-milvus-minio
+  name: allow-milvus-seaweedfs
   namespace: {{ .Values.namespaces.mlInfra }}
   labels:
     {{- include "gateway-guardrails.labels" . | nindent 4 }}
 spec:
   selector:
     matchLabels:
-      app: minio
+      app: seaweedfs
   action: ALLOW
   rules:
     - to:
         - operation:
-            ports: ["9000", "9001"]
+            ports: ["8333", "9000", "9333"]
 ---
 # --- Cross-namespace traffic ---
 # docs-agent/mcp-server -> ml-infra/milvus (vector DB queries)

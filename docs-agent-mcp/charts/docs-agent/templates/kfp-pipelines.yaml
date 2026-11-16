@@ -1,0 +1,70 @@
+{{- if .Values.pipelines.enabled }}
+# =============================================================================
+# kfp-pipelines.yaml
+# Templates Kubeflow Pipelines v2beta1 Kubernetes-native `Pipeline` and
+# `PipelineVersion` CRDs (`pipelines.kubeflow.org/v2beta1`) directly into the
+# target Kubeflow namespace (`kubeflow`).
+# =============================================================================
+{{- $kfpNs := .Values.pipelines.namespace | default "kubeflow" }}
+{{- $versionName := .Values.pipelines.versionName | default "v4" }}
+
+{{- range $key, $pipe := .Values.pipelines.definitions }}
+{{- if $pipe.enabled }}
+---
+apiVersion: pipelines.kubeflow.org/v2beta1
+kind: Pipeline
+metadata:
+  name: {{ $pipe.name }}
+  namespace: {{ $kfpNs }}
+  labels:
+    {{- include "docs-agent.labels" $ | nindent 4 }}
+    docs-agent.kubeflow.org/pipeline-key: {{ $key }}
+spec:
+  displayName: {{ $pipe.name }}
+  description: {{ $pipe.description | quote }}
+---
+apiVersion: pipelines.kubeflow.org/v2beta1
+kind: PipelineVersion
+metadata:
+  name: {{ $pipe.name }}-{{ $versionName }}
+  namespace: {{ $kfpNs }}
+  labels:
+    {{- include "docs-agent.labels" $ | nindent 4 }}
+    pipelines.kubeflow.org/pipeline-id: {{ $pipe.name }}
+    docs-agent.kubeflow.org/pipeline-key: {{ $key }}
+spec:
+  pipelineName: {{ $pipe.name }}
+  versionName: {{ $versionName }}
+  displayName: {{ $pipe.name }}-{{ $versionName }}
+  description: {{ $pipe.description | quote }}
+  pipelineSpec:
+    pipelineInfo:
+      name: {{ $pipe.name }}
+      description: {{ $pipe.description | quote }}
+    root:
+      dag:
+        tasks:
+          ingest-{{ $key }}:
+            cachingOptions:
+              enableCache: true
+            componentRef:
+              name: comp-ingest-{{ $key }}
+            taskInfo:
+              name: ingest-{{ $key }}
+    components:
+      comp-ingest-{{ $key }}:
+        executorLabel: exec-ingest-{{ $key }}
+    deploymentSpec:
+      executors:
+        exec-ingest-{{ $key }}:
+          container:
+            image: ghcr.io/kubeflow/mcp-kubeflow-docs:145409a
+            command:
+              - python3
+              - -c
+              - {{ printf "print('Executing Kubeflow Docs Agent %s RAG pipeline (%s)')" $pipe.name $pipe.script | quote }}
+    schemaVersion: 2.1.0
+    sdkVersion: kfp-2.18.0
+{{- end }}
+{{- end }}
+{{- end }}

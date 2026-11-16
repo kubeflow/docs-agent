@@ -87,6 +87,36 @@ resource "helm_release" "istiod" {
   depends_on = [helm_release.istio_base]
 }
 
+resource "helm_release" "istio_ingressgateway" {
+  count            = var.enable_istio_ingressgateway ? 1 : 0
+  name             = "istio-ingressgateway"
+  repository       = "https://istio-release.storage.googleapis.com/charts"
+  chart            = "gateway"
+  namespace        = "istio-system"
+  create_namespace = true
+  version          = var.istio_version
+
+  values = [
+    yamlencode({
+      labels = {
+        app   = "istio-ingressgateway"
+        istio = "ingressgateway"
+      }
+      service = {
+        type = "LoadBalancer"
+        annotations = {
+          "oci.oraclecloud.com/load-balancer-type"                     = "lb"
+          "service.beta.kubernetes.io/oci-load-balancer-shape"         = "flexible"
+          "service.beta.kubernetes.io/oci-load-balancer-shape-flex-min" = var.oci_lb_min_bandwidth_mbps
+          "service.beta.kubernetes.io/oci-load-balancer-shape-flex-max" = var.oci_lb_max_bandwidth_mbps
+        }
+      }
+    })
+  ]
+
+  depends_on = [helm_release.istiod]
+}
+
 # --- Knative net-istio (networking layer) ------------------------------------
 
 data "http" "knative_net_istio" {
@@ -105,6 +135,17 @@ resource "kubectl_manifest" "net_istio" {
 }
 
 # --- KServe ------------------------------------------------------------------
+
+resource "helm_release" "kserve_crd" {
+  name             = "kserve-crd"
+  repository       = "oci://ghcr.io/kserve/charts"
+  chart            = "kserve-crd"
+  namespace        = "kserve"
+  create_namespace = true
+  version          = var.kserve_version
+
+  depends_on = [kubectl_manifest.net_istio, helm_release.cert_manager]
+}
 
 resource "helm_release" "kserve" {
   name             = "kserve-resources"
@@ -131,7 +172,23 @@ resource "helm_release" "kserve" {
     value = "false"
   }
 
-  depends_on = [kubectl_manifest.net_istio]
+  depends_on = [kubectl_manifest.net_istio, helm_release.kserve_crd]
+}
+
+resource "null_resource" "wait_for_kserve_webhook" {
+  provisioner "local-exec" {
+    interpreter = ["/bin/sh", "-c"]
+    environment = {
+      KUBECONFIG = local.kubeconfig
+    }
+    command = <<-EOT
+      set -e
+      kubectl -n kserve rollout status deployment/kserve-controller-manager --timeout=180s
+      sleep 10
+    EOT
+  }
+
+  depends_on = [helm_release.kserve]
 }
 
 # =============================================================================

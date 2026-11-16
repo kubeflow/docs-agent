@@ -1,0 +1,98 @@
+# =============================================================================
+# docs.toml — Kubeflow Docs Agent Dev Cluster Configuration (OCI OKE + Netlify)
+# =============================================================================
+# Safe to commit. Never put secrets or private OCIDs here — pass credentials
+# via environment variables (see .env.example) or ~/.oci/config.
+
+[oci]
+# OCI CLI profile name in ~/.oci/config (used when OCI_TENANCY is not set in env)
+profile = "DEFAULT"
+# Override via OCI_REGION environment variable
+region = "us-ashburn-1"
+# Human-readable compartment name to look up under tenancy root if OCI_COMPARTMENT_ID is not set
+compartment_name = "kubeflow"
+compartment_id = ""
+
+[cluster]
+name = "kubeflow-docs-agent-dev"
+kubernetes_version = "v1.36.4"
+vcn_cidr = "10.0.0.0/16"
+
+# CPU worker pool (Milvus, KFP, KServe, Knative, Istio, TEI embeddings & reranker, MCP, Kagent)
+cpu_node_shape = "VM.Standard.E5.Flex"
+cpu_node_count = 2
+cpu_node_ocpus = 4
+cpu_node_memory_gb = 64
+cpu_boot_volume_gb = 100
+
+# GPU worker pool (vLLM serving Gemma 4 / Qwen via llm-runtime chart)
+# Toggle with `docs-cli up --no-gpu` or DOCS_ENABLE_GPU=false for CPU-only external-LLM dev clusters
+enable_gpu_pool = true
+gpu_node_shape = "VM.GPU.A10.1"
+gpu_node_count = 1
+gpu_node_ocpus = 15
+gpu_node_memory_gb = 240
+gpu_boot_volume_gb = 200
+gpu_node_image_id = ""
+
+[platform]
+namespace_ml_infra = "ml-infra"
+namespace_docs_agent = "docs-agent"
+namespace_kubeflow = "kubeflow"
+
+cert_manager_version = "v1.20.2"
+istio_version = "1.23.0"
+knative_version = "1.22.0"
+kserve_version = "v0.17.0"
+kfp_version = "2.15.0"
+milvus_version = "v2.6.22"
+
+# Deploy Kubeflow components via the new experimental Kubeflow Helm charts (`deployments/charts/kubeflow-manifests`)
+# Scenario "platform-k8s-native" enables Kubernetes-native Pipeline & PipelineVersion CRDs (pipelines.kubeflow.org/v2beta1)
+use_kubeflow_helm_charts = true
+kubeflow_pipelines_scenario = "platform-k8s-native"
+enable_kubeflow_full_platform_helm = false
+
+embeddings_model_id = "sentence-transformers/all-mpnet-base-v2"
+reranker_model_id = "BAAI/bge-reranker-base"
+
+[llm]
+# Active profile when GPU pool is enabled: "gemma4" (google/gemma-4-26B-A4B-it) or "qwen" (Qwen/Qwen2.5-14B-Instruct-AWQ)
+active_profile = "gemma4"
+# External OpenAI-compatible LLM settings used when `enable_gpu_pool = false` (--no-gpu)
+external_base_url = "https://api.openai.com/v1"
+external_model = "gpt-4o-mini"
+
+[mcp]
+image_repository = "ghcr.io/kubeflow/mcp-kubeflow-docs"
+image_tag = "145409a"
+collection_docs = "kubeflow_docs"
+collection_issues = "issues_rag"
+collection_code = "code_rag"
+reranker_enabled = true
+
+[ingress]
+# Domain for the Istio ingress gateway (e.g. "agent.dev.example.com").
+# If empty, docs-cli auto-constructs "<LB_PUBLIC_IP>.nip.io" once the OCI LoadBalancer IP is assigned.
+domain = ""
+# TLS mode: "self-signed" (instant dev setup, works with nip.io) or "acme" (Let's Encrypt HTTP-01 via cert-manager)
+tls_mode = "self-signed"
+acme_email = ""
+enable_jwt_guardrails = true
+enable_oauth2_proxy = false
+lb_min_bandwidth_mbps = 10
+lb_max_bandwidth_mbps = 100
+
+[netlify]
+# Deployment mode:
+# - "website": injects docs-agent chatbot widget + Docsy hooks into a kubeflow/website checkout, builds with Hugo, and deploys to Netlify
+# - "demo": packages the standalone frontend/ static demo site and deploys to Netlify
+mode = "website"
+# Path to local kubeflow/website checkout (for mode = "website")
+website_repo_path = "../kubeflow-website/website"
+# Allowed CORS origins for gateway-guardrails (Netlify site URL is appended automatically)
+extra_cors_origins = [
+  "https://www.kubeflow.org",
+  "http://localhost:1313",
+  "http://localhost:8080",
+]
