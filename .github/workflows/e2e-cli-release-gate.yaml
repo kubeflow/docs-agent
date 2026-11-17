@@ -11,13 +11,21 @@ on:
     types: [published]
   workflow_dispatch:
     inputs:
+      cloud_provider:
+        description: "Target cloud provider for live E2E spin-up ('oci' or 'gcp')"
+        required: false
+        default: "oci"
+        type: choice
+        options:
+          - oci
+          - gcp
       run_live_oke:
-        description: "Provision an ephemeral OKE cluster, run docs-cli verify, and destroy (--yes)"
+        description: "Provision an ephemeral OKE/GKE cluster, run docs-cli verify, and destroy (--yes)"
         required: false
         default: false
         type: boolean
       no_gpu:
-        description: "Run CPU-only mode (--no-gpu) with external OpenAI-compatible LLM instead of VM.GPU.A10.1"
+        description: "Run CPU-only mode (--no-gpu) with external OpenAI-compatible LLM instead of GPU pool"
         required: false
         default: false
         type: boolean
@@ -61,12 +69,14 @@ jobs:
           pytest cli/tests -v --tb=short
           docs-cli update --check --diagnose
 
-      - name: Validate OKE & Platform Terraform Schemas
+      - name: Validate OKE, GKE & Platform Terraform Schemas
         run: |
-          docs-cli template --domain ci-check.example.org
+          docs-cli template --cloud oci --domain ci-check.example.org
+          docs-cli template --cloud gcp --domain ci-check.example.org
           terraform -chdir=deployments/terraform/oke-cluster init -backend=false
           terraform -chdir=deployments/terraform/oke-cluster validate
-          # Prepare local Kubeflow chart stubs via dry-run helper or validate HCL syntax
+          terraform -chdir=deployments/terraform/gke-cluster init -backend=false
+          terraform -chdir=deployments/terraform/gke-cluster validate
           python -c "from docs_cli.config import DocsConfig; from docs_cli.terraform import ensure_kubeflow_manifests_charts; ensure_kubeflow_manifests_charts(DocsConfig.load())"
           terraform -chdir=docs-agent-mcp/terraform init -backend=false
           terraform -chdir=docs-agent-mcp/terraform validate
@@ -126,18 +136,20 @@ jobs:
           chmod 600 ~/.oci/oci_api_key.pem
           echo "OCI_KEY_FILE=$HOME/.oci/oci_api_key.pem" >> "$GITHUB_ENV"
 
-      - name: Spin up ephemeral OKE stack & run 35-check verification
+      - name: Spin up ephemeral OKE/GKE stack & run 35-check verification
         timeout-minutes: 40
         run: |
-          EXTRA_FLAGS=""
+          CLOUD_NAME="${{ inputs.cloud_provider || 'oci' }}"
+          EXTRA_FLAGS="--cloud ${CLOUD_NAME}"
           if [ "${{ inputs.no_gpu }}" = "true" ]; then
-            EXTRA_FLAGS="--no-gpu"
+            EXTRA_FLAGS="${EXTRA_FLAGS} --no-gpu"
           fi
           docs-cli up $EXTRA_FLAGS --apply --ttl 2h
-          docs-cli verify
+          docs-cli verify --cloud "${CLOUD_NAME}"
 
-      - name: Tear down ephemeral OKE stack down to 0 resources
+      - name: Tear down ephemeral OKE/GKE stack down to 0 resources
         if: always()
         timeout-minutes: 15
         run: |
-          docs-cli destroy --yes
+          CLOUD_NAME="${{ inputs.cloud_provider || 'oci' }}"
+          docs-cli destroy --cloud "${CLOUD_NAME}" --yes

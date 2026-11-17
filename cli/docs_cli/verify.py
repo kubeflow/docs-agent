@@ -62,7 +62,10 @@ def run_verification_suite(
     # -------------------------------------------------------------------------
     # Stage 1: Native CLI Prerequisite Checks
     # -------------------------------------------------------------------------
-    for binary in ("oci", "terraform", "kubectl", "helm", "openssl", "curl"):
+    cloud_clis = ("gcloud", "gke-gcloud-auth-plugin") if cfg.cloud == "gcp" else ("oci",)
+    stage2_label = "2. GKE Cluster" if cfg.cloud == "gcp" else "2. OKE Cluster"
+
+    for binary in (*cloud_clis, "terraform", "kubectl", "helm", "openssl", "curl"):
         path = shutil.which(binary)
         results.append(
             CheckResult(
@@ -77,7 +80,7 @@ def run_verification_suite(
     if not cfg.kubeconfig_path.exists():
         results.append(
             CheckResult(
-                stage="2. OKE Cluster",
+                stage=stage2_label,
                 name="Kubeconfig present",
                 status="FAIL",
                 detail=f"Not found at {cfg.kubeconfig_path} (run `docs-cli up --apply` or `docs-cli kubeconfig`)",
@@ -90,7 +93,7 @@ def run_verification_suite(
 
     results.append(
         CheckResult(
-            stage="2. OKE Cluster",
+            stage=stage2_label,
             name="Kubeconfig present",
             status="PASS",
             detail=str(cfg.kubeconfig_path),
@@ -98,14 +101,14 @@ def run_verification_suite(
     )
 
     # -------------------------------------------------------------------------
-    # Stage 2: OKE Cluster & Worker Node Readiness
+    # Stage 2: Cluster & Worker Node Readiness
     # -------------------------------------------------------------------------
     nodes_res = _run_quiet(["kubectl", "get", "nodes", "-o", "json"], env=env)
     nodes_data: List[Dict[str, Any]] = []
     if nodes_res.returncode != 0:
         results.append(
             CheckResult(
-                stage="2. OKE Cluster",
+                stage=stage2_label,
                 name="Kubernetes API reachable",
                 status="FAIL",
                 detail=nodes_res.stderr.strip() or "kubectl get nodes failed",
@@ -125,7 +128,7 @@ def run_verification_suite(
 
         results.append(
             CheckResult(
-                stage="2. OKE Cluster",
+                stage=stage2_label,
                 name="Worker nodes Ready",
                 status="PASS" if ready_nodes >= 1 else "FAIL",
                 detail=f"{ready_nodes}/{len(nodes_data)} nodes Ready",
@@ -134,7 +137,7 @@ def run_verification_suite(
         if cfg.cluster.enable_gpu_pool:
             results.append(
                 CheckResult(
-                    stage="2. OKE Cluster",
+                    stage=stage2_label,
                     name="GPU node pool capacity (`nvidia.com/gpu`)",
                     status="PASS" if gpu_nodes >= 1 else "FAIL",
                     detail=f"{gpu_nodes} GPU node(s) detected",
@@ -143,7 +146,7 @@ def run_verification_suite(
         else:
             results.append(
                 CheckResult(
-                    stage="2. OKE Cluster",
+                    stage=stage2_label,
                     name="GPU node pool (`--no-gpu`)",
                     status="SKIP",
                     detail="CPU-only external LLM mode active",

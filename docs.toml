@@ -1,8 +1,14 @@
 # =============================================================================
-# docs.toml — Kubeflow Docs Agent Dev Cluster Configuration (OCI OKE + Netlify)
+# docs.toml — Kubeflow Docs Agent Dev Cluster Configuration (OCI OKE & GCP GKE)
 # =============================================================================
-# Safe to commit. Never put secrets or private OCIDs here — pass credentials
-# via environment variables (see .env.example) or ~/.oci/config.
+# Safe to commit. Never put secrets, private OCIDs, or GCP keys here — pass
+# credentials via environment variables (see .env.example), ~/.oci/config, or
+# `gcloud auth application-default login`.
+
+[cloud]
+# Default cloud provider: "oci" (Oracle OKE) or "gcp" (Google Cloud GKE).
+# Override per-invocation with `--cloud gcp` / `--cloud oci` or `DOCS_CLOUD=gcp`.
+provider = "oci"
 
 [oci]
 # OCI CLI profile name in ~/.oci/config (used when OCI_TENANCY is not set in env)
@@ -12,6 +18,20 @@ region = "us-ashburn-1"
 # Human-readable compartment name to look up under tenancy root if OCI_COMPARTMENT_ID is not set
 compartment_name = "kubeflow"
 compartment_id = ""
+
+[gcp]
+# Google Cloud Project ID (override via GCP_PROJECT_ID or active `gcloud` project)
+project_id = ""
+# GCP region & zone (NVIDIA L4 GPUs available in us-central1-a/b/c, us-east4, europe-west4, etc.)
+region = "us-central1"
+zone = "us-central1-a"
+# CPU & GPU GKE machine types (`g2-standard-12` = 1x NVIDIA L4 24GB GPU, 12 vCPU, 48 GB RAM)
+cpu_machine_type = "n2-highmem-8"
+gpu_machine_type = "g2-standard-12"
+gpu_accelerator_type = "nvidia-l4"
+gpu_accelerator_count = 1
+# Default GKE Persistent Disk CSI StorageClass for the 50Gi Hugging Face model cache PVC
+storage_class = "standard-rwo"
 
 [cluster]
 name = "kubeflow-docs-agent-dev"

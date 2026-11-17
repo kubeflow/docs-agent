@@ -12,6 +12,7 @@ from rich.console import Console
 
 from .auth import OciSession
 from .config import DocsConfig
+from .gcp_auth import GcpSession
 
 console = Console()
 
@@ -150,11 +151,110 @@ def build_oke_tfvars(
     return tfvars
 
 
+def discover_available_gcp_gpu_zones(
+    gcp_session: GcpSession, accelerator_type: str
+) -> list[str]:
+    """Query `gcloud compute accelerator-types list` to discover zones in `gcp_session.region` offering the target GPU."""
+    import shutil
+
+    if not shutil.which("gcloud"):
+        return [gcp_session.zone]
+    try:
+        gcp_session.ensure_gcloud_auth_if_service_account()
+        res = subprocess.run(
+            [
+                "gcloud",
+                "compute",
+                "accelerator-types",
+                "list",
+                f"--project={gcp_session.project_id}",
+                f"--filter=name={accelerator_type}",
+                "--format=json",
+                "--quiet",
+            ],
+            env=gcp_session.gcloud_env(),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=20,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            items = json.loads(res.stdout)
+            zones = sorted(
+                {
+                    str(item.get("zone", "")).rsplit("/", 1)[-1]
+                    for item in items
+                    if str(item.get("zone", "")).rsplit("/", 1)[-1].startswith(f"{gcp_session.region}-")
+                }
+            )
+            if zones:
+                chosen = [gcp_session.zone] if gcp_session.zone in zones else [zones[0]]
+                console.print(
+                    f"[green]✓ GCP GPU Zone Discovery ({accelerator_type}): using {', '.join(chosen)} (available in {', '.join(zones)})[/green]"
+                )
+                return chosen
+    except Exception:
+        pass
+    return [gcp_session.zone]
+
+
+def build_gke_tfvars(
+    cfg: DocsConfig,
+    gcp_session: Optional[GcpSession] = None,
+) -> Dict[str, Any]:
+    """Build variables dict for deployments/terraform/gke-cluster/."""
+    project_id = (
+        gcp_session.project_id
+        if gcp_session
+        else (cfg.gcp.project_id or "<SET_GCP_PROJECT_ID_IN_ENV>")
+    )
+    region = gcp_session.region if gcp_session else cfg.gcp.region
+    zone = gcp_session.zone if gcp_session else cfg.gcp.zone
+    creds_file = (
+        gcp_session.credentials_file
+        if gcp_session
+        else (cfg.gcp.credentials_file or None)
+    )
+    gpu_zones = (
+        discover_available_gcp_gpu_zones(gcp_session, cfg.gcp.gpu_accelerator_type)
+        if (gcp_session and cfg.cluster.enable_gpu_pool)
+        else [zone]
+    )
+
+    tfvars: Dict[str, Any] = {
+        "project_id": project_id,
+        "region": region,
+        "zone": zone,
+        "credentials_file": creds_file,
+        "cluster_name": cfg.cluster.name,
+        "kubernetes_version": (
+            ""
+            if cfg.cluster.kubernetes_version == "v1.36.4"
+            else cfg.cluster.kubernetes_version
+        ),
+        "vpc_cidr": cfg.cluster.vcn_cidr,
+        "cpu_machine_type": cfg.gcp.cpu_machine_type,
+        "cpu_node_count": cfg.cluster.cpu_node_count,
+        "cpu_disk_size_gb": cfg.gcp.cpu_disk_size_gb,
+        "cpu_disk_type": cfg.gcp.cpu_disk_type,
+        "enable_gpu_pool": cfg.cluster.enable_gpu_pool,
+        "gpu_machine_type": cfg.gcp.gpu_machine_type,
+        "gpu_accelerator_type": cfg.gcp.gpu_accelerator_type,
+        "gpu_accelerator_count": cfg.gcp.gpu_accelerator_count,
+        "gpu_node_count": cfg.cluster.gpu_node_count,
+        "gpu_disk_size_gb": cfg.gcp.gpu_disk_size_gb,
+        "gpu_disk_type": cfg.gcp.gpu_disk_type,
+        "gpu_zones": gpu_zones,
+    }
+    return tfvars
+
+
 def build_platform_tfvars(cfg: DocsConfig) -> Dict[str, Any]:
     """Build variables dict for docs-agent-mcp/terraform/."""
     cors_origins = cfg.resolve_cors_origins()
     tfvars: Dict[str, Any] = {
         "kubeconfig_path": str(cfg.kubeconfig_path),
+        "cloud_provider": cfg.cloud,
         "enable_istio_ingressgateway": True,
         "oci_lb_min_bandwidth_mbps": str(cfg.ingress.lb_min_bandwidth_mbps),
         "oci_lb_max_bandwidth_mbps": str(cfg.ingress.lb_max_bandwidth_mbps),
@@ -186,23 +286,28 @@ def render_tfvars_files(
     cfg: DocsConfig,
     session: Optional[OciSession] = None,
     compartment_id: Optional[str] = None,
+    gcp_session: Optional[GcpSession] = None,
 ) -> Tuple[Path, Path]:
-    """Write .docs-cli/oke.tfvars.json and .docs-cli/platform.tfvars.json."""
+    """Write .docs-cli/{oke,gke}.tfvars.json and .docs-cli/platform.tfvars.json."""
     cfg.state_dir.mkdir(parents=True, exist_ok=True)
-    oke_path = cfg.state_dir / "oke.tfvars.json"
     platform_path = cfg.state_dir / "platform.tfvars.json"
-
-    oke_vars = build_oke_tfvars(cfg, session=session, compartment_id=compartment_id)
     platform_vars = build_platform_tfvars(cfg)
-
-    oke_path.write_text(json.dumps(oke_vars, indent=2) + "\n", encoding="utf-8")
-    oke_path.chmod(0o600)
-
     platform_path.write_text(
         json.dumps(platform_vars, indent=2) + "\n", encoding="utf-8"
     )
     platform_path.chmod(0o600)
 
+    if cfg.cloud == "gcp":
+        gke_path = cfg.state_dir / "gke.tfvars.json"
+        gke_vars = build_gke_tfvars(cfg, gcp_session=gcp_session)
+        gke_path.write_text(json.dumps(gke_vars, indent=2) + "\n", encoding="utf-8")
+        gke_path.chmod(0o600)
+        return gke_path, platform_path
+
+    oke_path = cfg.state_dir / "oke.tfvars.json"
+    oke_vars = build_oke_tfvars(cfg, session=session, compartment_id=compartment_id)
+    oke_path.write_text(json.dumps(oke_vars, indent=2) + "\n", encoding="utf-8")
+    oke_path.chmod(0o600)
     return oke_path, platform_path
 
 
@@ -295,4 +400,49 @@ def fetch_oke_kubeconfig(
     kc_path.write_bytes(content)
     kc_path.chmod(0o600)
     console.print(f"[green]✓ Wrote OKE kubeconfig to {kc_path}[/green]")
+    return kc_path
+
+
+def fetch_gke_kubeconfig(
+    cfg: DocsConfig,
+    gcp_session: GcpSession,
+    cluster_name: Optional[str] = None,
+    location: Optional[str] = None,
+) -> Path:
+    """Fetch kubeconfig for a GKE cluster into `.docs-cli/kubeconfig` using `gcloud container clusters get-credentials`."""
+    import shutil
+
+    cfg.state_dir.mkdir(parents=True, exist_ok=True)
+    kc_path = cfg.kubeconfig_path
+    target_cluster = cluster_name or cfg.cluster.name
+    target_loc = location or gcp_session.zone
+
+    if not shutil.which("gcloud"):
+        raise RuntimeError(
+            "Google Cloud SDK (`gcloud`) is required to fetch GKE credentials. "
+            "Install `google-cloud-cli` and `gke-gcloud-auth-plugin`."
+        )
+
+    gcp_session.ensure_gcloud_auth_if_service_account()
+    env = gcp_session.gcloud_env()
+    env["KUBECONFIG"] = str(kc_path)
+
+    cmd = [
+        "gcloud",
+        "container",
+        "clusters",
+        "get-credentials",
+        target_cluster,
+        f"--location={target_loc}",
+        f"--project={gcp_session.project_id}",
+        "--quiet",
+    ]
+    console.print(f"[dim]$ KUBECONFIG={kc_path} {' '.join(cmd)}[/dim]")
+    res = subprocess.run(cmd, env=env, check=False, text=True, capture_output=True)
+    if res.returncode != 0 or not kc_path.exists():
+        raise RuntimeError(
+            f"Failed to fetch GKE kubeconfig for '{target_cluster}' ({target_loc}): {res.stderr.strip() or res.stdout.strip()}"
+        )
+    kc_path.chmod(0o600)
+    console.print(f"[green]✓ Wrote GKE kubeconfig via `gcloud` to {kc_path}[/green]")
     return kc_path

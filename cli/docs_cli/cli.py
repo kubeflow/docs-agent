@@ -15,6 +15,7 @@ from rich.table import Table
 
 from .auth import OciSession
 from .config import DocsConfig
+from .gcp_auth import GcpSession
 from .kube import (
     compile_kfp_pipelines,
     deploy_helm_stack,
@@ -30,7 +31,9 @@ from .kube import (
 from .scale import (
     cancel_in_cluster_ttl_job,
     get_in_cluster_ttl_status,
+    scale_gke_node_pools,
     scale_node_pools,
+    schedule_in_cluster_gcp_ttl_job,
     schedule_in_cluster_ttl_job,
 )
 from .netlify import (
@@ -42,13 +45,18 @@ from .netlify import (
 )
 from .nuke import (
     destroy_full_environment,
+    destroy_full_gcp_environment,
+    discover_labeled_gcp_resources,
     discover_tagged_oci_resources,
+    nuke_labeled_gcp_resources,
     nuke_tagged_oci_resources,
+    ordered_gcp_terraform_down,
     ordered_terraform_down,
     render_nuke_plan_table,
 )
 from .terraform import (
     ensure_kubeflow_manifests_charts,
+    fetch_gke_kubeconfig,
     fetch_oke_kubeconfig,
     get_terraform_outputs,
     render_tfvars_files,
@@ -58,14 +66,25 @@ from .verify import print_verification_report, run_verification_suite
 
 console = Console()
 
+CLOUD_CHOICE = click.Choice(["oci", "gcp"], case_sensitive=False)
+
 
 def _load_cfg(
     config_path: Optional[str],
     no_gpu: bool = False,
+    cloud: Optional[str] = None,
 ) -> DocsConfig:
     p = Path(config_path) if config_path else None
     gpu_override = False if no_gpu else None
-    return DocsConfig.load(path=p, enable_gpu_override=gpu_override)
+    return DocsConfig.load(
+        path=p,
+        enable_gpu_override=gpu_override,
+        cloud_override=cloud,
+    )
+
+
+def _resolve_cloud(ctx: click.Context, cloud_opt: Optional[str]) -> Optional[str]:
+    return cloud_opt or (ctx.obj or {}).get("cloud")
 
 
 @click.group()
@@ -76,46 +95,66 @@ def _load_cfg(
     default=None,
     help="Path to docs.toml configuration file.",
 )
+@click.option(
+    "--cloud",
+    type=CLOUD_CHOICE,
+    default=None,
+    help="Target cloud provider: 'oci' (Oracle OKE) or 'gcp' (Google Cloud GKE).",
+)
 @click.pass_context
-def main(ctx: click.Context, config_path: Optional[str]) -> None:
-    """docs-cli (docsctl): OCI OKE + Netlify Dev Cluster CLI for Kubeflow Docs Agent."""
+def main(ctx: click.Context, config_path: Optional[str], cloud: Optional[str]) -> None:
+    """docs-cli (docsctl): Multi-Cloud (OCI OKE & GCP GKE) + Netlify Dev Cluster CLI for Kubeflow Docs Agent."""
     ctx.ensure_object(dict)
     ctx.obj["config_path"] = config_path
+    ctx.obj["cloud"] = cloud
 
 
 @main.command()
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
 @click.option("--no-gpu", is_flag=True, help="Render templates for a CPU-only cluster (external LLM API).")
 @click.option("--domain", default=None, help="Override ingress domain when rendering Helm values.")
 @click.pass_context
-def template(ctx: click.Context, no_gpu: bool, domain: Optional[str]) -> None:
+def template(
+    ctx: click.Context,
+    cloud: Optional[str],
+    no_gpu: bool,
+    domain: Optional[str],
+) -> None:
     """Render Terraform (.tfvars.json) and Helm values files into .docs-cli/ without touching cloud resources."""
-    cfg = _load_cfg(ctx.obj.get("config_path"), no_gpu=no_gpu)
+    cfg = _load_cfg(
+        ctx.obj.get("config_path"),
+        no_gpu=no_gpu,
+        cloud=_resolve_cloud(ctx, cloud),
+    )
     if domain:
         cfg.ingress.domain = domain
 
     comp_id: Optional[str] = cfg.oci.compartment_id or None
-    oke_tfvars, platform_tfvars = render_tfvars_files(
-        cfg, session=None, compartment_id=comp_id
+    cluster_tfvars, platform_tfvars = render_tfvars_files(
+        cfg, session=None, compartment_id=comp_id, gcp_session=None
     )
     helm_files = render_helm_values_files(cfg, domain=domain)
 
-    table = Table(title="Rendered Configuration Templates (.docs-cli/)")
+    cluster_label = "GKE Cluster Terraform" if cfg.cloud == "gcp" else "OKE Cluster Terraform"
+    table = Table(title=f"Rendered Configuration Templates (.docs-cli/ — cloud={cfg.cloud})")
     table.add_column("Component", style="cyan")
     table.add_column("File Path", style="green")
-    table.add_row("OKE Cluster Terraform", str(oke_tfvars))
+    table.add_row(cluster_label, str(cluster_tfvars))
     table.add_row("Platform Stack Terraform", str(platform_tfvars))
     for k, v in helm_files.items():
         table.add_row(f"Helm Values ({k})", str(v))
     console.print(table)
     console.print(
-        f"[dim]GPU Node Pool Enabled: {cfg.cluster.enable_gpu_pool} | "
+        f"[dim]Cloud: {cfg.cloud.upper()} | GPU Node Pool Enabled: {cfg.cluster.enable_gpu_pool} | "
         f"Active LLM Profile: {cfg.llm.active_profile if cfg.cluster.enable_gpu_pool else cfg.llm.external_model}[/dim]"
     )
 
 
 @main.command()
-@click.option("--no-gpu", is_flag=True, help="Provision a CPU-only OKE cluster and use an external OpenAI-compatible API.")
-@click.option("--skip-oke", is_flag=True, help="Skip OKE cluster Terraform (use existing cluster/kubeconfig).")
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
+@click.option("--no-gpu", is_flag=True, help="Provision a CPU-only cluster and use an external OpenAI-compatible API.")
+@click.option("--skip-oke", is_flag=True, help="Skip cluster Terraform (use existing cluster/kubeconfig).")
+@click.option("--skip-cluster", is_flag=True, help="Cloud-neutral alias for --skip-oke: skip OKE/GKE cluster Terraform.")
 @click.option("--skip-platform", is_flag=True, help="Skip platform Terraform (Istio, Knative, KServe, Milvus, KFP).")
 @click.option("--skip-pods", is_flag=True, help="Skip Helm chart deployment (llm-runtime, docs-agent, gateway-guardrails).")
 @click.option("--with-netlify", is_flag=True, help="Also build and deploy the frontend/website to Netlify.")
@@ -125,8 +164,10 @@ def template(ctx: click.Context, no_gpu: bool, domain: Optional[str]) -> None:
 @click.pass_context
 def up(
     ctx: click.Context,
+    cloud: Optional[str],
     no_gpu: bool,
     skip_oke: bool,
+    skip_cluster: bool,
     skip_platform: bool,
     skip_pods: bool,
     with_netlify: bool,
@@ -134,63 +175,112 @@ def up(
     ttl_gpu_only: bool,
     apply: bool,
 ) -> None:
-    """Spin up the full Kubeflow Docs Agent dev stack on OCI OKE (including KFP ingestion & optional --ttl auto-scale-down)."""
-    cfg = _load_cfg(ctx.obj.get("config_path"), no_gpu=no_gpu)
+    """Spin up the full Kubeflow Docs Agent dev stack on OCI OKE or GCP GKE (including KFP ingestion & optional --ttl auto-scale-down)."""
+    cfg = _load_cfg(
+        ctx.obj.get("config_path"),
+        no_gpu=no_gpu,
+        cloud=_resolve_cloud(ctx, cloud),
+    )
+    skip_cluster_tf = skip_oke or skip_cluster
     mode_label = "APPLY" if apply else "DRY-RUN (pass --apply to execute)"
+
+    if cfg.cloud == "gcp":
+        loc_str = f"{cfg.gcp.region} / {cfg.gcp.zone}"
+        cpu_desc = f"{cfg.cluster.cpu_node_count}x {cfg.gcp.cpu_machine_type}"
+        gpu_desc = f"{cfg.cluster.gpu_node_count}x {cfg.gcp.gpu_machine_type} ({cfg.gcp.gpu_accelerator_type})"
+        cloud_banner = "GCP GKE"
+    else:
+        loc_str = cfg.oci.region
+        cpu_desc = f"{cfg.cluster.cpu_node_count}x {cfg.cluster.cpu_node_shape}"
+        gpu_desc = f"{cfg.cluster.gpu_node_count}x {cfg.cluster.gpu_node_shape}"
+        cloud_banner = "OCI OKE"
+
     console.print(
         Panel(
-            f"[bold cyan]Cluster:[/bold cyan] {cfg.cluster.name} ({cfg.oci.region})\n"
-            f"[bold cyan]Topology:[/bold cyan] CPU ({cfg.cluster.cpu_node_count}x {cfg.cluster.cpu_node_shape}) "
+            f"[bold cyan]Cloud:[/bold cyan]    {cloud_banner}\n"
+            f"[bold cyan]Cluster:[/bold cyan]  {cfg.cluster.name} ({loc_str})\n"
+            f"[bold cyan]Topology:[/bold cyan] CPU ({cpu_desc}) "
             + (
-                f"+ GPU ({cfg.cluster.gpu_node_count}x {cfg.cluster.gpu_node_shape}, profile={cfg.llm.active_profile})"
+                f"+ GPU ({gpu_desc}, profile={cfg.llm.active_profile})"
                 if cfg.cluster.enable_gpu_pool
                 else f"[yellow]CPU-Only (--no-gpu, external LLM={cfg.llm.external_model})[/yellow]"
             )
-            + f"\n[bold cyan]Mode:[/bold cyan] {mode_label}",
+            + f"\n[bold cyan]Mode:[/bold cyan]     {mode_label}",
             title="Kubeflow Docs Agent — `docs-cli up`",
         )
     )
 
     session: Optional[OciSession] = None
+    gcp_session: Optional[GcpSession] = None
     comp_id: Optional[str] = cfg.oci.compartment_id or None
-    if not skip_oke or apply:
-        try:
-            session = OciSession.from_docs_config(cfg)
-            comp_id = session.resolve_compartment_id(cfg)
-        except Exception as exc:
-            if apply and not skip_oke:
-                raise click.ClickException(f"OCI authentication failed: {exc}")
-            console.print(f"[yellow]! OCI credentials not active ({exc}); templating with placeholders.[/yellow]")
 
-    oke_tfvars, platform_tfvars = render_tfvars_files(
-        cfg, session=session, compartment_id=comp_id
-    )
+    if cfg.cloud == "gcp":
+        if not skip_cluster_tf or apply:
+            try:
+                gcp_session = GcpSession.from_docs_config(cfg)
+            except Exception as exc:
+                if apply and not skip_cluster_tf:
+                    raise click.ClickException(f"GCP authentication failed: {exc}")
+                console.print(f"[yellow]! GCP credentials not active ({exc}); templating with placeholders.[/yellow]")
+        cluster_tfvars, platform_tfvars = render_tfvars_files(
+            cfg, gcp_session=gcp_session if apply else None
+        )
+    else:
+        if not skip_cluster_tf or apply:
+            try:
+                session = OciSession.from_docs_config(cfg)
+                comp_id = session.resolve_compartment_id(cfg)
+            except Exception as exc:
+                if apply and not skip_cluster_tf:
+                    raise click.ClickException(f"OCI authentication failed: {exc}")
+                console.print(f"[yellow]! OCI credentials not active ({exc}); templating with placeholders.[/yellow]")
+        cluster_tfvars, platform_tfvars = render_tfvars_files(
+            cfg, session=session if apply else None, compartment_id=comp_id
+        )
+
     render_helm_values_files(cfg)
 
     if not apply:
+        cloud_flag = " --cloud gcp" if cfg.cloud == "gcp" else ""
         console.print(
             "[green]✓ Rendered Terraform & Helm configurations into .docs-cli/[/green]\n"
-            "Re-run with [bold]docs-cli up --apply[/bold] to provision the cluster and deploy pods."
+            f"Re-run with [bold]docs-cli{cloud_flag} up --apply[/bold] to provision the cluster and deploy pods."
         )
         return
 
-    # Phase 1: OKE Cluster Terraform
-    if not skip_oke:
-        assert session is not None
-        console.print("[bold]Phase 1/4: Provisioning OCI OKE Cluster & VCN...[/bold]")
-        if not (cfg.oke_tf_dir / ".terraform").exists():
-            run_terraform(cfg.oke_tf_dir, ["init"], extra_env=session.terraform_env())
-        run_terraform(
-            cfg.oke_tf_dir,
-            ["apply", "-auto-approve", f"-var-file={oke_tfvars}"],
-            extra_env=session.terraform_env(),
-        )
-        outputs = get_terraform_outputs(cfg.oke_tf_dir)
-        cluster_id = outputs.get("cluster_id")
-        if not cluster_id:
-            raise click.ClickException("Could not read cluster_id from OKE Terraform outputs.")
-        fetch_oke_kubeconfig(cfg, session, cluster_id)
-        wait_for_worker_nodes_ready(cfg)
+    # Phase 1: Cloud Cluster Terraform (OKE or GKE)
+    if not skip_cluster_tf:
+        if cfg.cloud == "gcp":
+            assert gcp_session is not None
+            console.print("[bold]Phase 1/4: Provisioning GCP GKE Cluster & VPC...[/bold]")
+            if not (cfg.gke_tf_dir / ".terraform").exists():
+                run_terraform(cfg.gke_tf_dir, ["init"], extra_env=gcp_session.terraform_env())
+            run_terraform(
+                cfg.gke_tf_dir,
+                ["apply", "-auto-approve", f"-var-file={cluster_tfvars}"],
+                extra_env=gcp_session.terraform_env(),
+            )
+            outputs = get_terraform_outputs(cfg.gke_tf_dir)
+            gke_name = str(outputs.get("cluster_name") or cfg.cluster.name)
+            gke_loc = str(outputs.get("location") or gcp_session.zone)
+            fetch_gke_kubeconfig(cfg, gcp_session, cluster_name=gke_name, location=gke_loc)
+            wait_for_worker_nodes_ready(cfg)
+        else:
+            assert session is not None
+            console.print("[bold]Phase 1/4: Provisioning OCI OKE Cluster & VCN...[/bold]")
+            if not (cfg.oke_tf_dir / ".terraform").exists():
+                run_terraform(cfg.oke_tf_dir, ["init"], extra_env=session.terraform_env())
+            run_terraform(
+                cfg.oke_tf_dir,
+                ["apply", "-auto-approve", f"-var-file={cluster_tfvars}"],
+                extra_env=session.terraform_env(),
+            )
+            outputs = get_terraform_outputs(cfg.oke_tf_dir)
+            cluster_id = outputs.get("cluster_id")
+            if not cluster_id:
+                raise click.ClickException("Could not read cluster_id from OKE Terraform outputs.")
+            fetch_oke_kubeconfig(cfg, session, cluster_id)
+            wait_for_worker_nodes_ready(cfg)
 
     # Phase 2: Platform Stack Terraform (Istio, Knative, KServe, Milvus, KFP, TEI Embeddings & Reranker)
     if not skip_platform:
@@ -219,14 +309,22 @@ def up(
             exposed_page_url = deployed_url
 
     # Optional TTL auto-scaler
-    if ttl and session and comp_id:
-        schedule_in_cluster_ttl_job(
-            cfg,
-            session=session,
-            compartment_id=comp_id,
-            duration_str=ttl,
-            gpu_only=ttl_gpu_only,
-        )
+    if ttl:
+        if cfg.cloud == "gcp" and gcp_session:
+            schedule_in_cluster_gcp_ttl_job(
+                cfg,
+                gcp_session=gcp_session,
+                duration_str=ttl,
+                gpu_only=ttl_gpu_only,
+            )
+        elif session and comp_id:
+            schedule_in_cluster_ttl_job(
+                cfg,
+                session=session,
+                compartment_id=comp_id,
+                duration_str=ttl,
+                gpu_only=ttl_gpu_only,
+            )
 
     # Phase 5: Ordered Verification & Exposed Page Report
     console.print("[bold]Phase 5/5: Running Ordered Verification Suite...[/bold]")
@@ -239,11 +337,26 @@ def up(
 
 
 @main.command()
-@click.option("--cluster-id", default=None, help="Explicit OKE Cluster OCID (auto-detected from Terraform outputs if omitted).")
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
+@click.option("--cluster-id", default=None, help="Explicit OKE Cluster OCID or GKE cluster name (auto-detected if omitted).")
+@click.option("--location", default=None, help="Explicit GKE zone/region when --cloud gcp.")
 @click.pass_context
-def kubeconfig(ctx: click.Context, cluster_id: Optional[str]) -> None:
-    """Fetch OKE kubeconfig into .docs-cli/kubeconfig."""
-    cfg = _load_cfg(ctx.obj.get("config_path"))
+def kubeconfig(
+    ctx: click.Context,
+    cloud: Optional[str],
+    cluster_id: Optional[str],
+    location: Optional[str],
+) -> None:
+    """Fetch OKE or GKE kubeconfig into .docs-cli/kubeconfig."""
+    cfg = _load_cfg(ctx.obj.get("config_path"), cloud=_resolve_cloud(ctx, cloud))
+    if cfg.cloud == "gcp":
+        gcp_session = GcpSession.from_docs_config(cfg)
+        outputs = get_terraform_outputs(cfg.gke_tf_dir)
+        gke_name = cluster_id or str(outputs.get("cluster_name") or cfg.cluster.name)
+        gke_loc = location or str(outputs.get("location") or gcp_session.zone)
+        fetch_gke_kubeconfig(cfg, gcp_session, cluster_name=gke_name, location=gke_loc)
+        return
+
     session = OciSession.from_docs_config(cfg)
     cid = cluster_id or get_terraform_outputs(cfg.oke_tf_dir).get("cluster_id")
     if not cid:
@@ -258,17 +371,27 @@ def kubeconfig(ctx: click.Context, cluster_id: Optional[str]) -> None:
 @click.pass_context
 def secrets(ctx: click.Context, domain: Optional[str]) -> None:
     """Create or update all Kubernetes Secrets from secure environment variables."""
-    cfg = _load_cfg(ctx.obj.get("config_path"))
+    cfg = _load_cfg(ctx.obj.get("config_path"), cloud=_resolve_cloud(ctx, None))
     sync_all_secrets(cfg, domain=domain)
 
 
 @main.command(name="pods")
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
 @click.option("--no-gpu", is_flag=True, help="Deploy without in-cluster GPU vLLM (use external LLM API).")
 @click.option("--skip-kagent", is_flag=True, help="Skip installing/upgrading Kagent CRDs and controller.")
 @click.pass_context
-def pods_cmd(ctx: click.Context, no_gpu: bool, skip_kagent: bool) -> None:
+def pods_cmd(
+    ctx: click.Context,
+    cloud: Optional[str],
+    no_gpu: bool,
+    skip_kagent: bool,
+) -> None:
     """Deploy/upgrade the application pods & Helm charts (llm-runtime, docs-agent, gateway-guardrails)."""
-    cfg = _load_cfg(ctx.obj.get("config_path"), no_gpu=no_gpu)
+    cfg = _load_cfg(
+        ctx.obj.get("config_path"),
+        no_gpu=no_gpu,
+        cloud=_resolve_cloud(ctx, cloud),
+    )
     domain = deploy_helm_stack(cfg, skip_kagent=skip_kagent)
     console.print(
         f"[green]✓ Application pods & ingress configured for https://{domain}[/green]"
@@ -419,18 +542,20 @@ def netlify(
 
 
 @main.command()
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
 @click.option("--domain", default=None, help="Explicit Docs Agent ingress domain.")
 @click.option("--page-url", default=None, help="Explicit exposed page URL to test.")
 @click.option("--helm-tests", is_flag=True, help="Also execute in-cluster `helm test` suites.")
 @click.pass_context
 def verify(
     ctx: click.Context,
+    cloud: Optional[str],
     domain: Optional[str],
     page_url: Optional[str],
     helm_tests: bool,
 ) -> None:
     """Run the ordered 6-stage verification suite and print passed tests + exposed page link."""
-    cfg = _load_cfg(ctx.obj.get("config_path"))
+    cfg = _load_cfg(ctx.obj.get("config_path"), cloud=_resolve_cloud(ctx, cloud))
     results, all_passed, agent_url, final_page_url = run_verification_suite(
         cfg,
         domain=domain,
@@ -446,7 +571,7 @@ def verify(
 @click.pass_context
 def status(ctx: click.Context) -> None:
     """Show current cluster pods, InferenceServices, Kagent Agents, and Ingress IP."""
-    cfg = _load_cfg(ctx.obj.get("config_path"))
+    cfg = _load_cfg(ctx.obj.get("config_path"), cloud=_resolve_cloud(ctx, None))
     if not cfg.kubeconfig_path.exists():
         console.print(
             f"[yellow]No kubeconfig found at {cfg.kubeconfig_path}. Run `docs-cli kubeconfig` or `docs-cli up --apply`.[/yellow]"
@@ -476,16 +601,17 @@ def status(ctx: click.Context) -> None:
 
 
 @main.command()
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
 @click.pass_context
-def doctor(ctx: click.Context) -> None:
+def doctor(ctx: click.Context, cloud: Optional[str]) -> None:
     """Verify required CLI tools, local repository paths, and environment variables."""
-    cfg = _load_cfg(ctx.obj.get("config_path"))
-    table = Table(title="docs-cli Environment & Prerequisite Check")
+    cfg = _load_cfg(ctx.obj.get("config_path"), cloud=_resolve_cloud(ctx, cloud))
+    table = Table(title=f"docs-cli Environment & Prerequisite Check (active cloud={cfg.cloud})")
     table.add_column("Check", style="cyan")
     table.add_column("Status", style="bold")
     table.add_column("Details", style="dim")
 
-    for binary in ("terraform", "kubectl", "helm", "oci", "hugo"):
+    for binary in ("terraform", "kubectl", "helm", "oci", "gcloud", "gke-gcloud-auth-plugin", "hugo"):
         found = shutil.which(binary)
         table.add_row(
             f"Binary: {binary}",
@@ -497,6 +623,11 @@ def doctor(ctx: click.Context) -> None:
         "OKE Terraform Module",
         "[green]OK[/green]" if cfg.oke_tf_dir.exists() else "[red]MISSING[/red]",
         str(cfg.oke_tf_dir),
+    )
+    table.add_row(
+        "GKE Terraform Module",
+        "[green]OK[/green]" if cfg.gke_tf_dir.exists() else "[red]MISSING[/red]",
+        str(cfg.gke_tf_dir),
     )
     table.add_row(
         "Platform Terraform Module",
@@ -522,6 +653,16 @@ def doctor(ctx: click.Context) -> None:
         "[green]CONFIGURED[/green]" if has_oci else "[yellow]UNSET[/yellow]",
         "OCI_TENANCY env or ~/.oci/config",
     )
+    has_gcp = bool(
+        cfg.gcp.project_id
+        or cfg.gcp.credentials_file
+        or (Path.home() / ".config" / "gcloud" / "application_default_credentials.json").exists()
+    )
+    table.add_row(
+        "GCP Credentials",
+        "[green]CONFIGURED[/green]" if has_gcp else "[yellow]UNSET[/yellow]",
+        "GCP_PROJECT_ID / GOOGLE_APPLICATION_CREDENTIALS / gcloud ADC",
+    )
     table.add_row(
         "Netlify Token",
         "[green]CONFIGURED[/green]" if cfg.netlify.auth_token else "[yellow]UNSET[/yellow]",
@@ -531,6 +672,7 @@ def doctor(ctx: click.Context) -> None:
 
 
 @main.command(name="scale-down")
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
 @click.option("--gpu-only", is_flag=True, help="Scale only the GPU node pool down to 0 (keep CPU nodes running).")
 @click.option("--after", default=None, help="Schedule an in-cluster TTL job to scale down after duration (e.g. '2h', '90m').")
 @click.option(
@@ -542,13 +684,37 @@ def doctor(ctx: click.Context) -> None:
 @click.pass_context
 def scale_down_cmd(
     ctx: click.Context,
+    cloud: Optional[str],
     gpu_only: bool,
     after: Optional[str],
     release_frontend: bool,
     yes: bool,
 ) -> None:
-    """Hibernate / scale down OKE node pools to 0 nodes (preserving PVCs, Milvus data, and LB IP) or schedule with --after."""
-    cfg = _load_cfg(ctx.obj.get("config_path"))
+    """Hibernate / scale down OKE or GKE node pools to 0 nodes (preserving PVCs, Milvus data, and LB IP) or schedule with --after."""
+    cfg = _load_cfg(ctx.obj.get("config_path"), cloud=_resolve_cloud(ctx, cloud))
+    cpu_target = None if gpu_only else 0
+    gpu_target = 0
+
+    if cfg.cloud == "gcp":
+        gcp_session = GcpSession.from_docs_config(cfg)
+        if after:
+            schedule_in_cluster_gcp_ttl_job(
+                cfg,
+                gcp_session=gcp_session,
+                duration_str=after,
+                gpu_only=gpu_only,
+            )
+            return
+        scale_gke_node_pools(
+            cfg,
+            gcp_session=gcp_session,
+            cpu_size=cpu_target,
+            gpu_size=gpu_target,
+            apply=yes,
+            release_frontend=release_frontend,
+        )
+        return
+
     session = OciSession.from_docs_config(cfg)
     comp_id = session.resolve_compartment_id(cfg)
 
@@ -562,8 +728,6 @@ def scale_down_cmd(
         )
         return
 
-    cpu_target = None if gpu_only else 0
-    gpu_target = 0
     scale_node_pools(
         cfg,
         session=session,
@@ -576,6 +740,7 @@ def scale_down_cmd(
 
 
 @main.command(name="scale-up")
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
 @click.option("--cpu", default=None, type=int, help="Target CPU node count (defaults to docs.toml cpu_node_count).")
 @click.option("--gpu", default=None, type=int, help="Target GPU node count (defaults to docs.toml gpu_node_count).")
 @click.option("--no-gpu", is_flag=True, help="Wake only CPU nodes (leave GPU node pool at 0).")
@@ -585,6 +750,7 @@ def scale_down_cmd(
 @click.pass_context
 def scale_up_cmd(
     ctx: click.Context,
+    cloud: Optional[str],
     cpu: Optional[int],
     gpu: Optional[int],
     no_gpu: bool,
@@ -592,13 +758,36 @@ def scale_up_cmd(
     ttl_gpu_only: bool,
     yes: bool,
 ) -> None:
-    """Wake / scale up OKE node pools back to active capacity (with optional --ttl auto-scale-down timer)."""
-    cfg = _load_cfg(ctx.obj.get("config_path"), no_gpu=no_gpu)
-    session = OciSession.from_docs_config(cfg)
-    comp_id = session.resolve_compartment_id(cfg)
-
+    """Wake / scale up OKE or GKE node pools back to active capacity (with optional --ttl auto-scale-down timer)."""
+    cfg = _load_cfg(
+        ctx.obj.get("config_path"),
+        no_gpu=no_gpu,
+        cloud=_resolve_cloud(ctx, cloud),
+    )
     cpu_target = cpu if cpu is not None else cfg.cluster.cpu_node_count
     gpu_target = 0 if no_gpu else (gpu if gpu is not None else cfg.cluster.gpu_node_count)
+
+    if cfg.cloud == "gcp":
+        gcp_session = GcpSession.from_docs_config(cfg)
+        scale_gke_node_pools(
+            cfg,
+            gcp_session=gcp_session,
+            cpu_size=cpu_target,
+            gpu_size=gpu_target,
+            apply=yes,
+            release_frontend=False,
+        )
+        if yes and ttl:
+            schedule_in_cluster_gcp_ttl_job(
+                cfg,
+                gcp_session=gcp_session,
+                duration_str=ttl,
+                gpu_only=ttl_gpu_only,
+            )
+        return
+
+    session = OciSession.from_docs_config(cfg)
+    comp_id = session.resolve_compartment_id(cfg)
 
     scale_node_pools(
         cfg,
@@ -620,15 +809,33 @@ def scale_up_cmd(
 
 
 @main.command(name="scale")
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
 @click.option("--cpu", default=None, type=int, help="Target CPU node pool size.")
 @click.option("--gpu", default=None, type=int, help="Target GPU node pool size.")
 @click.option("--yes", is_flag=True, help="Execute node pool scaling.")
 @click.pass_context
-def scale_cmd(ctx: click.Context, cpu: Optional[int], gpu: Optional[int], yes: bool) -> None:
-    """Scale OKE CPU and/or GPU node pools to an explicit node count."""
+def scale_cmd(
+    ctx: click.Context,
+    cloud: Optional[str],
+    cpu: Optional[int],
+    gpu: Optional[int],
+    yes: bool,
+) -> None:
+    """Scale OKE or GKE CPU and/or GPU node pools to an explicit node count."""
     if cpu is None and gpu is None:
         raise click.ClickException("Specify at least one of --cpu <count> or --gpu <count>.")
-    cfg = _load_cfg(ctx.obj.get("config_path"))
+    cfg = _load_cfg(ctx.obj.get("config_path"), cloud=_resolve_cloud(ctx, cloud))
+    if cfg.cloud == "gcp":
+        gcp_session = GcpSession.from_docs_config(cfg)
+        scale_gke_node_pools(
+            cfg,
+            gcp_session=gcp_session,
+            cpu_size=cpu,
+            gpu_size=gpu,
+            apply=yes,
+        )
+        return
+
     session = OciSession.from_docs_config(cfg)
     comp_id = session.resolve_compartment_id(cfg)
     scale_node_pools(
@@ -642,6 +849,7 @@ def scale_cmd(ctx: click.Context, cpu: Optional[int], gpu: Optional[int], yes: b
 
 
 @main.command(name="ttl")
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
 @click.option("--set", "set_duration", default=None, help="Arm or update the in-cluster auto-scale-down timer (e.g. '2h', '90m').")
 @click.option("--gpu-only", is_flag=True, help="Scale only the GPU node pool down to 0 when the timer expires.")
 @click.option("--cancel", is_flag=True, help="Cancel the active in-cluster auto-scale-down timer.")
@@ -649,17 +857,27 @@ def scale_cmd(ctx: click.Context, cpu: Optional[int], gpu: Optional[int], yes: b
 @click.pass_context
 def ttl_cmd(
     ctx: click.Context,
+    cloud: Optional[str],
     set_duration: Optional[str],
     gpu_only: bool,
     cancel: bool,
     show_status: bool,
 ) -> None:
     """Manage the in-cluster auto-scale-down TTL Job (`kube-system/docs-agent-autoscale-ttl`)."""
-    cfg = _load_cfg(ctx.obj.get("config_path"))
+    cfg = _load_cfg(ctx.obj.get("config_path"), cloud=_resolve_cloud(ctx, cloud))
     if cancel:
         cancel_in_cluster_ttl_job(cfg)
         return
     if set_duration:
+        if cfg.cloud == "gcp":
+            gcp_session = GcpSession.from_docs_config(cfg)
+            schedule_in_cluster_gcp_ttl_job(
+                cfg,
+                gcp_session=gcp_session,
+                duration_str=set_duration,
+                gpu_only=gpu_only,
+            )
+            return
         session = OciSession.from_docs_config(cfg)
         comp_id = session.resolve_compartment_id(cfg)
         schedule_in_cluster_ttl_job(
@@ -691,30 +909,56 @@ def ttl_cmd(
 
 
 @main.command()
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
 @click.option("--yes", is_flag=True, help="Confirm ordered Terraform teardown.")
 @click.pass_context
-def down(ctx: click.Context, yes: bool) -> None:
-    """Ordered teardown: remove K8s LoadBalancers & PVCs, then destroy platform and OKE Terraform stacks."""
-    cfg = _load_cfg(ctx.obj.get("config_path"))
+def down(ctx: click.Context, cloud: Optional[str], yes: bool) -> None:
+    """Ordered teardown: remove K8s LoadBalancers & PVCs, then destroy platform and OKE/GKE Terraform stacks."""
+    cfg = _load_cfg(ctx.obj.get("config_path"), cloud=_resolve_cloud(ctx, cloud))
+    cluster_kind = "GKE" if cfg.cloud == "gcp" else "OKE"
     if not yes:
+        cloud_flag = " --cloud gcp" if cfg.cloud == "gcp" else ""
         console.print(
-            f"[yellow]Dry-run:[/yellow] Will tear down K8s LoadBalancers/PVCs, platform Terraform, and OKE cluster '{cfg.cluster.name}'.\n"
-            "Re-run with [bold]docs-cli down --yes[/bold] to execute."
+            f"[yellow]Dry-run:[/yellow] Will tear down K8s LoadBalancers/PVCs, platform Terraform, and {cluster_kind} cluster '{cfg.cluster.name}'.\n"
+            f"Re-run with [bold]docs-cli{cloud_flag} down --yes[/bold] to execute."
         )
         return
 
-    session = OciSession.from_docs_config(cfg)
-    comp_id = session.resolve_compartment_id(cfg)
-    ordered_terraform_down(cfg, session, comp_id)
+    if cfg.cloud == "gcp":
+        gcp_session = GcpSession.from_docs_config(cfg)
+        ordered_gcp_terraform_down(cfg, gcp_session)
+    else:
+        session = OciSession.from_docs_config(cfg)
+        comp_id = session.resolve_compartment_id(cfg)
+        ordered_terraform_down(cfg, session, comp_id)
     console.print("[bold green]✓ Cluster teardown complete.[/bold green]")
 
 
 @main.command()
-@click.option("--yes", is_flag=True, help="Execute direct OCI API deletion of all tagged cluster resources.")
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
+@click.option("--yes", is_flag=True, help="Execute direct cloud API deletion of all tagged/labeled cluster resources.")
 @click.pass_context
-def nuke(ctx: click.Context, yes: bool) -> None:
-    """Direct OCI API sweep of any remaining resources tagged for this cluster (`docs-cli-cluster`)."""
-    cfg = _load_cfg(ctx.obj.get("config_path"))
+def nuke(ctx: click.Context, cloud: Optional[str], yes: bool) -> None:
+    """Direct OCI/GCP sweep of any remaining resources tagged/labeled for this cluster (`docs-cli-cluster`)."""
+    cfg = _load_cfg(ctx.obj.get("config_path"), cloud=_resolve_cloud(ctx, cloud))
+    if cfg.cloud == "gcp":
+        gcp_session = GcpSession.from_docs_config(cfg)
+        resources = discover_labeled_gcp_resources(gcp_session, cfg.cluster.name)
+        if not resources:
+            console.print(
+                f"[green]✓ No lingering GCP resources found for cluster '{cfg.cluster.name}' in project {gcp_session.project_id}.[/green]"
+            )
+            return
+        render_nuke_plan_table(resources, cfg.cluster.name)
+        if not yes:
+            console.print(
+                "\n[yellow]Dry-run mode.[/yellow] Re-run with [bold]docs-cli --cloud gcp nuke --yes[/bold] to permanently delete these GCP resources."
+            )
+            return
+        nuke_labeled_gcp_resources(gcp_session, cfg.cluster.name, resources)
+        console.print("[bold green]✓ GCP nuke sweep dispatched.[/bold green]")
+        return
+
     session = OciSession.from_docs_config(cfg)
     comp_id = session.resolve_compartment_id(cfg)
 
@@ -737,11 +981,32 @@ def nuke(ctx: click.Context, yes: bool) -> None:
 
 
 @main.command(name="destroy")
-@click.option("--yes", is_flag=True, help="Permanently tear down the entire dev environment (K8s LBs/PVCs + Terraform + OCI sweep).")
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
+@click.option("--yes", is_flag=True, help="Permanently tear down the entire dev environment (K8s LBs/PVCs + Terraform + cloud sweep).")
 @click.pass_context
-def destroy_cmd(ctx: click.Context, yes: bool) -> None:
-    """Tear down the entire dev environment end-to-end (port-forward, K8s LoadBalancers/PVCs, platform & OKE Terraform, OCI sweep, and local state)."""
-    cfg = _load_cfg(ctx.obj.get("config_path"))
+def destroy_cmd(ctx: click.Context, cloud: Optional[str], yes: bool) -> None:
+    """Tear down the entire dev environment end-to-end (port-forward, K8s LoadBalancers/PVCs, platform & OKE/GKE Terraform, cloud sweep, and local state)."""
+    cfg = _load_cfg(ctx.obj.get("config_path"), cloud=_resolve_cloud(ctx, cloud))
+    if cfg.cloud == "gcp":
+        gcp_session = GcpSession.from_docs_config(cfg)
+        resources = discover_labeled_gcp_resources(gcp_session, cfg.cluster.name)
+        if resources:
+            render_nuke_plan_table(resources, cfg.cluster.name)
+        if not yes:
+            console.print(
+                f"[yellow]Dry-run:[/yellow] Will tear down K8s LoadBalancers/PVCs, platform & GKE Terraform stacks, and verify 0 GCP resources remain for '{cfg.cluster.name}'.\n"
+                "Re-run with [bold]docs-cli --cloud gcp destroy --yes[/bold] to execute full teardown."
+            )
+            return
+        remaining = destroy_full_gcp_environment(cfg, gcp_session)
+        if remaining:
+            render_nuke_plan_table(remaining, cfg.cluster.name)
+            raise click.ClickException(
+                f"{len(remaining)} GCP resource(s) are still terminating; re-run `docs-cli --cloud gcp destroy --yes` in a minute."
+            )
+        console.print(f"[bold green]✓ GCP environment '{cfg.cluster.name}' completely destroyed (0 cloud resources remaining).[/bold green]")
+        return
+
     session = OciSession.from_docs_config(cfg)
     comp_id = session.resolve_compartment_id(cfg)
     resources = discover_tagged_oci_resources(session, comp_id, cfg.cluster.name)
@@ -764,6 +1029,7 @@ def destroy_cmd(ctx: click.Context, yes: bool) -> None:
 
 
 @main.command(name="update")
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
 @click.option("--pull", is_flag=True, help="Run `git pull --ff-only` before syncing upstream charts and Terraform.")
 @click.option(
     "--track",
@@ -791,6 +1057,7 @@ def destroy_cmd(ctx: click.Context, yes: bool) -> None:
 @click.pass_context
 def update_cmd(
     ctx: click.Context,
+    cloud: Optional[str],
     pull: bool,
     track: str,
     compile_pipelines: bool,
@@ -802,7 +1069,7 @@ def update_cmd(
     """Sync CLI defaults from upstream Helm/Terraform/GHCR, recompile pipelines if changed, run tests, and optionally upgrade + verify the active cluster."""
     import sys
 
-    cfg = _load_cfg(ctx.obj.get("config_path"))
+    cfg = _load_cfg(ctx.obj.get("config_path"), cloud=_resolve_cloud(ctx, cloud))
 
     if pull:
         console.print("[bold cyan]0. Pulling latest repository changes (`git pull --ff-only`)...[/bold cyan]")
@@ -895,6 +1162,13 @@ def update_cmd(
         import json as _json
 
         diag_payload = {
+            "supported_clouds": ["oci", "gcp"],
+            "active_cloud": cfg.cloud,
+            "terraform_modules": {
+                "oke_cluster": str(cfg.oke_tf_dir.relative_to(cfg.repo_root)),
+                "gke_cluster": str(cfg.gke_tf_dir.relative_to(cfg.repo_root)),
+                "platform": str(cfg.platform_tf_dir.relative_to(cfg.repo_root)),
+            },
             "enabled_kagent_agents": cfg.discover_enabled_kagent_agents(),
             "argocd_apps": argo_apps,
             "unmapped_argocd_apps": unmapped_apps,

@@ -347,13 +347,18 @@ def get_ingress_lb_ip(cfg: DocsConfig, timeout_seconds: int = 120) -> Optional[s
 def build_llm_runtime_values(cfg: DocsConfig) -> Dict[str, Any]:
     """Build Helm values override for docs-agent-mcp/charts/llm-runtime."""
     profile = "gemma" if cfg.llm.active_profile in ("gemma", "gemma4") else cfg.llm.active_profile
-    return {
+    vals: Dict[str, Any] = {
         "model": profile,
         "hfToken": {
             "existingSecret": "huggingface-secret" if cfg.llm.hf_token else "",
             "key": "HF_TOKEN",
         },
     }
+    if cfg.cloud == "gcp":
+        vals["cache"] = {
+            "storageClassName": cfg.gcp.storage_class or "standard-rwo",
+        }
+    return vals
 
 
 def build_docs_agent_values(cfg: DocsConfig) -> Dict[str, Any]:

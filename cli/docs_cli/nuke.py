@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
+import re
+import shutil
 import signal
 import subprocess
 import time
@@ -14,6 +17,7 @@ from rich.table import Table
 
 from .auth import OciSession
 from .config import DocsConfig
+from .gcp_auth import GcpSession
 from .terraform import render_tfvars_files, run_terraform
 
 console = Console()
@@ -452,5 +456,296 @@ def destroy_full_environment(
                 ephemeral.unlink(missing_ok=True)
         console.print(
             f"[bold green]✓ Verified 0 OCI cloud resources remain for '{cfg.cluster.name}' and cleaned local state![/bold green]"
+        )
+    return remaining
+
+
+# =============================================================================
+# Google Cloud (GCP / GKE) Ordered Teardown, Label-Verified Nuke & Full Destroy
+# =============================================================================
+
+
+def normalize_gcp_label_value(val: str) -> str:
+    """Normalize a cluster name into a valid GCP resource label value (lowercase, <=63 chars)."""
+    return re.sub(r"[^a-zA-Z0-9_-]", "-", val or "").lower()[:63]
+
+
+def has_gcp_cluster_ownership_label(
+    labels: Optional[Dict[str, str]],
+    cluster_name: str,
+) -> bool:
+    """Verify a GCP resource carries `docs-cli-managed=true` and matching `docs-cli-cluster`."""
+    if not labels:
+        return False
+    expected = normalize_gcp_label_value(cluster_name)
+    return (
+        labels.get(MANAGED_TAG_KEY) == "true"
+        and labels.get(CLUSTER_TAG_KEY) == expected
+    )
+
+
+def ordered_gcp_terraform_down(
+    cfg: DocsConfig,
+    gcp_session: GcpSession,
+) -> None:
+    """Run ordered GCP teardown: K8s LB/PVC cleanup -> platform TF destroy -> GKE TF destroy."""
+    gke_tfvars, platform_tfvars = render_tfvars_files(cfg, gcp_session=gcp_session)
+
+    console.print("[bold yellow]Step 1/3: Cleaning up Kubernetes LoadBalancers & PVCs...[/bold yellow]")
+    delete_k8s_loadbalancers_and_pvcs(cfg)
+
+    if (cfg.platform_tf_dir / ".terraform").exists() and (cfg.platform_tf_dir / "terraform.tfstate").exists():
+        console.print("[bold yellow]Step 2/3: Destroying platform Terraform stack...[/bold yellow]")
+        try:
+            run_terraform(
+                cfg.platform_tf_dir,
+                ["destroy", "-auto-approve", f"-var-file={platform_tfvars}"],
+            )
+        except Exception as exc:
+            console.print(
+                f"[yellow]! Platform K8s Terraform destroy reported warning ({exc}); GKE cluster deletion in Step 3 will remove remaining K8s objects.[/yellow]"
+            )
+    else:
+        console.print("[dim]Step 2/3: Platform Terraform state not present; skipping.[/dim]")
+
+    if (cfg.gke_tf_dir / ".terraform").exists():
+        console.print("[bold yellow]Step 3/3: Destroying GKE Cluster & VPC Terraform stack...[/bold yellow]")
+        try:
+            run_terraform(
+                cfg.gke_tf_dir,
+                ["destroy", "-auto-approve", f"-var-file={gke_tfvars}"],
+                extra_env=gcp_session.terraform_env(),
+            )
+        except Exception as exc:
+            console.print(
+                f"[yellow]! GKE Terraform destroy encountered dependency lag ({exc}); GCP sweep will clean up remaining resources.[/yellow]"
+            )
+    else:
+        console.print("[dim]Step 3/3: GKE Terraform not initialized; skipping to GCP sweep.[/dim]")
+
+
+def discover_labeled_gcp_resources(
+    gcp_session: GcpSession,
+    cluster_name: str,
+) -> List[Dict[str, str]]:
+    """Discover GCP resources owned by this cluster (verified by `docs-cli-managed=true` label or dedicated VPC name)."""
+    if not shutil.which("gcloud"):
+        return []
+    gcp_session.ensure_gcloud_auth_if_service_account()
+    env = gcp_session.gcloud_env()
+    proj = gcp_session.project_id
+    lbl_val = normalize_gcp_label_value(cluster_name)
+    found: List[Dict[str, str]] = []
+
+    def _gcloud_json(args: List[str]) -> list:
+        res = subprocess.run(
+            ["gcloud", *args, f"--project={proj}", "--format=json", "--quiet"],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            try:
+                return json.loads(res.stdout)
+            except Exception:
+                return []
+        return []
+
+    # 1. GKE Clusters
+    for cl in _gcloud_json(["container", "clusters", "list"]):
+        rlabels = cl.get("resourceLabels") or {}
+        if has_gcp_cluster_ownership_label(rlabels, cluster_name):
+            found.append(
+                {
+                    "type": "GkeCluster",
+                    "name": str(cl.get("name", "")),
+                    "id": f"{cl.get('location', '')}/{cl.get('name', '')}",
+                    "state": str(cl.get("status", "RUNNING")),
+                }
+            )
+
+    # 2. Compute Persistent Disks carrying ownership labels
+    label_filter = f"labels.{MANAGED_TAG_KEY}=true AND labels.{CLUSTER_TAG_KEY}={lbl_val}"
+    for disk in _gcloud_json(["compute", "disks", "list", f"--filter={label_filter}"]):
+        if has_gcp_cluster_ownership_label(disk.get("labels"), cluster_name):
+            zone_short = str(disk.get("zone", "")).rsplit("/", 1)[-1]
+            found.append(
+                {
+                    "type": "PersistentDisk",
+                    "name": str(disk.get("name", "")),
+                    "id": f"{zone_short}/{disk.get('name', '')}",
+                    "state": str(disk.get("status", "READY")),
+                }
+            )
+
+    # 3. Dedicated VPC & Networking sub-resources created by `deployments/terraform/gke-cluster/network.tf`
+    vpc_name = f"{cluster_name}-vpc"
+    for net in _gcloud_json(["compute", "networks", "list", f"--filter=name={vpc_name}"]):
+        if str(net.get("name")) == vpc_name and "docs-cli" in str(net.get("description", "")):
+            found.append(
+                {
+                    "type": "VPC",
+                    "name": vpc_name,
+                    "id": str(net.get("selfLink", vpc_name)),
+                    "state": "ACTIVE",
+                }
+            )
+
+    return found
+
+
+def nuke_labeled_gcp_resources(
+    gcp_session: GcpSession,
+    cluster_name: str,
+    resources: Optional[List[Dict[str, str]]] = None,
+) -> None:
+    """Delete discovered GCP resources owned by `cluster_name` in dependency order."""
+    if not shutil.which("gcloud"):
+        raise RuntimeError("Google Cloud SDK (`gcloud`) is required for `docs-cli --cloud gcp nuke`.")
+    gcp_session.ensure_gcloud_auth_if_service_account()
+    env = gcp_session.gcloud_env()
+    proj = gcp_session.project_id
+
+    if resources is None:
+        resources = discover_labeled_gcp_resources(gcp_session, cluster_name)
+
+    # 1. Delete GKE clusters first (detaches nodes, MIGs, LBs, and dynamic PVs)
+    for r in [x for x in resources if x["type"] == "GkeCluster"]:
+        loc, name = r["id"].split("/", 1)
+        console.print(f"[yellow]Deleting GKE Cluster {name} ({loc})...[/yellow]")
+        subprocess.run(
+            [
+                "gcloud",
+                "container",
+                "clusters",
+                "delete",
+                name,
+                f"--location={loc}",
+                f"--project={proj}",
+                "--quiet",
+            ],
+            env=env,
+            check=False,
+        )
+
+    # 2. Delete orphaned labeled Persistent Disks
+    for r in [x for x in resources if x["type"] == "PersistentDisk"]:
+        zone, name = r["id"].split("/", 1)
+        console.print(f"[yellow]Deleting PersistentDisk {name} ({zone})...[/yellow]")
+        subprocess.run(
+            [
+                "gcloud",
+                "compute",
+                "disks",
+                "delete",
+                name,
+                f"--zone={zone}",
+                f"--project={proj}",
+                "--quiet",
+            ],
+            env=env,
+            check=False,
+        )
+
+    # 3. Delete dedicated VPC sub-resources (Firewall -> Router/NAT -> Subnet -> VPC)
+    for r in [x for x in resources if x["type"] == "VPC"]:
+        vpc_name = r["name"]
+        for fw in (
+            f"{cluster_name}-allow-internal",
+        ):
+            subprocess.run(
+                ["gcloud", "compute", "firewall-rules", "delete", fw, f"--project={proj}", "--quiet"],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        subprocess.run(
+            [
+                "gcloud",
+                "compute",
+                "routers",
+                " delete" if False else "delete",
+                f"{cluster_name}-router",
+                f"--region={gcp_session.region}",
+                f"--project={proj}",
+                "--quiet",
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        subprocess.run(
+            [
+                "gcloud",
+                "compute",
+                "networks",
+                "subnets",
+                "delete",
+                f"{cluster_name}-nodes",
+                f"--region={gcp_session.region}",
+                f"--project={proj}",
+                "--quiet",
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        console.print(f"[yellow]Deleting VPC {vpc_name}...[/yellow]")
+        subprocess.run(
+            ["gcloud", "compute", "networks", "delete", vpc_name, f"--project={proj}", "--quiet"],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+
+def destroy_full_gcp_environment(
+    cfg: DocsConfig,
+    gcp_session: GcpSession,
+    wait_timeout_seconds: int = 900,
+) -> List[Dict[str, str]]:
+    """Complete GCP dev environment teardown (`docs-cli --cloud gcp destroy --yes`)."""
+    stop_local_dashboard_port_forward(cfg)
+    ordered_gcp_terraform_down(cfg, gcp_session)
+
+    deadline = time.time() + wait_timeout_seconds
+    attempt = 0
+    remaining = discover_labeled_gcp_resources(gcp_session, cfg.cluster.name)
+    while remaining and time.time() < deadline:
+        attempt += 1
+        console.print(
+            f"[yellow]GCP cleanup sweep #{attempt}: {len(remaining)} resource(s) still terminating/present...[/yellow]"
+        )
+        render_nuke_plan_table(remaining, cfg.cluster.name)
+        try:
+            nuke_labeled_gcp_resources(gcp_session, cfg.cluster.name, remaining)
+        except Exception as exc:
+            console.print(f"[dim]  • GCP sweep note: {exc}[/dim]")
+        time.sleep(20)
+        remaining = discover_labeled_gcp_resources(gcp_session, cfg.cluster.name)
+
+    if not remaining:
+        for tf_dir in (cfg.platform_tf_dir, cfg.gke_tf_dir):
+            for fname in ("terraform.tfstate", "terraform.tfstate.backup"):
+                fpath = tf_dir / fname
+                if fpath.exists():
+                    fpath.unlink(missing_ok=True)
+        for ephemeral in (
+            cfg.kubeconfig_path,
+            cfg.state_dir / "tls_cert.pem",
+            cfg.state_dir / "tls_key.pem",
+            cfg.state_dir / "tls_domain.txt",
+            cfg.state_dir / "dashboard-port-forward.pid",
+            cfg.state_dir / "dashboard-port-forward.log",
+        ):
+            if ephemeral.exists():
+                ephemeral.unlink(missing_ok=True)
+        console.print(
+            f"[bold green]✓ Verified 0 GCP cloud resources remain for '{cfg.cluster.name}' and cleaned local state![/bold green]"
         )
     return remaining

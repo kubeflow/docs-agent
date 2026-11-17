@@ -9,6 +9,7 @@ from click.testing import CliRunner
 
 from docs_cli.cli import main
 from docs_cli.config import DocsConfig
+from docs_cli.gcp_auth import GcpSession
 from docs_cli.kube import (
     build_docs_agent_values,
     build_gateway_guardrails_values,
@@ -24,9 +25,20 @@ from docs_cli.netlify import (
     inject_hugo_docsy_hooks,
     prepare_demo_bundle,
 )
-from docs_cli.nuke import has_cluster_ownership_tag
-from docs_cli.scale import parse_duration_seconds
-from docs_cli.terraform import build_oke_tfvars, build_platform_tfvars
+from docs_cli.nuke import (
+    has_cluster_ownership_tag,
+    has_gcp_cluster_ownership_label,
+    normalize_gcp_label_value,
+)
+from docs_cli.scale import (
+    _build_in_cluster_gcp_autoscale_script,
+    parse_duration_seconds,
+)
+from docs_cli.terraform import (
+    build_gke_tfvars,
+    build_oke_tfvars,
+    build_platform_tfvars,
+)
 
 
 def test_config_loads_defaults_and_env_overrides(monkeypatch, tmp_path: Path) -> None:
@@ -373,3 +385,126 @@ def test_destroy_command_and_dynamic_multi_agent_discovery(monkeypatch, tmp_path
     diag_unmapped = json.loads(diag_path.read_text(encoding="utf-8"))
     assert diag_unmapped["status"] == "ACTION_REQUIRED"
     assert "semantic-router" in diag_unmapped["unmapped_argocd_apps"]
+
+
+def test_gcp_config_session_and_gke_tfvars(monkeypatch, tmp_path: Path) -> None:
+    sa_key_path = tmp_path / "gcp-sa.json"
+    sa_key_path.write_text(
+        json.dumps(
+            {
+                "type": "service_account",
+                "project_id": "kf-docs-gcp-dev",
+                "client_email": "docs-cli@kf-docs-gcp-dev.iam.gserviceaccount.com",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DOCS_CLOUD", "gcp")
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(sa_key_path))
+    monkeypatch.setenv("GCP_REGION", "us-east4")
+    monkeypatch.setenv("GCP_ZONE", "us-east4-a")
+
+    repo_root = Path(__file__).resolve().parents[2]
+    cfg = DocsConfig.load(path=repo_root / "docs.toml", enable_gpu_override=True)
+    assert cfg.cloud == "gcp"
+    assert cfg.cluster_tf_dir == cfg.gke_tf_dir
+    assert cfg.gke_tf_dir.exists()
+
+    gcp_sess = GcpSession.from_docs_config(cfg)
+    assert gcp_sess.project_id == "kf-docs-gcp-dev"
+    assert gcp_sess.region == "us-east4"
+    assert gcp_sess.zone == "us-east4-a"
+    tf_env = gcp_sess.terraform_env()
+    assert tf_env["GOOGLE_PROJECT"] == "kf-docs-gcp-dev"
+    assert tf_env["GOOGLE_APPLICATION_CREDENTIALS"] == str(sa_key_path.resolve())
+
+    gke_gpu = build_gke_tfvars(cfg, gcp_session=None)
+    assert gke_gpu["enable_gpu_pool"] is True
+    assert gke_gpu["gpu_machine_type"] == "g2-standard-12"
+    assert gke_gpu["gpu_accelerator_type"] == "nvidia-l4"
+    assert gke_gpu["cpu_machine_type"] == "n2-highmem-8"
+
+    cfg_cpu = DocsConfig.load(
+        path=repo_root / "docs.toml", enable_gpu_override=False, cloud_override="gcp"
+    )
+    gke_cpu = build_gke_tfvars(cfg_cpu, gcp_session=None)
+    assert gke_cpu["enable_gpu_pool"] is False
+
+    platform_gcp = build_platform_tfvars(cfg)
+    assert platform_gcp["cloud_provider"] == "gcp"
+
+
+def test_gcp_storage_class_and_ownership_label_safety(monkeypatch) -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    cfg_oci = DocsConfig.load(path=repo_root / "docs.toml", cloud_override="oci")
+    cfg_gcp = DocsConfig.load(path=repo_root / "docs.toml", cloud_override="gcp")
+
+    vals_oci = build_llm_runtime_values(cfg_oci)
+    vals_gcp = build_llm_runtime_values(cfg_gcp)
+    assert "cache" not in vals_oci
+    assert vals_gcp["cache"]["storageClassName"] == "standard-rwo"
+
+    assert normalize_gcp_label_value("Kubeflow.Docs_Agent_Dev") == "kubeflow-docs_agent_dev"
+    cluster = "kubeflow-docs-agent-dev"
+    assert (
+        has_gcp_cluster_ownership_label(
+            {"docs-cli-managed": "true", "docs-cli-cluster": cluster},
+            cluster,
+        )
+        is True
+    )
+    assert (
+        has_gcp_cluster_ownership_label(
+            {"docs-cli-managed": "true", "docs-cli-cluster": "other-cluster"},
+            cluster,
+        )
+        is False
+    )
+    assert has_gcp_cluster_ownership_label({}, cluster) is False
+
+
+def test_gcp_cli_commands_and_ttl_autoscale_script(monkeypatch, tmp_path: Path) -> None:
+    import ast
+    import subprocess
+    from unittest.mock import patch
+
+    isolated_state = tmp_path / ".docs-cli"
+    monkeypatch.setattr(DocsConfig, "state_dir", property(lambda self: isolated_state))
+    monkeypatch.setattr(
+        DocsConfig,
+        "kubeconfig_path",
+        property(lambda self: isolated_state / "kubeconfig"),
+    )
+    monkeypatch.setenv("GCP_PROJECT_ID", "test-gke-project")
+
+    script_src = _build_in_cluster_gcp_autoscale_script()
+    ast.parse(script_src)
+    assert ":setSize" in script_src
+    assert "container.googleapis.com" in script_src
+
+    runner = CliRunner()
+    res_tmpl = runner.invoke(
+        main,
+        ["template", "--cloud", "gcp", "--no-gpu", "--domain", "gke.agent.local"],
+    )
+    assert res_tmpl.exit_code == 0
+    gke_json = json.loads(
+        (isolated_state / "gke.tfvars.json").read_text(encoding="utf-8")
+    )
+    platform_json = json.loads(
+        (isolated_state / "platform.tfvars.json").read_text(encoding="utf-8")
+    )
+    assert gke_json["project_id"] == "test-gke-project"
+    assert gke_json["enable_gpu_pool"] is False
+    assert platform_json["cloud_provider"] == "gcp"
+
+    with patch(
+        "docs_cli.verify._run_quiet",
+        return_value=subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=""),
+    ):
+        res_verify = runner.invoke(
+            main,
+            ["--cloud", "gcp", "verify", "--domain", "gke.agent.local"],
+        )
+    assert "2. GKE Cluster" in res_verify.output
+    assert "CLI `gcloud` installed" in res_verify.output

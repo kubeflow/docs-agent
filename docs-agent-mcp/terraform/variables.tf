@@ -13,6 +13,12 @@ variable "kubeconfig_path" {
   default     = "~/.kube/config"
 }
 
+variable "cloud_provider" {
+  description = "Cloud provider hosting the Kubernetes cluster (oci or gcp)"
+  type        = string
+  default     = "oci"
+}
+
 variable "enable_istio_ingressgateway" {
   description = "Install the Istio ingressgateway Helm release in istio-system (required by gateway-guardrails)"
   type        = bool

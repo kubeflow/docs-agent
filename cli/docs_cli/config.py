@@ -6,7 +6,7 @@ import os
 import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 try:
     import tomllib
@@ -57,6 +57,23 @@ class OciConfig:
     fingerprint: str = ""
     private_key_path: str = ""
     private_key_passphrase: str = ""
+
+
+@dataclass
+class GcpConfig:
+    project_id: str = ""
+    region: str = "us-central1"
+    zone: str = "us-central1-a"
+    credentials_file: str = ""
+    cpu_machine_type: str = "n2-highmem-8"
+    cpu_disk_size_gb: int = 100
+    cpu_disk_type: str = "pd-balanced"
+    gpu_machine_type: str = "g2-standard-12"
+    gpu_accelerator_type: str = "nvidia-l4"
+    gpu_accelerator_count: int = 1
+    gpu_disk_size_gb: int = 200
+    gpu_disk_type: str = "pd-balanced"
+    storage_class: str = "standard-rwo"
 
 
 @dataclass
@@ -156,6 +173,8 @@ class DocsConfig:
     ingress: IngressConfig
     netlify: NetlifyConfig
     repo_root: Path
+    gcp: GcpConfig = field(default_factory=GcpConfig)
+    cloud: str = "oci"
 
     @property
     def state_dir(self) -> Path:
@@ -171,6 +190,14 @@ class DocsConfig:
     @property
     def oke_tf_dir(self) -> Path:
         return self.repo_root / "deployments" / "terraform" / "oke-cluster"
+
+    @property
+    def gke_tf_dir(self) -> Path:
+        return self.repo_root / "deployments" / "terraform" / "gke-cluster"
+
+    @property
+    def cluster_tf_dir(self) -> Path:
+        return self.gke_tf_dir if self.cloud == "gcp" else self.oke_tf_dir
 
     @property
     def platform_tf_dir(self) -> Path:
@@ -229,6 +256,7 @@ class DocsConfig:
         cls,
         path: Optional[Path] = None,
         enable_gpu_override: Optional[bool] = None,
+        cloud_override: Optional[str] = None,
     ) -> "DocsConfig":
         if path is None:
             repo_root = Path(__file__).resolve().parents[2]
@@ -244,13 +272,26 @@ class DocsConfig:
             with path.open("rb") as f:
                 raw = tomllib.load(f)
 
+        cloud_raw = dict(raw.get("cloud", {}))
         oci_raw = dict(raw.get("oci", {}))
+        gcp_raw = dict(raw.get("gcp", {}))
         cluster_raw = dict(raw.get("cluster", {}))
         platform_raw = dict(raw.get("platform", {}))
         llm_raw = dict(raw.get("llm", {}))
         mcp_raw = dict(raw.get("mcp", {}))
         ingress_raw = dict(raw.get("ingress", {}))
         netlify_raw = dict(raw.get("netlify", {}))
+
+        resolved_cloud = (
+            cloud_override
+            or os.environ.get("DOCS_CLOUD")
+            or cloud_raw.get("provider")
+            or "oci"
+        ).strip().lower()
+        if resolved_cloud not in ("oci", "gcp"):
+            raise ValueError(
+                f"Unsupported cloud provider '{resolved_cloud}'. Expected 'oci' or 'gcp'."
+            )
 
         # Apply environment variable overrides
         oci_cfg = OciConfig(
@@ -265,6 +306,37 @@ class DocsConfig:
             fingerprint=os.environ.get("OCI_FINGERPRINT", ""),
             private_key_path=os.environ.get("OCI_KEY_FILE", ""),
             private_key_passphrase=os.environ.get("OCI_KEY_PASSPHRASE", ""),
+        )
+
+        gcp_region = (
+            os.environ.get("GCP_REGION")
+            or os.environ.get("CLOUDSDK_COMPUTE_REGION")
+            or gcp_raw.get("region", "us-central1")
+        )
+        gcp_cfg = GcpConfig(
+            project_id=os.environ.get("GCP_PROJECT_ID")
+            or os.environ.get("GOOGLE_CLOUD_PROJECT")
+            or os.environ.get("CLOUDSDK_CORE_PROJECT")
+            or gcp_raw.get("project_id", ""),
+            region=gcp_region,
+            zone=os.environ.get("GCP_ZONE")
+            or os.environ.get("CLOUDSDK_COMPUTE_ZONE")
+            or gcp_raw.get("zone", f"{gcp_region}-a"),
+            credentials_file=os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+            or os.environ.get("GCP_CREDENTIALS_FILE")
+            or gcp_raw.get("credentials_file", ""),
+            cpu_machine_type=os.environ.get("GCP_CPU_MACHINE_TYPE")
+            or gcp_raw.get("cpu_machine_type", "n2-highmem-8"),
+            cpu_disk_size_gb=int(gcp_raw.get("cpu_disk_size_gb", cluster_raw.get("cpu_boot_volume_gb", 100))),
+            cpu_disk_type=gcp_raw.get("cpu_disk_type", "pd-balanced"),
+            gpu_machine_type=os.environ.get("GCP_GPU_MACHINE_TYPE")
+            or gcp_raw.get("gpu_machine_type", "g2-standard-12"),
+            gpu_accelerator_type=os.environ.get("GCP_GPU_ACCELERATOR_TYPE")
+            or gcp_raw.get("gpu_accelerator_type", "nvidia-l4"),
+            gpu_accelerator_count=int(gcp_raw.get("gpu_accelerator_count", 1)),
+            gpu_disk_size_gb=int(gcp_raw.get("gpu_disk_size_gb", cluster_raw.get("gpu_boot_volume_gb", 200))),
+            gpu_disk_type=gcp_raw.get("gpu_disk_type", "pd-balanced"),
+            storage_class=gcp_raw.get("storage_class", "standard-rwo"),
         )
 
         default_gpu = bool(cluster_raw.get("enable_gpu_pool", True))
@@ -369,6 +441,8 @@ class DocsConfig:
 
         return cls(
             oci=oci_cfg,
+            gcp=gcp_cfg,
+            cloud=resolved_cloud,
             cluster=cluster_cfg,
             platform=platform_cfg,
             llm=llm_cfg,
@@ -438,7 +512,7 @@ class DocsConfig:
             if gemma_id:
                 discovered["llm.gemma_model_id"] = str(gemma_id)
 
-        # 4. Terraform variables.tf (platform + OKE cluster)
+        # 4. Terraform variables.tf (platform + OKE cluster + GKE cluster)
         tf_var_block = re.compile(
             r'variable\s+"(?P<name>[a-zA-Z0-9_]+)"\s*\{(?P<body>[^}]*)\}',
             re.MULTILINE | re.DOTALL,
@@ -456,6 +530,15 @@ class DocsConfig:
                 dmatch = tf_default_re.search(match.group("body"))
                 if dmatch:
                     discovered[f"tf.{vname}"] = dmatch.group("val")
+
+        gke_vars_file = self.gke_tf_dir / "variables.tf"
+        if gke_vars_file.exists():
+            gke_text = gke_vars_file.read_text(encoding="utf-8")
+            for match in tf_var_block.finditer(gke_text):
+                vname = match.group("name")
+                dmatch = tf_default_re.search(match.group("body"))
+                if dmatch:
+                    discovered[f"tf.gke.{vname}"] = dmatch.group("val")
 
         # 5. Argo CD production pin & app inventory (deploy/argocd/apps/*.yaml)
         argo_apps_dir = self.repo_root / "deploy" / "argocd" / "apps"
@@ -597,6 +680,9 @@ class DocsConfig:
             ("tf.embeddings_model_id", self.platform, "embeddings_model_id"),
             ("tf.reranker_model_id", self.platform, "reranker_model_id"),
             ("tf.kubernetes_version", self.cluster, "kubernetes_version"),
+            ("tf.gke.cpu_machine_type", self.gcp, "cpu_machine_type"),
+            ("tf.gke.gpu_machine_type", self.gcp, "gpu_machine_type"),
+            ("tf.gke.gpu_accelerator_type", self.gcp, "gpu_accelerator_type"),
         ]
 
         toml_path = self.repo_root / "docs.toml"

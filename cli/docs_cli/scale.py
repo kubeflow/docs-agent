@@ -16,6 +16,7 @@ from rich.table import Table
 
 from .auth import OciSession
 from .config import DocsConfig
+from .gcp_auth import GcpSession
 from .terraform import get_terraform_outputs
 
 console = Console()
@@ -553,3 +554,482 @@ def get_in_cluster_ttl_status(cfg: DocsConfig) -> Optional[Dict[str, Any]]:
         "active": data.get("status", {}).get("active", 0),
         "succeeded": data.get("status", {}).get("succeeded", 0),
     }
+
+
+# =============================================================================
+# Google Cloud GKE Node Pool Scaling & In-Cluster TTL Auto-Scaler
+# =============================================================================
+
+
+def discover_gke_node_pools(
+    cfg: DocsConfig,
+    gcp_session: GcpSession,
+) -> Dict[str, Dict[str, Any]]:
+    """Discover CPU and GPU node pools for the configured GKE cluster via `gcloud`."""
+    import shutil
+
+    if not shutil.which("gcloud"):
+        raise RuntimeError(
+            "Google Cloud SDK (`gcloud`) is required for GKE node-pool scaling."
+        )
+    gcp_session.ensure_gcloud_auth_if_service_account()
+    tf_outputs = get_terraform_outputs(cfg.gke_tf_dir)
+    cluster_name = str(tf_outputs.get("cluster_name") or cfg.cluster.name)
+    location = str(tf_outputs.get("location") or gcp_session.zone)
+
+    res = subprocess.run(
+        [
+            "gcloud",
+            "container",
+            "node-pools",
+            "list",
+            f"--cluster={cluster_name}",
+            f"--location={location}",
+            f"--project={gcp_session.project_id}",
+            "--format=json",
+            "--quiet",
+        ],
+        env=gcp_session.gcloud_env(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if res.returncode != 0 or not res.stdout.strip():
+        return {}
+
+    pools_raw = json.loads(res.stdout)
+    # Count live Ready/NotReady nodes per pool via kubectl when reachable, falling back to initialNodeCount
+    live_counts: Dict[str, int] = {}
+    if cfg.kubeconfig_path.exists():
+        nres = subprocess.run(
+            ["kubectl", "get", "nodes", "-o", "json", "--request-timeout=5s"],
+            env=_kube_env(cfg),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if nres.returncode == 0 and nres.stdout.strip():
+            for item in json.loads(nres.stdout).get("items", []):
+                pool_lbl = (
+                    (item.get("metadata") or {})
+                    .get("labels", {})
+                    .get("cloud.google.com/gke-nodepool", "")
+                )
+                if pool_lbl:
+                    live_counts[pool_lbl] = live_counts.get(pool_lbl, 0) + 1
+
+    cpu_expected = f"{cluster_name}-cpu-pool"
+    gpu_expected = f"{cluster_name}-gpu-pool"
+    result: Dict[str, Dict[str, Any]] = {}
+    for p in pools_raw:
+        pname = str(p.get("name") or "")
+        mtype = str((p.get("config") or {}).get("machineType") or "")
+        size = live_counts.get(pname, int(p.get("initialNodeCount", 0)))
+        entry = {
+            "id": pname,
+            "name": pname,
+            "shape": mtype,
+            "size": size,
+            "cluster_name": cluster_name,
+            "location": location,
+        }
+        if pname == cpu_expected or pname.endswith("-cpu-pool"):
+            result["cpu"] = entry
+        elif pname == gpu_expected or pname.endswith("-gpu-pool"):
+            result["gpu"] = entry
+    return result
+
+
+def scale_gke_node_pools(
+    cfg: DocsConfig,
+    gcp_session: GcpSession,
+    cpu_size: Optional[int],
+    gpu_size: Optional[int],
+    apply: bool = False,
+    release_frontend: Optional[bool] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Scale GKE CPU and/or GPU node pools to target node counts and manage demo frontend routing."""
+    from .kube import get_ingress_lb_ip, set_demo_web_released
+
+    pools = discover_gke_node_pools(cfg, gcp_session)
+    if not pools:
+        raise RuntimeError(
+            f"No GKE node pools found for cluster '{cfg.cluster.name}' in project '{gcp_session.project_id}' ({gcp_session.zone})."
+        )
+
+    table = Table(title=f"GKE Node Pool Scaling Plan — {cfg.cluster.name}")
+    table.add_column("Pool", style="cyan")
+    table.add_column("Name", style="bold")
+    table.add_column("Machine Type")
+    table.add_column("Current Size", justify="right")
+    table.add_column("Target Size", justify="right", style="bold green")
+
+    targets: Dict[str, int] = {}
+    if "cpu" in pools and cpu_size is not None:
+        targets["cpu"] = cpu_size
+        table.add_row(
+            "CPU",
+            pools["cpu"]["name"],
+            pools["cpu"]["shape"],
+            str(pools["cpu"]["size"]),
+            str(cpu_size),
+        )
+    if "gpu" in pools and gpu_size is not None:
+        targets["gpu"] = gpu_size
+        table.add_row(
+            "GPU",
+            pools["gpu"]["name"],
+            pools["gpu"]["shape"],
+            str(pools["gpu"]["size"]),
+            str(gpu_size),
+        )
+
+    console.print(table)
+    if not apply:
+        console.print(
+            "[yellow]Dry-run mode.[/yellow] Pass [bold]--yes[/bold] (or [bold]--apply[/bold]) to execute GKE node pool scaling."
+        )
+        return pools
+
+    is_scaling_down = targets.get("gpu") == 0 or targets.get("cpu") == 0
+    should_release_fe = release_frontend if release_frontend is not None else is_scaling_down
+    if should_release_fe and cfg.kubeconfig_path.exists():
+        lb_ip = get_ingress_lb_ip(cfg, timeout_seconds=5)
+        domain = cfg.resolve_agent_domain(lb_ip=lb_ip)
+        set_demo_web_released(cfg, domain=domain, released=True)
+
+    if targets.get("gpu") == 0 and cfg.kubeconfig_path.exists():
+        subprocess.run(
+            [
+                "kubectl",
+                "-n",
+                cfg.platform.namespace_ml_infra,
+                "scale",
+                "deployment/llm-predictor",
+                "--replicas=0",
+            ],
+            env=_kube_env(cfg),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    ordered_keys = ["gpu", "cpu"] if (targets.get("gpu", 1) == 0) else ["cpu", "gpu"]
+    for key in ordered_keys:
+        if key not in targets or key not in pools:
+            continue
+        pool_info = pools[key]
+        new_size = targets[key]
+        console.print(
+            f"[bold cyan]Scaling GKE pool {pool_info['name']} ({pool_info['shape']}) -> {new_size} node(s)...[/bold cyan]"
+        )
+        subprocess.run(
+            [
+                "gcloud",
+                "container",
+                "clusters",
+                "resize",
+                pool_info["cluster_name"],
+                f"--node-pool={pool_info['name']}",
+                f"--num-nodes={new_size}",
+                f"--location={pool_info['location']}",
+                f"--project={gcp_session.project_id}",
+                "--quiet",
+            ],
+            env=gcp_session.gcloud_env(),
+            check=True,
+        )
+        console.print(
+            f"[green]✓ Scaled GKE node pool {pool_info['name']} -> {new_size} node(s)[/green]"
+        )
+
+    if targets.get("gpu", 0) >= 1 and cfg.kubeconfig_path.exists():
+        subprocess.run(
+            [
+                "kubectl",
+                "-n",
+                cfg.platform.namespace_ml_infra,
+                "scale",
+                "deployment/llm-predictor",
+                "--replicas=1",
+            ],
+            env=_kube_env(cfg),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    if (targets.get("cpu", 0) >= 1 or targets.get("gpu", 0) >= 1) and release_frontend is False and cfg.kubeconfig_path.exists():
+        lb_ip = get_ingress_lb_ip(cfg, timeout_seconds=5)
+        domain = cfg.resolve_agent_domain(lb_ip=lb_ip)
+        set_demo_web_released(cfg, domain=domain, released=False)
+
+    return pools
+
+
+def _build_in_cluster_gcp_autoscale_script() -> str:
+    """Return a self-contained Python 3 + OpenSSL script that authenticates to GCP (SA JWT or Metadata Server) and resizes GKE node pools to 0."""
+    return r'''
+import base64
+import datetime
+import json
+import os
+import subprocess
+import tempfile
+import time
+import urllib.parse
+import urllib.request
+
+ttl_seconds = int(os.environ.get("TTL_SECONDS", "7200"))
+gpu_only = os.environ.get("GPU_ONLY", "false").lower() == "true"
+project_id = os.environ["GCP_PROJECT_ID"]
+location = os.environ["GKE_LOCATION"]
+cluster_name = os.environ["GKE_CLUSTER_NAME"]
+cpu_pool = os.environ.get("CPU_POOL_NAME", "")
+gpu_pool = os.environ.get("GPU_POOL_NAME", "")
+sa_json_str = os.environ.get("GCP_SA_JSON", "")
+
+start_ts = int(time.time())
+end_ts = start_ts + ttl_seconds
+print(f"[docs-agent-ttl-gke] Armed auto-scale-down timer for {ttl_seconds}s (until {datetime.datetime.fromtimestamp(end_ts, datetime.timezone.utc).isoformat()})", flush=True)
+
+while True:
+    now = int(time.time())
+    remaining = end_ts - now
+    if remaining <= 0:
+        break
+    sleep_chunk = min(60, remaining)
+    if remaining % 300 < 60 or remaining <= 120:
+        print(f"[docs-agent-ttl-gke] {remaining}s remaining before GKE auto-scale-down...", flush=True)
+    time.sleep(sleep_chunk)
+
+print("[docs-agent-ttl-gke] TTL expired! Scaling GKE node pools down to 0...", flush=True)
+
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+def get_gcp_access_token() -> str:
+    if sa_json_str.strip():
+        sa = json.loads(sa_json_str)
+        now_s = int(time.time())
+        header = _b64url(json.dumps({"alg": "RS256", "typ": "JWT"}).encode("utf-8"))
+        claims = _b64url(json.dumps({
+            "iss": sa["client_email"],
+            "scope": "https://www.googleapis.com/auth/cloud-platform",
+            "aud": sa.get("token_uri", "https://oauth2.googleapis.com/token"),
+            "iat": now_s,
+            "exp": now_s + 3600,
+        }).encode("utf-8"))
+        signing_input = f"{header}.{claims}".encode("ascii")
+        with tempfile.NamedTemporaryFile("w", suffix=".pem", delete=False) as kf:
+            kf.write(sa["private_key"])
+            key_path = kf.name
+        sig = subprocess.run(
+            ["openssl", "dgst", "-sha256", "-sign", key_path],
+            input=signing_input,
+            capture_output=True,
+            check=True,
+        ).stdout
+        jwt_assertion = f"{header}.{claims}.{_b64url(sig)}"
+        body = urllib.parse.urlencode({
+            "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+            "assertion": jwt_assertion,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            sa.get("token_uri", "https://oauth2.googleapis.com/token"),
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode("utf-8"))["access_token"]
+
+    req = urllib.request.Request(
+        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
+        headers={"Metadata-Flavor": "Google"},
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.loads(resp.read().decode("utf-8"))["access_token"]
+
+token = get_gcp_access_token()
+
+def gke_set_pool_size(pool_name: str, target_size: int) -> None:
+    if not pool_name:
+        return
+    url = f"https://container.googleapis.com/v1/projects/{project_id}/locations/{location}/clusters/{cluster_name}/nodePools/{pool_name}:setSize"
+    body_bytes = json.dumps({"nodeCount": target_size}).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body_bytes,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+    )
+    for attempt in range(5):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                print(f"[docs-agent-ttl-gke] Scaled GKE pool {pool_name} -> size={target_size} (HTTP {resp.status})", flush=True)
+                return
+        except Exception as exc:
+            print(f"[docs-agent-ttl-gke] Attempt {attempt+1} scaling {pool_name}: {exc}", flush=True)
+            time.sleep(15)
+
+if gpu_pool:
+    gke_set_pool_size(gpu_pool, 0)
+if not gpu_only and cpu_pool:
+    gke_set_pool_size(cpu_pool, 0)
+
+print("[docs-agent-ttl-gke] Auto-scale-down complete.", flush=True)
+'''.lstrip()
+
+
+def schedule_in_cluster_gcp_ttl_job(
+    cfg: DocsConfig,
+    gcp_session: GcpSession,
+    duration_str: str,
+    gpu_only: bool = False,
+) -> int:
+    """Deploy an in-cluster Kubernetes Job in kube-system that automatically scales down GKE node pools after `duration_str`."""
+    ttl_seconds = parse_duration_seconds(duration_str)
+    pools = discover_gke_node_pools(cfg, gcp_session)
+    cluster_name = (
+        pools.get("cpu", {}).get("cluster_name")
+        or pools.get("gpu", {}).get("cluster_name")
+        or cfg.cluster.name
+    )
+    location = (
+        pools.get("cpu", {}).get("location")
+        or pools.get("gpu", {}).get("location")
+        or gcp_session.zone
+    )
+
+    sa_json = ""
+    if gcp_session.credentials_file and Path(gcp_session.credentials_file).exists():
+        raw_txt = Path(gcp_session.credentials_file).read_text(encoding="utf-8")
+        try:
+            if json.loads(raw_txt).get("type") == "service_account":
+                sa_json = raw_txt
+        except Exception:
+            pass
+
+    secret_manifest = {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+            "name": "docs-agent-autoscale-gcp",
+            "namespace": "kube-system",
+            "labels": {"app": "docs-agent-autoscale-ttl"},
+        },
+        "type": "Opaque",
+        "stringData": {
+            "GCP_PROJECT_ID": gcp_session.project_id,
+            "GKE_LOCATION": str(location),
+            "GKE_CLUSTER_NAME": str(cluster_name),
+            "CPU_POOL_NAME": str(pools.get("cpu", {}).get("name", f"{cluster_name}-cpu-pool")),
+            "GPU_POOL_NAME": str(pools.get("gpu", {}).get("name", f"{cluster_name}-gpu-pool" if cfg.cluster.enable_gpu_pool else "")),
+            "GCP_SA_JSON": sa_json,
+        },
+    }
+    subprocess.run(
+        ["kubectl", "apply", "-f", "-"],
+        input=json.dumps(secret_manifest),
+        env=_kube_env(cfg),
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    subprocess.run(
+        [
+            "kubectl",
+            "-n",
+            "kube-system",
+            "delete",
+            "job",
+            "docs-agent-autoscale-ttl",
+            "--ignore-not-found=true",
+        ],
+        env=_kube_env(cfg),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    scheduled_at = int(time.time())
+    expires_at = scheduled_at + ttl_seconds
+    job_manifest = {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {
+            "name": "docs-agent-autoscale-ttl",
+            "namespace": "kube-system",
+            "labels": {"app": "docs-agent-autoscale-ttl"},
+            "annotations": {
+                "docs-agent.kubeflow.org/cloud": "gcp",
+                "docs-agent.kubeflow.org/ttl-duration": duration_str,
+                "docs-agent.kubeflow.org/ttl-seconds": str(ttl_seconds),
+                "docs-agent.kubeflow.org/scheduled-at": str(scheduled_at),
+                "docs-agent.kubeflow.org/expires-at": str(expires_at),
+                "docs-agent.kubeflow.org/gpu-only": str(gpu_only).lower(),
+            },
+        },
+        "spec": {
+            "backoffLimit": 1,
+            "ttlSecondsAfterFinished": 3600,
+            "template": {
+                "metadata": {"labels": {"app": "docs-agent-autoscale-ttl"}},
+                "spec": {
+                    "restartPolicy": "OnFailure",
+                    "nodeSelector": {"docs-agent-pool": "cpu"},
+                    "containers": [
+                        {
+                            "name": "autoscale-timer",
+                            "image": "mirror.gcr.io/library/python:3.12-slim",
+                            "command": [
+                                "python3",
+                                "-c",
+                                _build_in_cluster_gcp_autoscale_script(),
+                            ],
+                            "env": [
+                                {"name": "TTL_SECONDS", "value": str(ttl_seconds)},
+                                {"name": "GPU_ONLY", "value": str(gpu_only).lower()},
+                            ],
+                            "envFrom": [
+                                {
+                                    "secretRef": {
+                                        "name": "docs-agent-autoscale-gcp",
+                                    }
+                                }
+                            ],
+                            "resources": {
+                                "requests": {"cpu": "10m", "memory": "32Mi"},
+                                "limits": {"cpu": "100m", "memory": "128Mi"},
+                            },
+                        }
+                    ],
+                },
+            },
+        },
+    }
+    subprocess.run(
+        ["kubectl", "apply", "-f", "-"],
+        input=json.dumps(job_manifest),
+        env=_kube_env(cfg),
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    scope_str = "GPU node pool only (size=0)" if gpu_only else "ALL GKE node pools (GPU=0, CPU=0)"
+    console.print(
+        Panel(
+            f"[bold green]✓ In-Cluster GKE Auto-Scale-Down Timer Armed![/bold green]\n"
+            f"• [bold]Job:[/bold]          [cyan]kube-system/docs-agent-autoscale-ttl[/cyan]\n"
+            f"• [bold]TTL Duration:[/bold] [cyan]{duration_str} ({ttl_seconds}s)[/cyan]\n"
+            f"• [bold]Action:[/bold]       Scale {scope_str}\n"
+            f"• [bold]Cancel anytime:[/bold] `docs-cli --cloud gcp ttl --cancel`",
+            title="GKE Cluster Auto-Scale Timer",
+        )
+    )
+    return ttl_seconds
