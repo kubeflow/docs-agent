@@ -7,13 +7,14 @@ name = "kubeflow-docs-cli"
 version = "0.1.0"
 description = "Lifecycle CLI for spinning up and tearing down Kubeflow Docs Agent dev clusters on OCI OKE with Netlify integration"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "oci>=2.125.0",
     "click>=8.1",
     "rich>=13.7",
     "pyyaml>=6.0",
     "cryptography>=42.0",
+    "tomli>=2.0; python_version < '3.11'",
 ]
 
 [project.optional-dependencies]
@@ -29,6 +30,23 @@ docsctl = "docs_cli.cli:main"
 where = ["cli"]
 include = ["docs_cli*"]
 
-[tool.pytest.ini_options]
-testpaths = ["cli/tests"]
-pythonpath = ["cli"]
+[tool.ruff]
+target-version = "py39"
+line-length = 120
+exclude = ["legacy"]
+
+[tool.ruff.lint]
+# Pinned explicitly rather than relying on ruff's defaults: ruff 0.16 widened
+# the default rule set (import sorting, flake8-datetimez, flake8-blind-except,
+# ...) and turned a green main red on the next CI run. These four groups are
+# the set this repo has always linted against; the per-file-ignores below are
+# expressed in terms of them.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+"docs-agent-mcp/pipelines/*.py" = ["F403", "F405", "F841", "E741", "E402"]
+"scripts/index_real_issues.py" = ["F401", "E741"]
+"legacy/server/app.py" = ["F401"]
+"tests/test_code_utils.py" = ["E402"]
+"tests/test_issues_pipeline.py" = ["E402"]
+"tests/test_pipeline_utils.py" = ["E402"]

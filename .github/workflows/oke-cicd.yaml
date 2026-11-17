@@ -47,6 +47,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r docs-agent-mcp/mcp-server/requirements.txt
           pip install -r requirements-test.txt
+          pip install -e .
           pip install ruff==0.15.9
 
       # The pipelines have their own pins (kfp, ingest libraries) that differ from
@@ -78,13 +79,15 @@ jobs:
             --set domain=agent.example.org --set gateway.tls.acme.email=ci@example.org >/dev/null
 
       - name: Ruff lint
-        run: ruff check docs-agent-mcp/mcp-server docs-agent-mcp/session-issuer tests docs-agent-mcp/pipelines
+        run: ruff check cli/docs_cli cli/tests docs-agent-mcp/mcp-server docs-agent-mcp/session-issuer tests docs-agent-mcp/pipelines
 
       - name: Compile MCP server
         run: python -m py_compile docs-agent-mcp/mcp-server/*.py docs-agent-mcp/session-issuer/*.py
 
-      - name: Run Unit Tests
-        run: pytest -v --tb=short
+      - name: Run Unit Tests & CLI Expected-Architecture Gate
+        run: |
+          pytest -v --tb=short
+          docs-cli update --check --diagnose
 
   build-and-push:
     name: Build and push MCP image

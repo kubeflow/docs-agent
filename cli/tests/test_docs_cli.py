@@ -4,9 +4,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import sys
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from click.testing import CliRunner
 
@@ -29,7 +26,7 @@ from docs_cli.netlify import (
 )
 from docs_cli.nuke import has_cluster_ownership_tag
 from docs_cli.scale import parse_duration_seconds
-from docs_cli.terraform import build_oke_tfvars, build_platform_tfvars, render_tfvars_files
+from docs_cli.terraform import build_oke_tfvars, build_platform_tfvars
 
 
 def test_config_loads_defaults_and_env_overrides(monkeypatch, tmp_path: Path) -> None:
@@ -226,7 +223,15 @@ def test_nuke_tag_ownership_verification() -> None:
     assert has_cluster_ownership_tag(None, cluster) is False
 
 
-def test_cli_template_and_doctor_commands() -> None:
+def test_cli_template_and_doctor_commands(monkeypatch, tmp_path: Path) -> None:
+    isolated_state = tmp_path / ".docs-cli"
+    monkeypatch.setattr(DocsConfig, "state_dir", property(lambda self: isolated_state))
+    monkeypatch.setattr(
+        DocsConfig,
+        "kubeconfig_path",
+        property(lambda self: isolated_state / "kubeconfig"),
+    )
+    monkeypatch.setattr("docs_cli.cli.get_ingress_lb_ip", lambda cfg, timeout_seconds=5: None)
     runner = CliRunner()
     res_help = runner.invoke(main, ["--help"])
     assert res_help.exit_code == 0
@@ -240,9 +245,8 @@ def test_cli_template_and_doctor_commands() -> None:
     )
     assert res_tmpl.exit_code == 0
 
-    repo_root = Path(__file__).resolve().parents[2]
     oke_json = json.loads(
-        (repo_root / ".docs-cli" / "oke.tfvars.json").read_text(encoding="utf-8")
+        (isolated_state / "oke.tfvars.json").read_text(encoding="utf-8")
     )
     assert oke_json["enable_gpu_pool"] is False
     runner.invoke(main, ["template"])
@@ -306,15 +310,32 @@ def test_upstream_sync_and_isolated_frontend_tls_sans() -> None:
     assert f"https://chat.{domain}" in origins
 
 
-def test_destroy_command_and_dynamic_multi_agent_discovery() -> None:
+def test_destroy_command_and_dynamic_multi_agent_discovery(monkeypatch, tmp_path: Path) -> None:
+    import subprocess
+
+    isolated_state = tmp_path / ".docs-cli"
+    monkeypatch.setattr(DocsConfig, "state_dir", property(lambda self: isolated_state))
+    monkeypatch.setattr(
+        DocsConfig,
+        "kubeconfig_path",
+        property(lambda self: isolated_state / "kubeconfig"),
+    )
+
     cfg = DocsConfig.load()
     agents = cfg.discover_enabled_kagent_agents()
     assert "kubeflow-docs-agent" in agents
     assert "kubeflow-docs-agent-think" in agents
     assert "kubeflow-debug-agent" in agents
 
+    argo_apps = cfg.discover_argocd_apps()
+    app_names = {a["name"] for a in argo_apps}
+    assert "docs-agent" in app_names
+    assert "llm-runtime" in app_names
+    assert "gateway-guardrails" in app_names
+
     discovered = cfg.discover_upstream_defaults()
     assert "kagent.enabled_agents" in discovered
+    assert "argocd.apps" in discovered
 
     runner = CliRunner()
     res_help = runner.invoke(main, ["--help"])
@@ -324,3 +345,31 @@ def test_destroy_command_and_dynamic_multi_agent_discovery() -> None:
     res_destroy_help = runner.invoke(main, ["destroy", "--help"])
     assert res_destroy_help.exit_code == 0
     assert "--yes" in res_destroy_help.output
+
+    # 1. Healthy expected-architecture check passes and emits HEALTHY JSON
+    monkeypatch.setattr("docs_cli.cli.validate_rendered_chart_contracts", lambda c, v: [])
+    monkeypatch.setattr(
+        "docs_cli.cli.subprocess.run",
+        lambda *a, **kw: subprocess.CompletedProcess(args=[], returncode=0, stdout="1 passed", stderr=""),
+    )
+    res_healthy = runner.invoke(main, ["update", "--check", "--diagnose"])
+    assert res_healthy.exit_code == 0
+    diag_path = isolated_state / "drift-diagnosis.json"
+    diag_healthy = json.loads(diag_path.read_text(encoding="utf-8"))
+    assert diag_healthy["status"] == "HEALTHY"
+    assert "kubeflow-docs-agent-think" in diag_healthy["enabled_kagent_agents"]
+
+    # 2. Simulate upstream adding an unmapped new Argo CD microservice app (e.g. semantic-router) -> fails gate
+    monkeypatch.setattr(
+        DocsConfig,
+        "discover_argocd_apps",
+        lambda self: [
+            *argo_apps,
+            {"name": "semantic-router", "path": "docs-agent-mcp/charts/semantic-router", "targetRevision": "main"},
+        ],
+    )
+    res_unmapped = runner.invoke(main, ["update", "--check", "--diagnose"])
+    assert res_unmapped.exit_code != 0
+    diag_unmapped = json.loads(diag_path.read_text(encoding="utf-8"))
+    assert diag_unmapped["status"] == "ACTION_REQUIRED"
+    assert "semantic-router" in diag_unmapped["unmapped_argocd_apps"]

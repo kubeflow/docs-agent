@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import os
 import secrets
-import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback
+    import tomli as tomllib  # type: ignore[no-redef]
 
 
 def load_dotenv_file(dotenv_path: Path) -> Dict[str, str]:

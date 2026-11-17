@@ -93,15 +93,9 @@ def template(ctx: click.Context, no_gpu: bool, domain: Optional[str]) -> None:
     if domain:
         cfg.ingress.domain = domain
 
-    session: Optional[OciSession] = None
     comp_id: Optional[str] = cfg.oci.compartment_id or None
-    try:
-        session = OciSession.from_docs_config(cfg)
-    except Exception:
-        pass
-
     oke_tfvars, platform_tfvars = render_tfvars_files(
-        cfg, session=session, compartment_id=comp_id
+        cfg, session=None, compartment_id=comp_id
     )
     helm_files = render_helm_values_files(cfg, domain=domain)
 
@@ -868,7 +862,11 @@ def update_cmd(
         console.print(f"  [green]✓ Recompiled & wrapped {len(compiled_files)} KFP pipeline(s)[/green]")
 
     # Re-render local Helm & Terraform values
-    lb_ip = get_ingress_lb_ip(cfg, timeout_seconds=5) if cfg.kubeconfig_path.exists() else None
+    lb_ip = (
+        get_ingress_lb_ip(cfg, timeout_seconds=5)
+        if (not check or apply) and cfg.kubeconfig_path.exists()
+        else None
+    )
     domain = cfg.resolve_agent_domain(lb_ip=lb_ip)
     values_files = render_helm_values_files(cfg, domain=domain)
     render_tfvars_files(cfg, compartment_id=cfg.oci.compartment_id or "ocid1.compartment.oc1..example")
@@ -877,25 +875,25 @@ def update_cmd(
     # 2. Run Helm lint & rendered Secret/Schema contract check across local charts
     console.print("\n[bold cyan]2. Running `helm lint` & rendered contract validation on local charts...[/bold cyan]")
     contract_issues = validate_rendered_chart_contracts(cfg, values_files)
+    known_argocd = {
+        "docs-agent",
+        "gateway-guardrails",
+        "llm-runtime",
+        "reranker",
+        "docs-agent-pr-eval",
+        "docs-agent-preview",
+        "docs-agent-staging",
+        "langfuse",
+        "langfuse-retention",
+        "llm-judge",
+        "otel-collector",
+        "preview-namespace",
+    }
+    argo_apps = cfg.discover_argocd_apps()
+    unmapped_apps = [a["name"] for a in argo_apps if a["name"] not in known_argocd]
     if diagnose:
         import json as _json
 
-        known_argocd = {
-            "docs-agent",
-            "gateway-guardrails",
-            "llm-runtime",
-            "reranker",
-            "docs-agent-pr-eval",
-            "docs-agent-preview",
-            "docs-agent-staging",
-            "langfuse",
-            "langfuse-retention",
-            "llm-judge",
-            "otel-collector",
-            "preview-namespace",
-        }
-        argo_apps = cfg.discover_argocd_apps()
-        unmapped_apps = [a for a in argo_apps if a["name"] not in known_argocd]
         diag_payload = {
             "enabled_kagent_agents": cfg.discover_enabled_kagent_agents(),
             "argocd_apps": argo_apps,
@@ -919,6 +917,10 @@ def update_cmd(
         raise click.ClickException(
             "Upstream chart contract changed (new Secret or broken values schema). Update cli/docs_cli/kube.py."
         )
+    if check and unmapped_apps:
+        raise click.ClickException(
+            f"Detected unmapped Argo CD application(s): {', '.join(unmapped_apps)}. Map or ignore in docs-cli."
+        )
     console.print("  [green]✓ Rendered chart Secret & values contracts verified[/green]")
     chart_dirs = [
         cfg.charts_dir / "llm-runtime",
@@ -941,20 +943,21 @@ def update_cmd(
             console.print(f"  [red]✗ helm lint {cdir.name}: FAILED[/red]\n{res.stdout}\n{res.stderr}")
             raise click.ClickException(f"helm lint failed for {cdir.name}")
 
-    # 3. Run unit test suite (pytest)
-    console.print("\n[bold cyan]3. Running CLI unit test suite (`pytest`)...[/bold cyan]")
-    tests_dir = cfg.repo_root / "cli" / "tests"
-    pytest_res = subprocess.run(
-        [sys.executable, "-m", "pytest", str(tests_dir), "-q"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if pytest_res.returncode == 0:
-        console.print(f"  [green]✓ pytest unit tests: PASSED[/green] ({pytest_res.stdout.strip().splitlines()[-1]})")
-    else:
-        console.print(f"  [red]✗ pytest unit tests: FAILED[/red]\n{pytest_res.stdout}\n{pytest_res.stderr}")
-        raise click.ClickException("Unit test suite failed during `docs-cli update`.")
+    # 3. Run unit test suite (pytest) — skip if already running inside pytest to prevent recursion
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        console.print("\n[bold cyan]3. Running CLI unit test suite (`pytest`)...[/bold cyan]")
+        tests_dir = cfg.repo_root / "cli" / "tests"
+        pytest_res = subprocess.run(
+            [sys.executable, "-m", "pytest", str(tests_dir), "-q"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if pytest_res.returncode == 0:
+            console.print(f"  [green]✓ pytest unit tests: PASSED[/green] ({pytest_res.stdout.strip().splitlines()[-1]})")
+        else:
+            console.print(f"  [red]✗ pytest unit tests: FAILED[/red]\n{pytest_res.stdout}\n{pytest_res.stderr}")
+            raise click.ClickException("Unit test suite failed during `docs-cli update`.")
 
     # 4. Optionally apply to active cluster & run live verification
     if apply:
