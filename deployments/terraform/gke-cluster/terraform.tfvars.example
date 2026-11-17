@@ -1,0 +1,19 @@
+# Copy to terraform.tfvars (or let `docs-cli template --cloud gcp` generate .docs-cli/gke.tfvars.json)
+
+project_id   = "my-gcp-project-id"
+cluster_name = "kubeflow-docs-agent-dev"
+region       = "us-central1"
+zone         = "us-central1-a"
+
+# CPU pool (Milvus, KFP, TEI embeddings/reranker, Kagent, MCP)
+cpu_machine_type = "n2-highmem-8"
+cpu_node_count   = 2
+cpu_disk_size_gb = 100
+
+# GPU pool (vLLM serving Gemma 4 / Qwen via llm-runtime chart)
+enable_gpu_pool      = true
+gpu_machine_type     = "g2-standard-12"
+gpu_accelerator_type = "nvidia-l4"
+gpu_accelerator_count = 1
+gpu_node_count       = 1
+gpu_disk_size_gb     = 200

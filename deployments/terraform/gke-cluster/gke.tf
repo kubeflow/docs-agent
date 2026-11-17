@@ -26,9 +26,8 @@ resource "google_container_cluster" "this" {
   name     = local.name
   location = var.zone
 
-  # Manage CPU and GPU node pools as independent resources
-  remove_default_node_pool = true
-  initial_node_count       = 1
+  # Manage CPU and GPU node pools as independent resources (no default pool)
+  initial_node_count = 0
 
   # Allow clean automated teardown via `docs-cli destroy --yes`
   deletion_protection = false
