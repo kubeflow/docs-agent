@@ -10,8 +10,12 @@ import requests
 import flo_tracing
 
 DEFAULT_TIMEOUT_SEC = int(os.getenv("EMBEDDINGS_TIMEOUT_SEC", "60"))
-# TEI BAAI/bge-base-en-v1.5: inputs up to 512 tokens (~2000 chars).
-MAX_TEI_INPUT_CHARS = int(os.getenv("MAX_TEI_INPUT_CHARS", "2000"))
+# TEI BAAI/bge-base-en-v1.5: inputs up to 512 tokens (~1600 chars safely for dense YAML/code).
+MAX_TEI_INPUT_CHARS = int(os.getenv("MAX_TEI_INPUT_CHARS", "1600"))
+# BAAI/bge-base-en-v1.5 recommends an instruction prefix on queries for asymmetric retrieval.
+BGE_QUERY_PREFIX = os.getenv(
+    "BGE_QUERY_PREFIX", "Represent this sentence for searching relevant passages: "
+)
 
 
 def embed_texts(
@@ -59,5 +63,6 @@ def embed_texts(
     model=os.getenv("EMBEDDINGS_MODEL", "tei"),
 )
 def embed_query(query: str, **kwargs) -> list[float]:
-    """Embed a single search query."""
-    return embed_texts([query], **kwargs)[0]
+    """Embed a single search query, prepending the BGE retrieval instruction prefix if configured."""
+    prefixed_query = f"{BGE_QUERY_PREFIX}{query}" if BGE_QUERY_PREFIX else query
+    return embed_texts([prefixed_query], **kwargs)[0]

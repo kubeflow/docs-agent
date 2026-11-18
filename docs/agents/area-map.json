@@ -120,7 +120,7 @@
     "embeddings": {
       "label": "area/embeddings",
       "layer": "3. Backend Vector Database",
-      "notes": "Shared TEI InferenceService, 768-d all-mpnet-base-v2. Character vs token truncation is a live gap.",
+      "notes": "Shared TEI InferenceService, 768-d BAAI/bge-base-en-v1.5.",
       "files": [
         "docs-agent-mcp/mcp-server/embeddings_client.py",
         "docs-agent-mcp/pipelines/utils.py",
