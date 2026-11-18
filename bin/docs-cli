@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Direct launcher for docs-cli preferring local or shared virtualenv Python
+set -euo pipefail
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if [[ -x "${REPO_ROOT}/.venv/bin/python" ]]; then
+  PYTHON_BIN="${REPO_ROOT}/.venv/bin/python"
+elif [[ -x "${REPO_ROOT}/../lab-setup/.venv/bin/python" ]]; then
+  PYTHON_BIN="${REPO_ROOT}/../lab-setup/.venv/bin/python"
+else
+  PYTHON_BIN="python3"
+fi
+
+export PYTHONPATH="${REPO_ROOT}/cli:${PYTHONPATH:-}"
+exec "${PYTHON_BIN}" -m docs_cli.cli "$@"

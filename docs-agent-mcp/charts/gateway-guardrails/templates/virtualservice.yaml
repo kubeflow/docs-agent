@@ -9,6 +9,7 @@ metadata:
 spec:
   hosts:
     - {{ include "gateway-guardrails.domain" . | quote }}
+    - {{ printf "chat.%s" (include "gateway-guardrails.domain" .) | quote }}
   gateways:
     - {{ .Values.namespaces.istioSystem }}/kagent-gateway
   http:
@@ -72,4 +73,38 @@ spec:
             host: {{ .Values.routing.uiService }}.{{ .Values.namespaces.docsAgent }}.svc.cluster.local
             port:
               number: {{ .Values.routing.uiPort }}
+    {{- if (.Values.demoWeb).enabled }}
+    # Standalone demo page for dev/preview clusters (routes only static frontend paths
+    # to docs-agent-demo-web, never to kagent-ui's admin routes).
+    - name: demo-web-alias
+      match:
+        - uri:
+            exact: /demo
+        - uri:
+            exact: /demo/
+      rewrite:
+        uri: /index.html
+      timeout: 15s
+      route:
+        - destination:
+            host: {{ .Values.demoWeb.service }}.{{ .Values.namespaces.docsAgent }}.svc.cluster.local
+            port:
+              number: {{ .Values.demoWeb.port }}
+    - name: demo-web
+      match:
+        - uri:
+            exact: /
+        - uri:
+            exact: /index.html
+        - uri:
+            prefix: /docs_styles/
+        - uri:
+            prefix: /docs_scripts/
+      timeout: 15s
+      route:
+        - destination:
+            host: {{ .Values.demoWeb.service }}.{{ .Values.namespaces.docsAgent }}.svc.cluster.local
+            port:
+              number: {{ .Values.demoWeb.port }}
+    {{- end }}
 {{- end }}

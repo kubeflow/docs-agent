@@ -8,6 +8,7 @@ The official LLM implementation of the Kubeflow Documentation Assistant powered 
 
 ## Table of Contents
 
+- [Quick Start: `docs-cli` (`docsctl`) Lifecycle CLI](#quick-start-docs-cli-docsctl-lifecycle-cli)
 - [Overview](#overview)
 - [Architecture](#architecture)
 - [Prerequisites](#prerequisites)
@@ -25,11 +26,83 @@ The official LLM implementation of the Kubeflow Documentation Assistant powered 
 
 | Path | Purpose |
 |------|---------|
-| `docs-agent-mcp/` | MCP server, Kagent manifests, RAG pipelines, and Terraform platform stack |
+| `cli/` (`./bin/docs-cli`) | Full-lifecycle Portable Kubernetes (**BYO K8s `--cloud k8s`**, **OCI OKE `--cloud oci`**, & **GCP GKE `--cloud gcp`**) + Kubeflow Dashboard + Netlify CLI (`up`, `expose-dashboard`, `scale-down`, `update`, `verify`, `destroy` — full reference in [`cli/README.md`](cli/README.md)) |
+| `deployments/` | Parameterized cloud cluster Terraform (`deployments/terraform/oke-cluster` & `deployments/terraform/gke-cluster`) and Kubeflow Helm charts (`deployments/charts/kubeflow-manifests`) |
+| `docs-agent-mcp/` | MCP server, multi-agent Kagent charts, RAG v4 pipelines, and cloud-agnostic Kubernetes platform Terraform (`docs-agent-mcp/terraform`) |
 | `docs/agents/` | Issue-triage instruction Markdown, labels (`area/mcp`, …), architecture map |
 | `legacy/` | Historical FastAPI servers, older manifests, and Feast-era pipeline copies |
 | `frontend/` | Docs site chatbot assets (`docs_scripts/`, `docs_styles/`) |
-| `.github/workflows/` | CI/CD (`oke-cicd.yaml` builds MCP, runs tests, deploys to OKE) |
+| `.github/workflows/` | CI/CD (`tests.yml`, `oke-cicd.yaml`, and `e2e-cli-release-gate.yaml` Expected-Architecture contract gate) |
+
+## Quick Start: `docs-cli` (`docsctl`) Lifecycle CLI
+
+`docs-cli` (also installed as `docsctl` via `pip install -e .` or invoked directly via `./bin/docs-cli`) provides a single, declarative, Kubernetes-native workflow to stand up, verify, hibernate, update, and tear down the entire Kubeflow Docs Agent platform—without hardcoded credentials or cloud lock-in.
+
+### Architectural Design: Portable, Composable, Scalable
+1. **Strict Two-Layer Split (95%+ Pure Kubernetes)**:
+   - **Layer 1 — Thin Cloud Bootstrap (Optional)**: `deployments/terraform/oke-cluster/` (`--cloud oci`) and `deployments/terraform/gke-cluster/` (`--cloud gcp`) provision only a VPC/VCN + Managed Kubernetes + Worker Pools and output a `kubeconfig`. When `--cloud k8s` is selected, Layer 1 is skipped entirely so you can bring **any conformant Kubernetes cluster** (AWS EKS, Azure AKS, OpenShift, Rancher, k3s, `kind`, or bare-metal).
+   - **Layer 2 — 100% Cloud-Agnostic Kubernetes Platform (`docs-agent-mcp/terraform/` + `docs-agent-mcp/charts/`)**: Uses only the `kubernetes`, `helm`, `kubectl`, `tls`, and `http` providers against `kubeconfig` to deploy `cert-manager`, `Istio`, `Knative Serving`, `KServe`, in-cluster `Milvus + SeaweedFS` (S3-compatible PVC storage), `Kubeflow Pipelines` (`platform-k8s-native`), HuggingFace TEI embeddings & reranker, Kubeflow Central Dashboard, RS256 JWT `gateway-guardrails`, and the **role-keyed multi-agent Kagent suite** (`kubeflow-docs-agent`, `kubeflow-docs-agent-think`, `kubeflow-debug-agent`).
+2. **Composable LLM Serving (`GPU vLLM` or `0-GPU` Portable Gateway)**:
+   - On GPU clusters (`nvidia.com/gpu >= 1`), `llm-runtime` serves `gemma-4-E4B-it` / `Qwen` via KServe + vLLM.
+   - On `0-GPU` clusters (or new cloud projects with `0` GPU quota), `docs-cli` automatically deploys an in-cluster KServe `InferenceService/llm` (`http://llm-stable.ml-infra.svc.cluster.local/v1`, model `flo-llm`) backed by `OPENAI_API_KEY`, `GEMINI_API_KEY`, GCP Vertex AI, or a built-in diagnostic responder—keeping downstream agent CRDs 100% unchanged.
+3. **Security & Native CLI Hygiene**:
+   - **Zero committed secrets or state**: `.env`, `.docs-cli/`, `*.tfstate`, `*.tfvars`, `*.tfvars.json`, `*.pem`, and `kubeconfig*` are gitignored and generated locally with `0600` file permissions.
+   - **Native CLI execution**: Uses standard native CLIs (`kubectl`, `helm`, `terraform`, `gcloud`, `oci`, `openssl`, `curl`).
+
+### 1. Install & Check Prerequisites
+
+```bash
+pip install -e .
+cp .env.example .env   # Optional: populate credentials/API keys in gitignored .env
+
+./bin/docs-cli doctor --cloud k8s   # or --cloud gcp / --cloud oci
+```
+
+### 2. Spin Up on Any Target (`k8s`, `gcp`, or `oci`)
+
+#### Option A: Any Existing Kubernetes Cluster (`--cloud k8s` — EKS, AKS, OpenShift, k3s, kind, Bare-Metal)
+```bash
+# Import/flatten your kubeconfig into .docs-cli/kubeconfig-k8s (never mutates ~/.kube/config)
+./bin/docs-cli kubeconfig --cloud k8s --from ~/.kube/config
+
+# Optional on 0-GPU clusters: export OPENAI_API_KEY="sk-..." or GEMINI_API_KEY="AIza..."
+./bin/docs-cli up --cloud k8s --apply --ttl 6h
+```
+
+#### Option B: Google Cloud GKE (`--cloud gcp`)
+```bash
+export GCP_PROJECT_ID="your-gcp-project-id"   # Enables required GCP APIs & auto-adapts to new-project quotas
+./bin/docs-cli up --cloud gcp --apply --ttl 6h
+```
+
+#### Option C: Oracle Cloud OKE (`--cloud oci`)
+```bash
+export OCI_COMPARTMENT_ID="ocid1.compartment.oc1..your-compartment"
+./bin/docs-cli up --cloud oci --apply --ttl 6h
+```
+
+### 3. Local Dashboard, Verification, Cost Controls & Teardown
+
+```bash
+# Expose unified Kubeflow Central Dashboard + KFP Runs + KServe Models + local /chat/ (no TLS warning)
+./bin/docs-cli expose-dashboard --cloud k8s -b --port 8085   # Opens http://localhost:8085/ & http://localhost:8085/chat/
+
+# Run the 6-stage, 34+ check infrastructure, security, multi-agent A2A & dashboard verification suite
+./bin/docs-cli verify --cloud k8s
+
+# Hibernate & wake (scales node pools to 0 on OCI/GCP, or scales K8s workloads to 0 replicas on BYO K8s)
+./bin/docs-cli scale-down --cloud k8s --yes
+./bin/docs-cli scale-up --cloud k8s --ttl 4h --yes
+./bin/docs-cli ttl --cloud k8s --status
+
+# Sync CLI defaults with upstream Helm/Terraform changes & run Expected-Architecture CI check
+./bin/docs-cli update --check --diagnose
+
+# Tear down cleanly (removes ONLY platform stack on --cloud k8s preserving your cluster; 0-orphan cloud teardown on gcp/oci)
+./bin/docs-cli destroy --cloud k8s --yes
+```
+
+For the complete command matrix, architecture tables, Netlify Hugo/Docsy preview integration, and troubleshooting, see **[`cli/README.md`](cli/README.md)**.
 
 ## Overview
 

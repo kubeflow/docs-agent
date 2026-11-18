@@ -13,6 +13,7 @@ resource "helm_release" "kagent_crds" {
   name             = "kagent-crds"
   repository       = "oci://ghcr.io/kagent-dev/kagent/helm"
   chart            = "kagent-crds"
+  version          = "0.8.6"
   namespace        = var.namespace_docs_agent
   create_namespace = false # namespace already managed in namespaces.tf
 
@@ -26,56 +27,61 @@ resource "helm_release" "kagent" {
   name             = "kagent"
   repository       = "oci://ghcr.io/kagent-dev/kagent/helm"
   chart            = "kagent"
+  version          = "0.8.6"
   namespace        = var.namespace_docs_agent
   create_namespace = false
 
-  # Disable all pre-bundled agents — we bring our own via setup.yaml
+  # Disable all pre-bundled agents & tools — we bring our own via docs-agent chart
   set {
-    name  = "argo-rollouts-agent.enabled"
+    name  = "agents.argo-rollouts-agent.enabled"
     value = "false"
   }
   set {
-    name  = "cilium-debug-agent.enabled"
+    name  = "agents.cilium-debug-agent.enabled"
     value = "false"
   }
   set {
-    name  = "cilium-manager-agent.enabled"
+    name  = "agents.cilium-manager-agent.enabled"
     value = "false"
   }
   set {
-    name  = "cilium-policy-agent.enabled"
+    name  = "agents.cilium-policy-agent.enabled"
     value = "false"
   }
   set {
-    name  = "helm-agent.enabled"
+    name  = "agents.helm-agent.enabled"
     value = "false"
   }
   set {
-    name  = "istio-agent.enabled"
+    name  = "agents.istio-agent.enabled"
     value = "false"
   }
   set {
-    name  = "k8s-agent.enabled"
+    name  = "agents.k8s-agent.enabled"
     value = "false"
   }
   set {
-    name  = "kgateway-agent.enabled"
+    name  = "agents.kgateway-agent.enabled"
     value = "false"
   }
   set {
-    name  = "observability-agent.enabled"
+    name  = "agents.observability-agent.enabled"
     value = "false"
   }
   set {
-    name  = "promql-agent.enabled"
+    name  = "agents.promql-agent.enabled"
     value = "false"
   }
   set {
-    name  = "grafana-mcp.enabled"
+    name  = "tools.grafana-mcp.enabled"
     value = "false"
   }
   set {
-    name  = "querydoc.enabled"
+    name  = "tools.querydoc.enabled"
+    value = "false"
+  }
+  set {
+    name  = "kmcp.enabled"
     value = "false"
   }
 

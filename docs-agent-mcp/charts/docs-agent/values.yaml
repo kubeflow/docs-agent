@@ -6,7 +6,7 @@ mcp:
   replicaCount: 1
   image:
     repository: ghcr.io/kubeflow/mcp-kubeflow-docs
-    tag: v0.1.0
+    tag: "145409a"
     pullPolicy: IfNotPresent
   imagePullSecrets: []
   service:
@@ -168,3 +168,34 @@ triage:
 tests:
   enabled: true
   image: docker.io/library/busybox:1.37
+
+# Declarative KFP v2beta1 Kubernetes-native Pipeline & PipelineVersion CRDs (platform-k8s-native)
+pipelines:
+  enabled: true
+  namespace: kubeflow
+  versionName: v4
+  registrar:
+    enabled: true
+    image: ghcr.io/kubeflow/docs-rag-ingest:v0.1.0
+    repo: kubeflow/docs-agent
+    ref: main
+    triggerInitialRun: false
+  definitions:
+    docs:
+      enabled: true
+      name: github-rag
+      script: kubeflow-pipeline.py
+      description: "RAG pipeline for processing Kubeflow GitHub documentation (v4 hybrid)"
+      collection: kubeflow_docs_v4
+    issues:
+      enabled: true
+      name: issues-rag
+      script: issues-pipeline.py
+      description: "RAG pipeline for processing Kubeflow GitHub issues (v4 hybrid)"
+      collection: kubeflow_issues_v4
+    code:
+      enabled: true
+      name: code-rag
+      script: code-pipeline.py
+      description: "RAG pipeline for processing Kubeflow source code & manifests (v4 hybrid)"
+      collection: kubeflow_code_v4

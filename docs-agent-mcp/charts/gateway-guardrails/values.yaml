@@ -91,7 +91,7 @@ sessionAuth:
     - /a2a/*
     - /api/a2a/*
     - /api/feedback
-  image: ghcr.io/kubeflow/kubeflow-session-issuer:latest
+  image: ghcr.io/kubeflow/kubeflow-session-issuer:145409a
   # Needed when the image is private, e.g. [{name: ghcr-session-issuer}].
   imagePullSecrets: []
   # Secret holding the RS256 signing key at key `private.pem`. Create with:
@@ -127,3 +127,10 @@ meshPolicies:
   # One policy each; list an old and a new name together during a migration.
   llmInferenceServiceNames:
     - llm
+
+# Optional in-cluster standalone demo page (/, /index.html, /docs_styles/*, /docs_scripts/*)
+# served by docs-agent-demo-web in namespaces.docsAgent for dev/preview clusters.
+demoWeb:
+  enabled: false
+  service: docs-agent-demo-web
+  port: 8080

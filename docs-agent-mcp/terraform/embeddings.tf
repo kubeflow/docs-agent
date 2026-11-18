@@ -41,5 +41,5 @@ spec:
             protocol: TCP
 YAML
 
-  depends_on = [kubernetes_namespace.ml_infra]
+  depends_on = [kubernetes_namespace.ml_infra, helm_release.kserve, null_resource.wait_for_kserve_webhook]
 }

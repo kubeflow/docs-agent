@@ -44,6 +44,8 @@ spec:
             hosts:
               - {{ include "gateway-guardrails.domain" . | quote }}
               - "{{ include "gateway-guardrails.domain" . }}:*"
+              - {{ printf "chat.%s" (include "gateway-guardrails.domain" .) | quote }}
+              - "{{ printf "chat.%s" (include "gateway-guardrails.domain" .) }}:*"
             paths:
               {{- toYaml .Values.sessionAuth.protectedPaths | nindent 14 }}
             notMethods: ["OPTIONS"]

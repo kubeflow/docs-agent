@@ -59,10 +59,39 @@ YAML
 }
 
 resource "kubectl_manifest" "knative_core" {
-  for_each  = data.kubectl_file_documents.knative_core.manifests
+  for_each = {
+    for k, v in data.kubectl_file_documents.knative_core.manifests :
+    k => v if !can(regex("/certificates/", k))
+  }
   yaml_body = each.value
 
   depends_on = [kubectl_manifest.knative_crds, kubectl_manifest.knative_serving_namespace]
+}
+
+resource "null_resource" "wait_for_knative_webhook" {
+  provisioner "local-exec" {
+    interpreter = ["/bin/sh", "-c"]
+    environment = {
+      KUBECONFIG = local.kubeconfig
+    }
+    command = <<-EOT
+      set -e
+      kubectl -n knative-serving rollout status deployment/webhook --timeout=180s
+      sleep 5
+    EOT
+  }
+
+  depends_on = [kubectl_manifest.knative_core]
+}
+
+resource "kubectl_manifest" "knative_core_certs" {
+  for_each = {
+    for k, v in data.kubectl_file_documents.knative_core.manifests :
+    k => v if can(regex("/certificates/", k))
+  }
+  yaml_body = each.value
+
+  depends_on = [null_resource.wait_for_knative_webhook]
 }
 
 # --- Istio (base + istiod) ---------------------------------------------------
@@ -87,6 +116,38 @@ resource "helm_release" "istiod" {
   depends_on = [helm_release.istio_base]
 }
 
+resource "helm_release" "istio_ingressgateway" {
+  count            = var.enable_istio_ingressgateway ? 1 : 0
+  name             = "istio-ingressgateway"
+  repository       = "https://istio-release.storage.googleapis.com/charts"
+  chart            = "gateway"
+  namespace        = "istio-system"
+  create_namespace = true
+  version          = var.istio_version
+
+  values = [
+    yamlencode({
+      labels = {
+        app   = "istio-ingressgateway"
+        istio = "ingressgateway"
+      }
+      service = {
+        type = "LoadBalancer"
+        annotations = var.cloud_provider == "gcp" ? {
+          "cloud.google.com/l4-rbs" = "enabled"
+          } : var.cloud_provider == "oci" ? {
+          "oci.oraclecloud.com/load-balancer-type"                      = "lb"
+          "service.beta.kubernetes.io/oci-load-balancer-shape"          = "flexible"
+          "service.beta.kubernetes.io/oci-load-balancer-shape-flex-min" = var.oci_lb_min_bandwidth_mbps
+          "service.beta.kubernetes.io/oci-load-balancer-shape-flex-max" = var.oci_lb_max_bandwidth_mbps
+        } : var.lb_service_annotations
+      }
+    })
+  ]
+
+  depends_on = [helm_release.istiod]
+}
+
 # --- Knative net-istio (networking layer) ------------------------------------
 
 data "http" "knative_net_istio" {
@@ -105,6 +166,17 @@ resource "kubectl_manifest" "net_istio" {
 }
 
 # --- KServe ------------------------------------------------------------------
+
+resource "helm_release" "kserve_crd" {
+  name             = "kserve-crd"
+  repository       = "oci://ghcr.io/kserve/charts"
+  chart            = "kserve-crd"
+  namespace        = "kserve"
+  create_namespace = true
+  version          = var.kserve_version
+
+  depends_on = [kubectl_manifest.net_istio, helm_release.cert_manager]
+}
 
 resource "helm_release" "kserve" {
   name             = "kserve-resources"
@@ -131,7 +203,23 @@ resource "helm_release" "kserve" {
     value = "false"
   }
 
-  depends_on = [kubectl_manifest.net_istio]
+  depends_on = [kubectl_manifest.net_istio, helm_release.kserve_crd]
+}
+
+resource "null_resource" "wait_for_kserve_webhook" {
+  provisioner "local-exec" {
+    interpreter = ["/bin/sh", "-c"]
+    environment = {
+      KUBECONFIG = local.kubeconfig
+    }
+    command = <<-EOT
+      set -e
+      kubectl -n kserve rollout status deployment/kserve-controller-manager --timeout=180s
+      sleep 10
+    EOT
+  }
+
+  depends_on = [helm_release.kserve]
 }
 
 # =============================================================================
