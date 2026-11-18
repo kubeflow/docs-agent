@@ -2,7 +2,7 @@
 
 **Author**: Santhosh Toorpu
 
-[![KEP-867](https://img.shields.io/badge/KEP-867-Documentation%20AI%20Assistant-blue)](https://github.com/kubeflow/community/issues/867)
+[![KEP-867](https://img.shields.io/badge/KEP--867-Documentation%20AI%20Assistant-blue)](https://github.com/kubeflow/community/issues/867)
 
 The official LLM implementation of the Kubeflow Documentation Assistant powered by Retrieval-Augmented Generation (RAG). This repository provides a comprehensive solution for Kubeflow users to search across documentation and get accurate, contextual answers to their queries.
 
