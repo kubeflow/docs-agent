@@ -15,7 +15,12 @@ from rich.table import Table
 
 from .auth import OciSession
 from .config import DocsConfig
-from .gcp_auth import GcpSession
+from .gcp_auth import (
+    GcpSession,
+    bootstrap_gcp_project_apis,
+    ensure_gcloud_on_path,
+    inspect_gcp_gpu_quotas,
+)
 from .kube import (
     compile_kfp_pipelines,
     deploy_helm_stack,
@@ -222,6 +227,47 @@ def up(
                 if apply and not skip_cluster_tf:
                     raise click.ClickException(f"GCP authentication failed: {exc}")
                 console.print(f"[yellow]! GCP credentials not active ({exc}); templating with placeholders.[/yellow]")
+        if apply and gcp_session and not skip_cluster_tf:
+            bootstrap_gcp_project_apis(gcp_session)
+            quotas = inspect_gcp_gpu_quotas(gcp_session)
+            if cfg.cluster.enable_gpu_pool:
+                gpus_all = quotas.get("GPUS_ALL_REGIONS", 1.0)
+                l4_quota = quotas.get("NVIDIA_L4_GPUS", 1.0)
+                if gpus_all < 1.0 or l4_quota < 1.0:
+                    console.print(
+                        Panel(
+                            f"[bold yellow]GCP GPU Quota Notice (`{gcp_session.project_id}`)[/bold yellow]\n"
+                            f"• Detected `GPUS_ALL_REGIONS={gpus_all}` / `NVIDIA_L4_GPUS={l4_quota}` (new GCP projects default to 0 GPU quota until requested).\n"
+                            f"• Automatically switching GKE to CPU node pool (`{cfg.cluster.cpu_node_count}x {cfg.gcp.cpu_machine_type}`) and deploying "
+                            f"in-cluster KServe `InferenceService/llm` backed by GCP Vertex AI (`flo-llm` -> `google/gemini-3-flash-preview`)!",
+                            title="Automatic GCP Quota Fallback",
+                        )
+                    )
+                    cfg.cluster.enable_gpu_pool = False
+            # Pre-flight check global CPUS_ALL_REGIONS on initial node-pool creation so Terraform never retries a 429 silently
+            gke_state_file = cfg.gke_tf_dir / "terraform.tfstate"
+            already_has_cpu_pool = (
+                gke_state_file.exists()
+                and '"google_container_node_pool"' in gke_state_file.read_text(encoding="utf-8", errors="ignore")
+            )
+            cpus_global = quotas.get("CPUS_ALL_REGIONS")
+            try:
+                vcpus_per_node = int(cfg.gcp.cpu_machine_type.rsplit("-", 1)[-1])
+            except ValueError:
+                vcpus_per_node = 4
+            needed_vcpus = 0 if already_has_cpu_pool else (cfg.cluster.cpu_node_count * vcpus_per_node)
+            if cpus_global is not None and cpus_global < needed_vcpus:
+                if cfg.cluster.cpu_node_count * 4 <= cpus_global:
+                    old_mt = cfg.gcp.cpu_machine_type
+                    cfg.gcp.cpu_machine_type = "n2-highmem-4"
+                    console.print(
+                        f"[yellow]! GCP `CPUS_ALL_REGIONS` available={cpus_global} < {needed_vcpus} ({cfg.cluster.cpu_node_count}x {old_mt}); "
+                        f"auto-selecting `{cfg.gcp.cpu_machine_type}` ({cfg.cluster.cpu_node_count * 4} vCPUs).[/yellow]"
+                    )
+                else:
+                    raise click.ClickException(
+                        f"Insufficient GCP `CPUS_ALL_REGIONS` quota ({cpus_global} available, {needed_vcpus} required for {cfg.cluster.cpu_node_count}x {cfg.gcp.cpu_machine_type})."
+                    )
         cluster_tfvars, platform_tfvars = render_tfvars_files(
             cfg, gcp_session=gcp_session if apply else None
         )
@@ -289,10 +335,18 @@ def up(
         console.print("[bold]Phase 2/4: Deploying Platform Stack (Istio, Knative, KServe, Milvus, KFP, TEI)...[/bold]")
         if not (cfg.platform_tf_dir / ".terraform").exists():
             run_terraform(cfg.platform_tf_dir, ["init"])
-        run_terraform(
-            cfg.platform_tf_dir,
-            ["apply", "-auto-approve", f"-var-file={platform_tfvars}"],
-        )
+        plat_state_args: list[str] = []
+        if cfg.platform_tfstate_path:
+            cfg.platform_tfstate_path.parent.mkdir(parents=True, exist_ok=True)
+            plat_state_args = [f"-state={cfg.platform_tfstate_path}"]
+        plat_apply_args = ["apply", "-auto-approve", *plat_state_args, f"-var-file={platform_tfvars}"]
+        try:
+            run_terraform(cfg.platform_tf_dir, plat_apply_args)
+        except subprocess.CalledProcessError:
+            console.print(
+                "[yellow]! Transient Kubernetes admission webhook warm-up detected during Phase 2; retrying platform Terraform apply once...[/yellow]"
+            )
+            run_terraform(cfg.platform_tf_dir, plat_apply_args)
 
     # Phase 3: Secrets & Helm Charts (llm-runtime, docs-agent, gateway-guardrails)
     domain = cfg.resolve_agent_domain()
@@ -606,6 +660,8 @@ def status(ctx: click.Context) -> None:
 def doctor(ctx: click.Context, cloud: Optional[str]) -> None:
     """Verify required CLI tools, local repository paths, and environment variables."""
     cfg = _load_cfg(ctx.obj.get("config_path"), cloud=_resolve_cloud(ctx, cloud))
+    if cfg.cloud == "gcp":
+        ensure_gcloud_on_path()
     table = Table(title=f"docs-cli Environment & Prerequisite Check (active cloud={cfg.cloud})")
     table.add_column("Check", style="cyan")
     table.add_column("Status", style="bold")
@@ -949,7 +1005,7 @@ def nuke(ctx: click.Context, cloud: Optional[str], yes: bool) -> None:
                 f"[green]✓ No lingering GCP resources found for cluster '{cfg.cluster.name}' in project {gcp_session.project_id}.[/green]"
             )
             return
-        render_nuke_plan_table(resources, cfg.cluster.name)
+        render_nuke_plan_table(resources, cfg.cluster.name, cloud="gcp")
         if not yes:
             console.print(
                 "\n[yellow]Dry-run mode.[/yellow] Re-run with [bold]docs-cli --cloud gcp nuke --yes[/bold] to permanently delete these GCP resources."
@@ -991,7 +1047,7 @@ def destroy_cmd(ctx: click.Context, cloud: Optional[str], yes: bool) -> None:
         gcp_session = GcpSession.from_docs_config(cfg)
         resources = discover_labeled_gcp_resources(gcp_session, cfg.cluster.name)
         if resources:
-            render_nuke_plan_table(resources, cfg.cluster.name)
+            render_nuke_plan_table(resources, cfg.cluster.name, cloud="gcp")
         if not yes:
             console.print(
                 f"[yellow]Dry-run:[/yellow] Will tear down K8s LoadBalancers/PVCs, platform & GKE Terraform stacks, and verify 0 GCP resources remain for '{cfg.cluster.name}'.\n"
@@ -1000,7 +1056,7 @@ def destroy_cmd(ctx: click.Context, cloud: Optional[str], yes: bool) -> None:
             return
         remaining = destroy_full_gcp_environment(cfg, gcp_session)
         if remaining:
-            render_nuke_plan_table(remaining, cfg.cluster.name)
+            render_nuke_plan_table(remaining, cfg.cluster.name, cloud="gcp")
             raise click.ClickException(
                 f"{len(remaining)} GCP resource(s) are still terminating; re-run `docs-cli --cloud gcp destroy --yes` in a minute."
             )
@@ -1254,6 +1310,7 @@ def update_cmd(
 
 
 @main.command(name="expose-dashboard")
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
 @click.option("--port", default=8085, type=int, help="Local port for the Kubeflow Central Dashboard (default: 8085).")
 @click.option("--address", default="localhost,127.0.0.1", help="Local bind address (default: localhost,127.0.0.1 for IPv4 + IPv6).")
 @click.option(
@@ -1265,12 +1322,13 @@ def update_cmd(
 @click.pass_context
 def expose_dashboard_cmd(
     ctx: click.Context,
+    cloud: Optional[str],
     port: int,
     address: str,
     background: bool,
 ) -> None:
     """Port-forward the unified Kubeflow Central Dashboard (Pipelines + KServe Models + Cross-Namespace Selector) to localhost."""
-    cfg = _load_cfg(ctx.obj.get("config_path"))
+    cfg = _load_cfg(ctx.obj.get("config_path"), cloud=_resolve_cloud(ctx, cloud))
     if not cfg.kubeconfig_path.exists():
         raise click.ClickException(
             f"No kubeconfig found at {cfg.kubeconfig_path}. Run `docs-cli kubeconfig` first."
@@ -1284,6 +1342,7 @@ def expose_dashboard_cmd(
 
 
 @main.command(name="dashboard")
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
 @click.option("--port", default=8085, type=int, help="Local port for the Kubeflow Central Dashboard (default: 8085).")
 @click.option("--address", default="localhost,127.0.0.1", help="Local bind address (default: localhost,127.0.0.1 for IPv4 + IPv6).")
 @click.option(
@@ -1295,12 +1354,13 @@ def expose_dashboard_cmd(
 @click.pass_context
 def dashboard_cmd(
     ctx: click.Context,
+    cloud: Optional[str],
     port: int,
     address: str,
     background: bool,
 ) -> None:
     """Alias for `expose-dashboard`: port-forward the Kubeflow Central Dashboard to http://localhost:8085."""
-    ctx.invoke(expose_dashboard_cmd, port=port, address=address, background=background)
+    ctx.invoke(expose_dashboard_cmd, cloud=cloud, port=port, address=address, background=background)
 
 
 if __name__ == "__main__":

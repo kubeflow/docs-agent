@@ -14,12 +14,33 @@ locals {
     "docs-cli-cluster" = local.label_name
     "project"          = "kubeflow-docs-agent"
   }
+  required_apis = toset([
+    "cloudresourcemanager.googleapis.com",
+    "iam.googleapis.com",
+    "iamcredentials.googleapis.com",
+    "compute.googleapis.com",
+    "container.googleapis.com",
+    "aiplatform.googleapis.com",
+    "logging.googleapis.com",
+    "monitoring.googleapis.com",
+    "artifactregistry.googleapis.com",
+    "storage.googleapis.com",
+  ])
+}
+
+resource "google_project_service" "apis" {
+  for_each           = local.required_apis
+  project            = var.project_id
+  service            = each.value
+  disable_on_destroy = false
 }
 
 resource "google_project_service" "compute" {
   project            = var.project_id
   service            = "compute.googleapis.com"
   disable_on_destroy = false
+
+  depends_on = [google_project_service.apis]
 }
 
 resource "google_project_service" "container" {

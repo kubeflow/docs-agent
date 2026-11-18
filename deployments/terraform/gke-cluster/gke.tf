@@ -54,10 +54,6 @@ resource "google_container_cluster" "this" {
     }
   }
 
-  workload_identity_config {
-    workload_pool = "${var.project_id}.svc.id.goog"
-  }
-
   resource_labels = local.common_labels
 
   depends_on = [
@@ -99,6 +95,12 @@ resource "google_container_node_pool" "cpu" {
       enable_secure_boot          = true
       enable_integrity_monitoring = true
     }
+  }
+
+  timeouts {
+    create = "15m"
+    update = "15m"
+    delete = "15m"
   }
 }
 
@@ -153,5 +155,11 @@ resource "google_container_node_pool" "gpu" {
       enable_secure_boot          = true
       enable_integrity_monitoring = true
     }
+  }
+
+  timeouts {
+    create = "15m"
+    update = "15m"
+    delete = "15m"
   }
 }

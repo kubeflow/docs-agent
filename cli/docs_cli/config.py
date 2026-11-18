@@ -65,9 +65,9 @@ class GcpConfig:
     region: str = "us-central1"
     zone: str = "us-central1-a"
     credentials_file: str = ""
-    cpu_machine_type: str = "n2-highmem-8"
+    cpu_machine_type: str = "n2-highmem-4"
     cpu_disk_size_gb: int = 100
-    cpu_disk_type: str = "pd-balanced"
+    cpu_disk_type: str = "pd-standard"
     gpu_machine_type: str = "g2-standard-12"
     gpu_accelerator_type: str = "nvidia-l4"
     gpu_accelerator_count: int = 1
@@ -185,7 +185,15 @@ class DocsConfig:
         env_kc = os.environ.get("DOCS_KUBECONFIG")
         if env_kc:
             return Path(env_kc).expanduser().resolve()
+        if self.cloud == "gcp":
+            return self.state_dir / "kubeconfig-gcp"
         return self.state_dir / "kubeconfig"
+
+    @property
+    def platform_tfstate_path(self) -> Optional[Path]:
+        if self.cloud == "gcp":
+            return self.state_dir / "tfstate" / "platform-gcp.tfstate"
+        return None
 
     @property
     def oke_tf_dir(self) -> Path:
@@ -265,7 +273,8 @@ class DocsConfig:
             path = path.resolve()
             repo_root = path.parent
 
-        load_dotenv_file(repo_root / ".env")
+        if not os.environ.get("PYTEST_CURRENT_TEST"):
+            load_dotenv_file(repo_root / ".env")
 
         raw: dict = {}
         if path.exists():
@@ -326,9 +335,9 @@ class DocsConfig:
             or os.environ.get("GCP_CREDENTIALS_FILE")
             or gcp_raw.get("credentials_file", ""),
             cpu_machine_type=os.environ.get("GCP_CPU_MACHINE_TYPE")
-            or gcp_raw.get("cpu_machine_type", "n2-highmem-8"),
+            or gcp_raw.get("cpu_machine_type", "n2-highmem-4"),
             cpu_disk_size_gb=int(gcp_raw.get("cpu_disk_size_gb", cluster_raw.get("cpu_boot_volume_gb", 100))),
-            cpu_disk_type=gcp_raw.get("cpu_disk_type", "pd-balanced"),
+            cpu_disk_type=gcp_raw.get("cpu_disk_type", "pd-standard"),
             gpu_machine_type=os.environ.get("GCP_GPU_MACHINE_TYPE")
             or gcp_raw.get("gpu_machine_type", "g2-standard-12"),
             gpu_accelerator_type=os.environ.get("GCP_GPU_ACCELERATOR_TYPE")

@@ -9,6 +9,7 @@ import shutil
 import signal
 import subprocess
 import time
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import oci
@@ -17,7 +18,7 @@ from rich.table import Table
 
 from .auth import OciSession
 from .config import DocsConfig
-from .gcp_auth import GcpSession
+from .gcp_auth import GcpSession, ensure_gcloud_on_path
 from .terraform import render_tfvars_files, run_terraform
 
 console = Console()
@@ -314,12 +315,22 @@ def discover_tagged_oci_resources(
     return found
 
 
-def render_nuke_plan_table(resources: List[Dict[str, str]], cluster_name: str) -> None:
-    table = Table(title=f"OCI Resources Tagged for Cluster '{cluster_name}'")
+def render_nuke_plan_table(
+    resources: List[Dict[str, str]],
+    cluster_name: str,
+    cloud: str = "oci",
+) -> None:
+    if cloud == "gcp":
+        title = f"GCP Resources Labeled for Cluster '{cluster_name}'"
+        id_col = "Resource ID"
+    else:
+        title = f"OCI Resources Tagged for Cluster '{cluster_name}'"
+        id_col = "OCID"
+    table = Table(title=title)
     table.add_column("Type", style="cyan")
     table.add_column("Name", style="bold")
     table.add_column("State", style="yellow")
-    table.add_column("OCID", style="dim")
+    table.add_column(id_col, style="dim")
     for r in resources:
         table.add_row(r["type"], r["name"], r["state"], r["id"])
     console.print(table)
@@ -429,7 +440,7 @@ def destroy_full_environment(
         console.print(
             f"[yellow]OCI cleanup sweep #{attempt}: {len(remaining)} resource(s) still terminating/present...[/yellow]"
         )
-        render_nuke_plan_table(remaining, cfg.cluster.name)
+        render_nuke_plan_table(remaining, cfg.cluster.name, cloud="oci")
         try:
             nuke_tagged_oci_resources(session, compartment_id, cfg.cluster.name, remaining)
         except Exception as exc:
@@ -494,12 +505,19 @@ def ordered_gcp_terraform_down(
     console.print("[bold yellow]Step 1/3: Cleaning up Kubernetes LoadBalancers & PVCs...[/bold yellow]")
     delete_k8s_loadbalancers_and_pvcs(cfg)
 
-    if (cfg.platform_tf_dir / ".terraform").exists() and (cfg.platform_tf_dir / "terraform.tfstate").exists():
+    gcp_tfstate = cfg.platform_tfstate_path
+    has_plat_state = (
+        gcp_tfstate.exists()
+        if gcp_tfstate
+        else (cfg.platform_tf_dir / "terraform.tfstate").exists()
+    )
+    if (cfg.platform_tf_dir / ".terraform").exists() and has_plat_state:
         console.print("[bold yellow]Step 2/3: Destroying platform Terraform stack...[/bold yellow]")
         try:
+            state_args = [f"-state={gcp_tfstate}"] if gcp_tfstate else []
             run_terraform(
                 cfg.platform_tf_dir,
-                ["destroy", "-auto-approve", f"-var-file={platform_tfvars}"],
+                ["destroy", "-auto-approve", *state_args, f"-var-file={platform_tfvars}"],
             )
         except Exception as exc:
             console.print(
@@ -529,6 +547,7 @@ def discover_labeled_gcp_resources(
     cluster_name: str,
 ) -> List[Dict[str, str]]:
     """Discover GCP resources owned by this cluster (verified by `docs-cli-managed=true` label or dedicated VPC name)."""
+    ensure_gcloud_on_path()
     if not shutil.which("gcloud"):
         return []
     gcp_session.ensure_gcloud_auth_if_service_account()
@@ -721,7 +740,7 @@ def destroy_full_gcp_environment(
         console.print(
             f"[yellow]GCP cleanup sweep #{attempt}: {len(remaining)} resource(s) still terminating/present...[/yellow]"
         )
-        render_nuke_plan_table(remaining, cfg.cluster.name)
+        render_nuke_plan_table(remaining, cfg.cluster.name, cloud="gcp")
         try:
             nuke_labeled_gcp_resources(gcp_session, cfg.cluster.name, remaining)
         except Exception as exc:
@@ -730,16 +749,22 @@ def destroy_full_gcp_environment(
         remaining = discover_labeled_gcp_resources(gcp_session, cfg.cluster.name)
 
     if not remaining:
-        for tf_dir in (cfg.platform_tf_dir, cfg.gke_tf_dir):
-            for fname in ("terraform.tfstate", "terraform.tfstate.backup"):
-                fpath = tf_dir / fname
-                if fpath.exists():
-                    fpath.unlink(missing_ok=True)
+        for fname in ("terraform.tfstate", "terraform.tfstate.backup"):
+            fpath = cfg.gke_tf_dir / fname
+            if fpath.exists():
+                fpath.unlink(missing_ok=True)
+        if cfg.platform_tfstate_path:
+            for p in (
+                cfg.platform_tfstate_path,
+                Path(f"{cfg.platform_tfstate_path}.backup"),
+            ):
+                if p.exists():
+                    p.unlink(missing_ok=True)
         for ephemeral in (
             cfg.kubeconfig_path,
-            cfg.state_dir / "tls_cert.pem",
-            cfg.state_dir / "tls_key.pem",
-            cfg.state_dir / "tls_domain.txt",
+            cfg.state_dir / "tls_cert-gcp.pem",
+            cfg.state_dir / "tls_key-gcp.pem",
+            cfg.state_dir / "tls_domain-gcp.txt",
             cfg.state_dir / "dashboard-port-forward.pid",
             cfg.state_dir / "dashboard-port-forward.log",
         ):

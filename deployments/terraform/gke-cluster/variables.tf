@@ -72,9 +72,9 @@ variable "api_allowed_cidr" {
 # --- CPU Node Pool (Milvus, KFP, TEI embeddings & reranker, Kagent, MCP) -----
 
 variable "cpu_machine_type" {
-  description = "GCE machine type for CPU worker nodes (n2-highmem-8 = 8 vCPU, 64 GB RAM)."
+  description = "GCE machine type for CPU worker nodes (2x n2-highmem-4 = 8 vCPU, 64 GB RAM total; fits new-project CPUS_ALL_REGIONS=12 quota)."
   type        = string
-  default     = "n2-highmem-8"
+  default     = "n2-highmem-4"
 }
 
 variable "cpu_node_count" {
@@ -90,9 +90,9 @@ variable "cpu_disk_size_gb" {
 }
 
 variable "cpu_disk_type" {
-  description = "Boot persistent disk type for CPU worker nodes."
+  description = "Boot persistent disk type for CPU worker nodes (pd-standard preserves new-project 250GB SSD_TOTAL_GB quota for PVCs)."
   type        = string
-  default     = "pd-balanced"
+  default     = "pd-standard"
 }
 
 # --- GPU Node Pool (vLLM via llm-runtime chart: Gemma 4 / Qwen) --------------

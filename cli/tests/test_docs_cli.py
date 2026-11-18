@@ -399,6 +399,8 @@ def test_gcp_config_session_and_gke_tfvars(monkeypatch, tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
+    for env_key in ("GCP_PROJECT_ID", "GOOGLE_CLOUD_PROJECT", "CLOUDSDK_CORE_PROJECT"):
+        monkeypatch.delenv(env_key, raising=False)
     monkeypatch.setenv("DOCS_CLOUD", "gcp")
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(sa_key_path))
     monkeypatch.setenv("GCP_REGION", "us-east4")
@@ -422,7 +424,7 @@ def test_gcp_config_session_and_gke_tfvars(monkeypatch, tmp_path: Path) -> None:
     assert gke_gpu["enable_gpu_pool"] is True
     assert gke_gpu["gpu_machine_type"] == "g2-standard-12"
     assert gke_gpu["gpu_accelerator_type"] == "nvidia-l4"
-    assert gke_gpu["cpu_machine_type"] == "n2-highmem-8"
+    assert gke_gpu["cpu_machine_type"] == "n2-highmem-4"
 
     cfg_cpu = DocsConfig.load(
         path=repo_root / "docs.toml", enable_gpu_override=False, cloud_override="gcp"

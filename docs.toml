@@ -25,8 +25,9 @@ project_id = ""
 # GCP region & zone (NVIDIA L4 GPUs available in us-central1-a/b/c, us-east4, europe-west4, etc.)
 region = "us-central1"
 zone = "us-central1-a"
-# CPU & GPU GKE machine types (`g2-standard-12` = 1x NVIDIA L4 24GB GPU, 12 vCPU, 48 GB RAM)
-cpu_machine_type = "n2-highmem-8"
+# CPU & GPU GKE machine types (`2x n2-highmem-4` = 8 vCPU, 64 GB RAM total, fitting new-project CPUS_ALL_REGIONS=12;
+# `g2-standard-12` = 1x NVIDIA L4 24GB GPU, 12 vCPU, 48 GB RAM)
+cpu_machine_type = "n2-highmem-4"
 gpu_machine_type = "g2-standard-12"
 gpu_accelerator_type = "nvidia-l4"
 gpu_accelerator_count = 1

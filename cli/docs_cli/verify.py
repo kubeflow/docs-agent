@@ -29,7 +29,13 @@ class CheckResult:
 
 
 def _kube_env(cfg: DocsConfig) -> dict:
+    if cfg.cloud == "gcp":
+        from .gcp_auth import ensure_gcloud_on_path
+
+        ensure_gcloud_on_path()
     env = dict(os.environ)
+    if cfg.cloud == "gcp":
+        env["USE_GKE_GCLOUD_AUTH_PLUGIN"] = "True"
     if cfg.kubeconfig_path.exists():
         env["KUBECONFIG"] = str(cfg.kubeconfig_path)
     return env

@@ -28,12 +28,14 @@ Select the target cloud via `--cloud oci` (default) or `--cloud gcp`, `DOCS_CLOU
 
 | Capability | OCI OKE (`--cloud oci`) | GCP GKE (`--cloud gcp`) |
 | :--- | :--- | :--- |
-| **Auth Methods** | `OCI_*` env vars or `~/.oci/config` | `gcloud auth application-default login` (ADC), Workload Identity, or `GOOGLE_APPLICATION_CREDENTIALS` JSON |
-| **CPU Worker Pool** | `2x VM.Standard.E5.Flex` (4 OCPU / 8 vCPU, 64 GB RAM) | `2x n2-highmem-8` (8 vCPU, 64 GB RAM, `COS_CONTAINERD`) |
-| **GPU Worker Pool** | `1x VM.GPU.A10.1` (NVIDIA A10 24 GB VRAM) | `1x g2-standard-12` (`1x nvidia-l4` 24 GB VRAM, auto-installed GKE GPU driver) |
-| **GPU Capacity Discovery** | OCI `ComputeCapacityReport` API pins `AVAILABLE` ADs | `gcloud compute accelerator-types list` discovers `nvidia-l4` zones in region |
-| **Model Cache PVC (50Gi)** | `oci-bv` CSI Block Volume | `standard-rwo` Compute Engine Persistent Disk CSI |
+| **Auth Methods** | `OCI_*` env vars or `~/.oci/config` | Active `gcloud` session (`--force-auth-refresh`), ADC, Workload Identity, or `GOOGLE_APPLICATION_CREDENTIALS` JSON |
+| **New-Project API Bootstrap** | OCI IAM compartment lookup | Automatically enables 11 GCP APIs (`serviceusage`, `cloudresourcemanager`, `iam`, `iamcredentials`, `compute`, `container`, `aiplatform`, `logging`, `monitoring`, `artifactregistry`, `storage`) |
+| **CPU Worker Pool** | `2x VM.Standard.E5.Flex` (4 OCPU / 8 vCPU, 64 GB RAM) | `2x n2-highmem-4` (8 vCPU, 64 GB RAM, `pd-standard` boot disks preserving new-project `250 GB SSD_TOTAL_GB` & `12 CPUS_ALL_REGIONS` quotas) |
+| **GPU Worker Pool & Quota Fallback** | `1x VM.GPU.A10.1` (NVIDIA A10 24 GB VRAM) | `1x g2-standard-12` (`1x nvidia-l4` 24 GB VRAM); if new project has `GPUS_ALL_REGIONS=0`, auto-deploys KServe `InferenceService/llm` Vertex AI gateway (`flo-llm` → `google/gemini-3-flash-preview`) |
+| **GPU Capacity / Quota Check** | OCI `ComputeCapacityReport` API pins `AVAILABLE` ADs | Pre-flight inspects `GPUS_ALL_REGIONS`, `NVIDIA_L4_GPUS`, and `CPUS_ALL_REGIONS` + discovers `nvidia-l4` zones |
+| **Model Cache / App PVCs** | `oci-bv` CSI Block Volume | `standard-rwo` Compute Engine Persistent Disk CSI |
 | **Ingress LoadBalancer** | OCI Flexible LoadBalancer (`10–100 Mbps`) | Google Cloud External Passthrough Network LoadBalancer (`cloud.google.com/l4-rbs`) |
+| **State & Kubeconfig Isolation** | `.docs-cli/kubeconfig` & `docs-agent-mcp/terraform/terraform.tfstate` | `.docs-cli/kubeconfig-gcp` & `.docs-cli/tfstate/platform-gcp.tfstate` (coexists alongside live OCI clusters) |
 | **Hibernate / TTL Auto-Scale** | OCI ContainerEngine signed REST API (`size=0`) | GKE Container Engine `:setSize` REST API / `gcloud container clusters resize` |
 | **Destroy / Nuke Ownership** | Freeform tags `docs-cli-managed=true` + `docs-cli-cluster` | GCP resource labels `docs-cli-managed=true` + `docs-cli-cluster` |
 
@@ -81,21 +83,24 @@ cp .env.example .env
    ```
    *(Note: Ensure your GCP project has `NVIDIA_L4_GPUS >= 1` quota in the target region, or pass `--no-gpu` to run CPU-only with an external LLM API.)*
 
-### Provision, Operate & Tear Down on GCP GKE
+### Provision, Operate & Tear Down on GCP GKE (Live-Validated E2E)
 ```bash
 # 1. Verify tools (`gcloud`, `gke-gcloud-auth-plugin`, `terraform`, `kubectl`, `helm`) & render GKE templates
 ./bin/docs-cli doctor --cloud gcp
 ./bin/docs-cli template --cloud gcp
 
-# 2. Spin up full GKE cluster (VPC + Cloud NAT + 2x n2-highmem-8 + 1x g2-standard-12 L4 GPU),
-#    Platform Terraform, standard-rwo HF cache PVC, Multi-Agent Kagent CRDs, KFP v4 runs, and 6h TTL:
+# 2. Spin up full GKE cluster on a brand-new or existing GCP project:
+#    - Automatically enables all 11 required GCP APIs
+#    - Provisions VPC + Cloud NAT + 2x n2-highmem-4 CPU pool (+ 1x g2-standard-12 L4 GPU when quota >= 1,
+#      or auto-falls back to KServe InferenceService/llm Vertex AI `google/gemini-3-flash-preview` when GPUS_ALL_REGIONS=0)
+#    - Deploys Platform Terraform, Multi-Agent Kagent CRDs, KFP v4 runs, Kubeflow Dashboard, and 6h TTL:
 ./bin/docs-cli up --cloud gcp --apply --ttl 6h
 
-# Or CPU-only GKE cluster (--no-gpu):
+# Or explicit CPU-only GKE cluster (--no-gpu):
 ./bin/docs-cli up --cloud gcp --no-gpu --apply
 
 # 3. Expose the unified Kubeflow Central Dashboard + KFP Runs + KServe Models + /chat/ locally:
-./bin/docs-cli expose-dashboard -b --port 8085
+./bin/docs-cli expose-dashboard --cloud gcp -b --port 8085
 
 # 4. Run the 6-stage, 35+ check verification suite against GKE:
 ./bin/docs-cli verify --cloud gcp

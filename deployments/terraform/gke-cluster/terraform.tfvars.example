@@ -6,7 +6,7 @@ region       = "us-central1"
 zone         = "us-central1-a"
 
 # CPU pool (Milvus, KFP, TEI embeddings/reranker, Kagent, MCP)
-cpu_machine_type = "n2-highmem-8"
+cpu_machine_type = "n2-highmem-4"
 cpu_node_count   = 2
 cpu_disk_size_gb = 100
 

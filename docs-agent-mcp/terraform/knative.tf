@@ -59,10 +59,39 @@ YAML
 }
 
 resource "kubectl_manifest" "knative_core" {
-  for_each  = data.kubectl_file_documents.knative_core.manifests
+  for_each = {
+    for k, v in data.kubectl_file_documents.knative_core.manifests :
+    k => v if !can(regex("/certificates/", k))
+  }
   yaml_body = each.value
 
   depends_on = [kubectl_manifest.knative_crds, kubectl_manifest.knative_serving_namespace]
+}
+
+resource "null_resource" "wait_for_knative_webhook" {
+  provisioner "local-exec" {
+    interpreter = ["/bin/sh", "-c"]
+    environment = {
+      KUBECONFIG = local.kubeconfig
+    }
+    command = <<-EOT
+      set -e
+      kubectl -n knative-serving rollout status deployment/webhook --timeout=180s
+      sleep 5
+    EOT
+  }
+
+  depends_on = [kubectl_manifest.knative_core]
+}
+
+resource "kubectl_manifest" "knative_core_certs" {
+  for_each = {
+    for k, v in data.kubectl_file_documents.knative_core.manifests :
+    k => v if can(regex("/certificates/", k))
+  }
+  yaml_body = each.value
+
+  depends_on = [null_resource.wait_for_knative_webhook]
 }
 
 # --- Istio (base + istiod) ---------------------------------------------------
@@ -106,9 +135,9 @@ resource "helm_release" "istio_ingressgateway" {
         type = "LoadBalancer"
         annotations = var.cloud_provider == "gcp" ? {
           "cloud.google.com/l4-rbs" = "enabled"
-        } : {
-          "oci.oraclecloud.com/load-balancer-type"                     = "lb"
-          "service.beta.kubernetes.io/oci-load-balancer-shape"         = "flexible"
+          } : {
+          "oci.oraclecloud.com/load-balancer-type"                      = "lb"
+          "service.beta.kubernetes.io/oci-load-balancer-shape"          = "flexible"
           "service.beta.kubernetes.io/oci-load-balancer-shape-flex-min" = var.oci_lb_min_bandwidth_mbps
           "service.beta.kubernetes.io/oci-load-balancer-shape-flex-max" = var.oci_lb_max_bandwidth_mbps
         }

@@ -14,10 +14,10 @@ resource "kubernetes_namespace" "kubeflow" {
   metadata {
     name = var.namespace_kubeflow
     labels = {
-      "control-plane"                        = "kubeflow"
-      "istio-injection"                      = "disabled"
-      "pod-security.kubernetes.io/enforce"   = "baseline"
-      "pod-security.kubernetes.io/warn"      = "restricted"
+      "control-plane"                      = "kubeflow"
+      "istio-injection"                    = "disabled"
+      "pod-security.kubernetes.io/enforce" = "baseline"
+      "pod-security.kubernetes.io/warn"    = "restricted"
     }
   }
 }
