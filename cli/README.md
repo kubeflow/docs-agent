@@ -1,6 +1,6 @@
-# `docs-cli` (`docsctl`) — Multi-Cloud (OCI OKE & GCP GKE) + Netlify CLI
+# `docs-cli` (`docsctl`) — Portable Kubernetes (`--cloud k8s`), OCI OKE & GCP GKE + Netlify CLI
 
-`docs-cli` (also aliased as `docsctl`) is the full-lifecycle development & operations CLI for spinning up, scaling, updating, verifying, and tearing down `kubeflow/docs-agent` clusters on **Oracle Cloud Infrastructure (OCI OKE)** and **Google Cloud Platform (GCP GKE)**, and wiring them to **Netlify** (either the official `kubeflow/website` Hugo + Docsy site or the standalone `frontend/` demo site).
+`docs-cli` (also aliased as `docsctl`) is the full-lifecycle, Kubernetes-native development & operations CLI for spinning up, scaling, updating, verifying, and tearing down `kubeflow/docs-agent` across **any conformant Kubernetes cluster (`--cloud k8s`: AWS EKS, Azure AKS, OpenShift, k3s, kind, bare-metal)** as well as full infrastructure bootstrap on **Oracle Cloud Infrastructure (OCI OKE, `--cloud oci`)** and **Google Cloud Platform (GCP GKE, `--cloud gcp`)**, and wiring them to **Netlify** (`kubeflow/website` Hugo + Docsy or standalone `frontend/`).
 
 ---
 
@@ -22,22 +22,47 @@ All infrastructure-as-code lives **outside the Python CLI** in versioned reposit
 
 ---
 
-## 1. Cloud Topology Comparison (OCI OKE vs. GCP GKE)
+## 1. Target Topology Comparison (`k8s` vs. `oci` vs. `gcp`)
 
-Select the target cloud via `--cloud oci` (default) or `--cloud gcp`, `DOCS_CLOUD=gcp` in `.env`, or `[cloud] provider = "gcp"` in `docs.toml`.
+Select the target via `--cloud k8s` (portable BYO Kubernetes), `--cloud oci` (default), or `--cloud gcp` — or set `DOCS_CLOUD=k8s` in `.env` / `[cloud] provider = "k8s"` in `docs.toml`.
 
-| Capability | OCI OKE (`--cloud oci`) | GCP GKE (`--cloud gcp`) |
-| :--- | :--- | :--- |
-| **Auth Methods** | `OCI_*` env vars or `~/.oci/config` | Active `gcloud` session (`--force-auth-refresh`), ADC, Workload Identity, or `GOOGLE_APPLICATION_CREDENTIALS` JSON |
-| **New-Project API Bootstrap** | OCI IAM compartment lookup | Automatically enables 11 GCP APIs (`serviceusage`, `cloudresourcemanager`, `iam`, `iamcredentials`, `compute`, `container`, `aiplatform`, `logging`, `monitoring`, `artifactregistry`, `storage`) |
-| **CPU Worker Pool** | `2x VM.Standard.E5.Flex` (4 OCPU / 8 vCPU, 64 GB RAM) | `2x n2-highmem-4` (8 vCPU, 64 GB RAM, `pd-standard` boot disks preserving new-project `250 GB SSD_TOTAL_GB` & `12 CPUS_ALL_REGIONS` quotas) |
-| **GPU Worker Pool & Quota Fallback** | `1x VM.GPU.A10.1` (NVIDIA A10 24 GB VRAM) | `1x g2-standard-12` (`1x nvidia-l4` 24 GB VRAM); if new project has `GPUS_ALL_REGIONS=0`, auto-deploys KServe `InferenceService/llm` Vertex AI gateway (`flo-llm` → `google/gemini-3-flash-preview`) |
-| **GPU Capacity / Quota Check** | OCI `ComputeCapacityReport` API pins `AVAILABLE` ADs | Pre-flight inspects `GPUS_ALL_REGIONS`, `NVIDIA_L4_GPUS`, and `CPUS_ALL_REGIONS` + discovers `nvidia-l4` zones |
-| **Model Cache / App PVCs** | `oci-bv` CSI Block Volume | `standard-rwo` Compute Engine Persistent Disk CSI |
-| **Ingress LoadBalancer** | OCI Flexible LoadBalancer (`10–100 Mbps`) | Google Cloud External Passthrough Network LoadBalancer (`cloud.google.com/l4-rbs`) |
-| **State & Kubeconfig Isolation** | `.docs-cli/kubeconfig` & `docs-agent-mcp/terraform/terraform.tfstate` | `.docs-cli/kubeconfig-gcp` & `.docs-cli/tfstate/platform-gcp.tfstate` (coexists alongside live OCI clusters) |
-| **Hibernate / TTL Auto-Scale** | OCI ContainerEngine signed REST API (`size=0`) | GKE Container Engine `:setSize` REST API / `gcloud container clusters resize` |
-| **Destroy / Nuke Ownership** | Freeform tags `docs-cli-managed=true` + `docs-cli-cluster` | GCP resource labels `docs-cli-managed=true` + `docs-cli-cluster` |
+| Capability | Portable BYO K8s (`--cloud k8s`) | OCI OKE (`--cloud oci`) | GCP GKE (`--cloud gcp`) |
+| :--- | :--- | :--- | :--- |
+| **Auth Methods** | Any `kubeconfig` (`--kubeconfig`, `DOCS_KUBECONFIG`, `KUBECONFIG`, `--context`) | `OCI_*` env vars or `~/.oci/config` | Active `gcloud` session (`--force-auth-refresh`), ADC, Workload Identity, or `GOOGLE_APPLICATION_CREDENTIALS` JSON |
+| **Cluster Provisioning** | Skips Cloud IaaS Terraform (uses your EKS, AKS, OpenShift, k3s, kind, or bare-metal cluster) | OCI VCN + OKE Enhanced Cluster | Enables 11 GCP APIs + VPC + Cloud NAT + GKE Standard Cluster |
+| **GPU & `0-GPU` LLM Fallback** | Auto-detects `nvidia.com/gpu` on nodes: deploys vLLM (`llm-runtime`) when GPUs ≥ 1, or portable KServe `InferenceService/llm` (`OPENAI_API_KEY` / `GEMINI_API_KEY` / built-in responder) when GPUs = 0 | `1x VM.GPU.A10.1` (`gemma-4-E4B-it`) or `--no-gpu` | `1x g2-standard-12` (`nvidia-l4`); auto-deploys KServe `InferenceService/llm` Vertex AI gateway (`google/gemini-3-flash-preview`) when `GPUS_ALL_REGIONS=0` |
+| **Model Cache / App PVCs** | Cluster default `StorageClass` (or `[k8s] storage_class`) | `oci-bv` CSI Block Volume | `standard-rwo` Compute Engine Persistent Disk CSI |
+| **Ingress LoadBalancer** | Standard K8s `Service type=LoadBalancer` (IPv4 `.nip.io` or raw AWS ELB DNS hostname + `[k8s.lb_service_annotations]`) | OCI Flexible LoadBalancer (`10–100 Mbps`) | Google Cloud External Passthrough Network LoadBalancer (`cloud.google.com/l4-rbs`) |
+| **State & Kubeconfig Isolation** | `.docs-cli/kubeconfig-k8s` & `.docs-cli/tfstate/platform-k8s.tfstate` | `.docs-cli/kubeconfig` & `docs-agent-mcp/terraform/terraform.tfstate` | `.docs-cli/kubeconfig-gcp` & `.docs-cli/tfstate/platform-gcp.tfstate` |
+| **Hibernate / TTL Auto-Scale** | K8s-native workload replica scaling (`0`/`1`) + least-privilege RBAC TTL Job (triggers Cluster Autoscaler / Karpenter) | OCI ContainerEngine signed REST API (`size=0`) | GKE Container Engine `:setSize` REST API / `gcloud container clusters resize` |
+| **Destroy / Nuke Safety** | **Removes ONLY `docs-agent`, `ml-infra`, `kubeflow` platform stack — NEVER deletes your cluster** | Freeform tags `docs-cli-managed=true` + `docs-cli-cluster` | GCP resource labels `docs-cli-managed=true` + `docs-cli-cluster` |
+
+---
+
+## 1b. Quick Start: Portable Bring-Your-Own Kubernetes (`--cloud k8s` — EKS, AKS, OpenShift, k3s, Bare-Metal)
+
+```bash
+# 1. Import/flatten your kubeconfig (without mutating ~/.kube/config) & verify cluster capabilities
+./bin/docs-cli kubeconfig --cloud k8s --from ~/.kube/config
+./bin/docs-cli doctor --cloud k8s
+
+# Optional on 0-GPU clusters: export any OpenAI-compatible or Gemini API key
+# export OPENAI_API_KEY="sk-..."   # or export GEMINI_API_KEY="AIza..."
+
+# 2. Deploy the 100% Kubernetes-native platform stack (Istio, Knative, KServe, Milvus, SeaweedFS, KFP v4, Multi-Agent Kagent)
+./bin/docs-cli up --cloud k8s --apply --ttl 6h
+
+# 3. Expose the unified Kubeflow Central Dashboard + /chat/ locally & run 6-stage verification
+./bin/docs-cli expose-dashboard --cloud k8s -b --port 8085
+./bin/docs-cli verify --cloud k8s
+
+# 4. Hibernate workloads to 0 replicas (allowing Cluster Autoscaler / Karpenter to reclaim worker nodes)
+./bin/docs-cli scale-down --cloud k8s --yes
+./bin/docs-cli scale-up --cloud k8s --yes
+
+# 5. Uninstall ONLY the docs-agent platform stack (underlying BYO Kubernetes cluster is preserved intact)
+./bin/docs-cli destroy --cloud k8s --yes
+```
 
 ---
 

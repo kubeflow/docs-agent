@@ -23,12 +23,12 @@ console = Console()
 
 
 def _kube_env(cfg: DocsConfig) -> Dict[str, str]:
-    if cfg.cloud == "gcp":
+    if cfg.cloud in ("gcp", "k8s"):
         from .gcp_auth import ensure_gcloud_on_path
 
         ensure_gcloud_on_path()
     env = dict(os.environ)
-    if cfg.cloud == "gcp":
+    if cfg.cloud in ("gcp", "k8s"):
         env["USE_GKE_GCLOUD_AUTH_PLUGIN"] = "True"
     if cfg.kubeconfig_path.exists():
         env["KUBECONFIG"] = str(cfg.kubeconfig_path)
@@ -217,10 +217,11 @@ def sync_all_secrets(cfg: DocsConfig, domain: Optional[str] = None) -> None:
             },
         )
 
-    # 3. kagent-kserve in docs-agent (dummy or external OpenAI API key)
+    # 3. kagent-kserve in docs-agent (dummy or external OpenAI/Gemini API key)
+    resolved_llm_key = cfg.llm.resolved_api_key
     api_key = (
-        cfg.llm.openai_api_key
-        if (not cfg.cluster.enable_gpu_pool and cfg.llm.openai_api_key)
+        resolved_llm_key
+        if (not cfg.cluster.enable_gpu_pool and resolved_llm_key)
         else "not-needed"
     )
     apply_secret(
@@ -229,6 +230,15 @@ def sync_all_secrets(cfg: DocsConfig, domain: Optional[str] = None) -> None:
         namespace=ns_docs,
         string_data={"OPENAI_API_KEY": api_key},
     )
+
+    # 3b. Optional external LLM API key in ml-infra (for portable KServe InferenceService/llm proxy)
+    if resolved_llm_key:
+        apply_secret(
+            cfg,
+            name="llm-external-api",
+            namespace=ns_ml,
+            string_data={"API_KEY": resolved_llm_key},
+        )
 
     # 4. Optional Langfuse keys in docs-agent
     if cfg.mcp.langfuse_public_key and cfg.mcp.langfuse_secret_key:
@@ -286,7 +296,7 @@ def sync_all_secrets(cfg: DocsConfig, domain: Optional[str] = None) -> None:
     if cfg.ingress.tls_mode == "self-signed":
         target_domain = domain or cfg.resolve_agent_domain()
         cfg.state_dir.mkdir(parents=True, exist_ok=True)
-        suffix = "-gcp" if cfg.cloud == "gcp" else ""
+        suffix = f"-{cfg.cloud}" if cfg.cloud in ("gcp", "k8s") else ""
         cert_file = cfg.state_dir / f"tls_cert{suffix}.pem"
         key_file = cfg.state_dir / f"tls_key{suffix}.pem"
         domain_file = cfg.state_dir / f"tls_domain{suffix}.txt"
@@ -365,6 +375,13 @@ def build_llm_runtime_values(cfg: DocsConfig) -> Dict[str, Any]:
         vals["cache"] = {
             "storageClassName": cfg.gcp.storage_class or "standard-rwo",
         }
+    elif cfg.cloud == "k8s":
+        vals["cache"] = {
+            "storageClassName": cfg.k8s.storage_class,
+        }
+        vals["placement"] = {
+            "nodeSelector": None,
+        }
     return vals
 
 
@@ -429,16 +446,15 @@ def build_docs_agent_values(cfg: DocsConfig) -> Dict[str, Any]:
         },
     }
 
-    # On GCP without GPU pool and without an explicit external OPENAI_API_KEY,
-    # docs-cli deploys an in-cluster KServe InferenceService/llm Vertex AI gateway
-    # serving `flo-llm` at http://llm-stable.ml-infra.svc.cluster.local/v1, so keep
-    # the default in-cluster ModelConfigs.
-    use_gcp_vertex_in_cluster = (
-        cfg.cloud == "gcp"
-        and not cfg.cluster.enable_gpu_pool
-        and not cfg.llm.openai_api_key
+    # On GCP and portable BYO-Kubernetes (`k8s`) without a GPU pool, docs-cli deploys
+    # an in-cluster KServe InferenceService/llm OpenAI gateway (`flo-llm` at
+    # http://llm-stable.ml-infra.svc.cluster.local/v1) backed by OPENAI_API_KEY /
+    # GEMINI_API_KEY, GCP Vertex AI, or a built-in diagnostic responder, keeping
+    # Kagent ModelConfigs 100% uniform across GPU and 0-GPU clusters.
+    use_in_cluster_llm_gateway = (
+        not cfg.cluster.enable_gpu_pool and cfg.cloud in ("gcp", "k8s")
     )
-    if not cfg.cluster.enable_gpu_pool and not use_gcp_vertex_in_cluster:
+    if not cfg.cluster.enable_gpu_pool and not use_in_cluster_llm_gateway:
         # Point ModelConfigs at external OpenAI-compatible endpoint (--no-gpu mode)
         values["kagent"]["models"] = [
             {
@@ -560,6 +576,7 @@ KNOWN_CLI_MANAGED_SECRETS = {
     "mcp-langfuse-keys",
     "session-issuer-key",
     "kagent-kserve",
+    "llm-external-api",
     "huggingface-secret",
     "milvus-auth",
     "milvus-maintenance-lock",
@@ -1835,6 +1852,82 @@ def expose_kubeflow_dashboard_port_forward(
     return None
 
 
+def inspect_k8s_cluster_capabilities(cfg: DocsConfig) -> Dict[str, Any]:
+    """Inspect a Bring-Your-Own Kubernetes cluster (`--cloud k8s`) for Ready nodes, GPU capacity, and StorageClasses."""
+    env = _kube_env(cfg)
+    nodes_res = subprocess.run(
+        ["kubectl", "get", "nodes", "-o", "json", "--request-timeout=15s"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if nodes_res.returncode != 0:
+        raise RuntimeError(
+            f"Cannot reach Kubernetes API using '{cfg.kubeconfig_path}': {nodes_res.stderr.strip() or nodes_res.stdout.strip()}"
+        )
+
+    items = (json.loads(nodes_res.stdout or "{}").get("items")) or []
+    ready_nodes: List[str] = []
+    gpu_nodes: List[str] = []
+    total_gpus = 0
+    k8s_version = ""
+    for node in items:
+        name = (node.get("metadata") or {}).get("name", "node")
+        status = node.get("status") or {}
+        if not k8s_version:
+            k8s_version = (status.get("nodeInfo") or {}).get("kubeletVersion", "")
+        conds = status.get("conditions") or []
+        is_ready = any(
+            c.get("type") == "Ready" and c.get("status") == "True" for c in conds
+        )
+        if is_ready:
+            ready_nodes.append(name)
+            alloc = status.get("allocatable") or {}
+            cap = status.get("capacity") or {}
+            raw_gpu = str(alloc.get("nvidia.com/gpu") or cap.get("nvidia.com/gpu") or "0")
+            try:
+                gpu_cnt = int(raw_gpu)
+            except ValueError:
+                gpu_cnt = 0
+            if gpu_cnt >= 1:
+                gpu_nodes.append(name)
+                total_gpus += gpu_cnt
+
+    sc_res = subprocess.run(
+        ["kubectl", "get", "storageclass", "-o", "json", "--request-timeout=15s"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    storage_classes: List[str] = []
+    default_sc = ""
+    if sc_res.returncode == 0 and sc_res.stdout.strip():
+        for sc in (json.loads(sc_res.stdout).get("items")) or []:
+            meta = sc.get("metadata") or {}
+            sc_name = str(meta.get("name") or "")
+            if sc_name:
+                storage_classes.append(sc_name)
+            anns = meta.get("annotations") or {}
+            if (
+                anns.get("storageclass.kubernetes.io/is-default-class") == "true"
+                or anns.get("storageclass.beta.kubernetes.io/is-default-class") == "true"
+            ):
+                default_sc = sc_name
+
+    return {
+        "total_nodes": len(items),
+        "ready_nodes": ready_nodes,
+        "ready_count": len(ready_nodes),
+        "gpu_nodes": gpu_nodes,
+        "total_gpus": total_gpus,
+        "k8s_version": k8s_version,
+        "storage_classes": storage_classes,
+        "default_storage_class": default_sc,
+    }
+
+
 def ensure_cluster_nodes_awake(cfg: DocsConfig) -> None:
     """If the cluster was scaled down to 0 nodes (e.g. by the TTL auto-scaler), automatically wake node pools and wait for Ready."""
     nodes_res = subprocess.run(
@@ -1845,6 +1938,50 @@ def ensure_cluster_nodes_awake(cfg: DocsConfig) -> None:
         check=False,
     )
     if nodes_res.returncode != 0:
+        return
+
+    if cfg.cloud == "k8s":
+        ready_count = 0
+        total_nodes = 0
+        if nodes_res.stdout.strip():
+            try:
+                items = json.loads(nodes_res.stdout).get("items", [])
+                total_nodes = len(items)
+                for n in items:
+                    conds = (n.get("status") or {}).get("conditions") or []
+                    if any(c.get("type") == "Ready" and c.get("status") == "True" for c in conds):
+                        ready_count += 1
+            except Exception:
+                pass
+        console.print(
+            f"[dim]Cluster node check: BYO K8s nodes ({ready_count}/{total_nodes} Ready)[/dim]"
+        )
+        if ready_count == 0:
+            raise RuntimeError(
+                f"BYO Kubernetes cluster has 0 Ready nodes ({total_nodes} total). Ensure worker nodes are Ready before deploying."
+            )
+        # If workloads were previously scaled down via `docs-cli --cloud k8s scale-down`, wake them
+        dep_probe = subprocess.run(
+            [
+                "kubectl",
+                "-n",
+                cfg.platform.namespace_docs_agent,
+                "get",
+                "deployment",
+                "kubeflow-docs-agent",
+                "-o",
+                "jsonpath={.spec.replicas}",
+            ],
+            env=_kube_env(cfg),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if dep_probe.returncode == 0 and dep_probe.stdout.strip() == "0":
+            from .scale import scale_k8s_workloads
+
+            console.print("[bold yellow]⚡ Waking hibernated BYO Kubernetes workloads...[/bold yellow]")
+            scale_k8s_workloads(cfg, hibernate=False, gpu_only=False, apply=True)
         return
 
     cpu_target = cfg.cluster.cpu_node_count
@@ -2079,8 +2216,13 @@ def wait_for_worker_nodes_ready(cfg: DocsConfig, timeout_seconds: int = 900) -> 
         time.sleep(15)
 
 
-def _build_vertex_openai_gateway_script() -> str:
-    """Return a self-contained Python 3 HTTP server bridging OpenAI `/v1/chat/completions` (`flo-llm`) to GCP Vertex AI (`google/gemini-3-flash-preview`) with GCE Metadata token caching and Gemini 3 `thought_signature` preservation."""
+def _build_portable_llm_gateway_script() -> str:
+    """Return a self-contained Python 3 HTTP server bridging OpenAI `/v1/chat/completions` (`flo-llm`) to:
+    1. `external_openai`: Any OpenAI-compatible API (`OPENAI_API_KEY`, `GEMINI_API_KEY`, OpenRouter, Ollama, vLLM)
+    2. `gcp_vertex`: GCP Vertex AI (`google/gemini-3-flash-preview`) via GCE Metadata token
+    3. `builtin_fallback`: Deterministic OpenAI-compatible responder for air-gapped / zero-key CPU clusters
+    Includes Gemini 3 `thought_signature` (`extra_content`) preservation across multi-turn MCP tool calls.
+    """
     return r'''
 import json
 import os
@@ -2090,6 +2232,10 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+GATEWAY_MODE = os.environ.get("GATEWAY_MODE", "gcp_vertex").strip()
+EXTERNAL_BASE_URL = os.environ.get("EXTERNAL_BASE_URL", "https://api.openai.com/v1").strip().rstrip("/")
+EXTERNAL_MODEL = os.environ.get("EXTERNAL_MODEL", "gpt-4o-mini").strip()
+EXTERNAL_API_KEY = os.environ.get("API_KEY", "").strip()
 VERTEX_MODEL = os.environ.get("VERTEX_MODEL_ID", "google/gemini-3-flash-preview")
 VERTEX_LOCATION = os.environ.get("VERTEX_LOCATION", "global")
 PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "").strip()
@@ -2136,7 +2282,14 @@ def _cache_thought_sigs_from_choices(choices):
                             _sig_cache.clear()
                         _sig_cache[tc_id] = extra
 
-class VertexOpenAIHandler(BaseHTTPRequestHandler):
+def _active_model_label() -> str:
+    if GATEWAY_MODE == "external_openai":
+        return EXTERNAL_MODEL
+    if GATEWAY_MODE == "gcp_vertex":
+        return VERTEX_MODEL
+    return "flo-llm-portable-fallback"
+
+class PortableOpenAIHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt, *args):
@@ -2152,18 +2305,58 @@ class VertexOpenAIHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.startswith("/health") or self.path == "/":
-            self._send_json(200, {"status": "ok", "model": VERTEX_MODEL})
+            self._send_json(200, {"status": "ok", "mode": GATEWAY_MODE, "model": _active_model_label()})
             return
         if self.path.startswith("/v1/models"):
             self._send_json(200, {
                 "object": "list",
                 "data": [
-                    {"id": "flo-llm", "object": "model", "owned_by": "vertex-ai"},
-                    {"id": VERTEX_MODEL, "object": "model", "owned_by": "google"},
+                    {"id": "flo-llm", "object": "model", "owned_by": "kubeflow-docs-agent"},
+                    {"id": _active_model_label(), "object": "model", "owned_by": GATEWAY_MODE},
                 ],
             })
             return
         self._send_json(404, {"error": "not found"})
+
+    def _serve_builtin_fallback(self, body: dict):
+        msgs = body.get("messages") or []
+        tool_snippets = [str(m.get("content") or "")[:600] for m in msgs if m.get("role") == "tool" and m.get("content")]
+        user_q = ""
+        for m in reversed(msgs):
+            if m.get("role") == "user":
+                user_q = str(m.get("content") or "")[:200]
+                break
+        reply = (
+            f"Kubeflow Docs Agent portable KServe gateway (`flo-llm`) is online for query: \"{user_q}\". "
+            + (f"Retrieved context: {tool_snippets[-1]} " if tool_snippets else "")
+            + "(Set `OPENAI_API_KEY` or `GEMINI_API_KEY` and run `docs-cli --cloud k8s pods` to connect an external LLM on 0-GPU clusters.)"
+        )
+        now_i = int(time.time())
+        if body.get("stream"):
+            chunk = {
+                "id": f"chatcmpl-{now_i}",
+                "object": "chat.completion.chunk",
+                "created": now_i,
+                "model": "flo-llm",
+                "choices": [{"index": 0, "delta": {"role": "assistant", "content": reply}, "finish_reason": "stop"}],
+            }
+            sse = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n".encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(sse)
+            self.wfile.flush()
+            return
+        self._send_json(200, {
+            "id": f"chatcmpl-{now_i}",
+            "object": "chat.completion",
+            "created": now_i,
+            "model": "flo-llm",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": reply}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 32, "completion_tokens": 48, "total_tokens": 80},
+        })
 
     def do_POST(self):
         if not self.path.startswith("/v1/chat/completions"):
@@ -2172,18 +2365,33 @@ class VertexOpenAIHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         body = json.loads(self.rfile.read(length).decode("utf-8"))
 
-        body["model"] = VERTEX_MODEL
-        for unsupported in ("chat_template_kwargs", "top_k", "repetition_penalty", "frequency_penalty", "presence_penalty"):
-            body.pop(unsupported, None)
+        if GATEWAY_MODE == "builtin_fallback":
+            self._serve_builtin_fallback(body)
+            return
+
+        is_google_backend = (
+            GATEWAY_MODE == "gcp_vertex"
+            or "generativelanguage.googleapis.com" in EXTERNAL_BASE_URL
+            or "aiplatform.googleapis.com" in EXTERNAL_BASE_URL
+        )
+        body["model"] = VERTEX_MODEL if GATEWAY_MODE == "gcp_vertex" else EXTERNAL_MODEL
+        body.pop("chat_template_kwargs", None)
+        body.pop("repetition_penalty", None)
+        if is_google_backend:
+            for unsupported in ("top_k", "frequency_penalty", "presence_penalty"):
+                body.pop(unsupported, None)
 
         # Normalize or re-attach Gemini 3 thought_signature (`extra_content`) when OpenAI/Kagent clients strip or flatten it
         def _clean_extra(obj):
             if isinstance(obj, dict):
                 for k in list(obj.keys()):
                     if k == "extra_content":
-                        ec = obj[k]
-                        if not (isinstance(ec, dict) and isinstance(ec.get("google"), dict) and ec["google"].get("thought_signature")):
+                        if not is_google_backend:
                             obj.pop(k, None)
+                        else:
+                            ec = obj[k]
+                            if not (isinstance(ec, dict) and isinstance(ec.get("google"), dict) and ec["google"].get("thought_signature")):
+                                obj.pop(k, None)
                     else:
                         _clean_extra(obj[k])
             elif isinstance(obj, list):
@@ -2191,38 +2399,44 @@ class VertexOpenAIHandler(BaseHTTPRequestHandler):
                     _clean_extra(item)
 
         with _sig_lock:
-            for m in body.get("messages") or []:
-                m_ec = m.pop("extra_content", None)
-                m_ts = None
-                if isinstance(m_ec, dict):
-                    m_ts = m_ec.get("thought_signature") or (m_ec.get("google") or {}).get("thought_signature")
-                if m.get("role") == "assistant" and m.get("tool_calls"):
-                    for tc in m["tool_calls"]:
-                        tc_id = tc.get("id")
-                        tc_ec = tc.pop("extra_content", None)
-                        if tc_id and tc_id in _sig_cache:
-                            tc["extra_content"] = _sig_cache[tc_id]
-                        elif isinstance(tc_ec, dict):
-                            ts = tc_ec.get("thought_signature") or (tc_ec.get("google") or {}).get("thought_signature")
-                            if ts:
-                                tc["extra_content"] = {"google": {"thought_signature": ts}}
-                        elif m_ts:
-                            tc["extra_content"] = {"google": {"thought_signature": m_ts}}
+            if is_google_backend:
+                for m in body.get("messages") or []:
+                    m_ec = m.pop("extra_content", None)
+                    m_ts = None
+                    if isinstance(m_ec, dict):
+                        m_ts = m_ec.get("thought_signature") or (m_ec.get("google") or {}).get("thought_signature")
+                    if m.get("role") == "assistant" and m.get("tool_calls"):
+                        for tc in m["tool_calls"]:
+                            tc_id = tc.get("id")
+                            tc_ec = tc.pop("extra_content", None)
+                            if tc_id and tc_id in _sig_cache:
+                                tc["extra_content"] = _sig_cache[tc_id]
+                            elif isinstance(tc_ec, dict):
+                                ts = tc_ec.get("thought_signature") or (tc_ec.get("google") or {}).get("thought_signature")
+                                if ts:
+                                    tc["extra_content"] = {"google": {"thought_signature": ts}}
+                            elif m_ts:
+                                tc["extra_content"] = {"google": {"thought_signature": m_ts}}
             _clean_extra(body.get("messages"))
 
-        proj = _get_project_id()
-        tok = _get_access_token()
-        host = "aiplatform.googleapis.com" if VERTEX_LOCATION == "global" else f"{VERTEX_LOCATION}-aiplatform.googleapis.com"
-        url = f"https://{host}/v1beta1/projects/{proj}/locations/{VERTEX_LOCATION}/endpoints/openapi/chat/completions"
+        if GATEWAY_MODE == "gcp_vertex":
+            proj = _get_project_id()
+            tok = _get_access_token()
+            host = "aiplatform.googleapis.com" if VERTEX_LOCATION == "global" else f"{VERTEX_LOCATION}-aiplatform.googleapis.com"
+            url = f"https://{host}/v1beta1/projects/{proj}/locations/{VERTEX_LOCATION}/endpoints/openapi/chat/completions"
+        else:
+            tok = EXTERNAL_API_KEY
+            url = f"{EXTERNAL_BASE_URL}/chat/completions"
+
+        headers = {"Content-Type": "application/json"}
+        if tok:
+            headers["Authorization"] = f"Bearer {tok}"
 
         req = urllib.request.Request(
             url,
             data=json.dumps(body).encode("utf-8"),
             method="POST",
-            headers={
-                "Authorization": f"Bearer {tok}",
-                "Content-Type": "application/json",
-            },
+            headers=headers,
         )
         is_stream = bool(body.get("stream"))
         try:
@@ -2234,22 +2448,24 @@ class VertexOpenAIHandler(BaseHTTPRequestHandler):
                     self.send_header("Connection", "close")
                     self.end_headers()
                     for raw_line in resp:
-                        ln = raw_line.decode("utf-8", errors="ignore").strip()
-                        if ln.startswith("data: ") and ln != "data: [DONE]":
-                            try:
-                                chunk = json.loads(ln[6:])
-                                _cache_thought_sigs_from_choices(chunk.get("choices"))
-                            except Exception:
-                                pass
+                        if is_google_backend:
+                            ln = raw_line.decode("utf-8", errors="ignore").strip()
+                            if ln.startswith("data: ") and ln != "data: [DONE]":
+                                try:
+                                    chunk = json.loads(ln[6:])
+                                    _cache_thought_sigs_from_choices(chunk.get("choices"))
+                                except Exception:
+                                    pass
                         self.wfile.write(raw_line)
                         self.wfile.flush()
                 else:
                     raw_out = resp.read()
-                    try:
-                        parsed = json.loads(raw_out.decode("utf-8"))
-                        _cache_thought_sigs_from_choices(parsed.get("choices"))
-                    except Exception:
-                        pass
+                    if is_google_backend:
+                        try:
+                            parsed = json.loads(raw_out.decode("utf-8"))
+                            _cache_thought_sigs_from_choices(parsed.get("choices"))
+                        except Exception:
+                            pass
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(raw_out)))
@@ -2265,20 +2481,39 @@ class VertexOpenAIHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             self._send_json(502, {"error": {"message": str(exc)}})
 
-print(f"[vertex-llm-gateway] Serving flo-llm -> {VERTEX_MODEL} on :8080", flush=True)
-ThreadingHTTPServer(("0.0.0.0", 8080), VertexOpenAIHandler).serve_forever()
+print(f"[portable-llm-gateway] mode={GATEWAY_MODE} serving flo-llm -> {_active_model_label()} on :8080", flush=True)
+ThreadingHTTPServer(("0.0.0.0", 8080), PortableOpenAIHandler).serve_forever()
 '''.lstrip()
 
 
-def deploy_gcp_vertex_llm_inference_service(cfg: DocsConfig) -> None:
-    """Deploy a KServe InferenceService `llm` + `Service/llm-stable` in `ml-infra` backed by GCP Vertex AI (`google/gemini-3-flash-preview`)."""
+def _build_vertex_openai_gateway_script() -> str:
+    """Backward-compatible alias for the portable OpenAI/Vertex/Gemini KServe gateway script."""
+    return _build_portable_llm_gateway_script()
+
+
+def deploy_portable_llm_gateway_inference_service(cfg: DocsConfig) -> None:
+    """Deploy KServe InferenceService `llm` + `Service/llm-stable` in `ml-infra` for 0-GPU / external-LLM clusters."""
     import hashlib
 
     ns_ml = cfg.platform.namespace_ml_infra
     ensure_namespace(cfg, ns_ml)
 
+    resolved_key = cfg.llm.resolved_api_key
+    if resolved_key:
+        gateway_mode = "external_openai"
+        model_label = "external-openai"
+        desc = f"External OpenAI-compatible API (`{cfg.llm.external_model}` @ `{cfg.llm.external_base_url}`)"
+    elif cfg.cloud == "gcp":
+        gateway_mode = "gcp_vertex"
+        model_label = "vertex-gemini"
+        desc = "GCP Vertex AI (`google/gemini-3-flash-preview`)"
+    else:
+        gateway_mode = "builtin_fallback"
+        model_label = "portable-fallback"
+        desc = "Built-in KServe OpenAI responder (set OPENAI_API_KEY or GEMINI_API_KEY for external LLM)"
+
     project_id = cfg.gcp.project_id
-    if not project_id:
+    if cfg.cloud == "gcp" and not project_id and gateway_mode == "gcp_vertex":
         try:
             from .gcp_auth import GcpSession
 
@@ -2286,8 +2521,31 @@ def deploy_gcp_vertex_llm_inference_service(cfg: DocsConfig) -> None:
         except Exception:
             project_id = ""
 
-    script_src = _build_vertex_openai_gateway_script()
-    script_sha = hashlib.sha256(script_src.encode("utf-8")).hexdigest()[:16]
+    script_src = _build_portable_llm_gateway_script()
+    config_fingerprint = f"{script_src}:{gateway_mode}:{cfg.llm.external_base_url}:{cfg.llm.external_model}"
+    script_sha = hashlib.sha256(config_fingerprint.encode("utf-8")).hexdigest()[:16]
+
+    env_list: List[Dict[str, Any]] = [
+        {"name": "GATEWAY_MODE", "value": gateway_mode},
+        {"name": "EXTERNAL_BASE_URL", "value": cfg.llm.external_base_url},
+        {"name": "EXTERNAL_MODEL", "value": cfg.llm.external_model},
+        {"name": "GCP_PROJECT_ID", "value": project_id},
+        {"name": "VERTEX_LOCATION", "value": "global"},
+        {"name": "VERTEX_MODEL_ID", "value": "google/gemini-3-flash-preview"},
+        {"name": "SCRIPT_SHA256", "value": script_sha},
+    ]
+    if resolved_key:
+        env_list.append(
+            {
+                "name": "API_KEY",
+                "valueFrom": {
+                    "secretKeyRef": {
+                        "name": "llm-external-api",
+                        "key": "API_KEY",
+                    }
+                },
+            }
+        )
 
     cm_manifest = {
         "apiVersion": "v1",
@@ -2309,7 +2567,7 @@ def deploy_gcp_vertex_llm_inference_service(cfg: DocsConfig) -> None:
             "namespace": ns_ml,
             "labels": {
                 "app.kubernetes.io/managed-by": "docs-cli",
-                "llm-runtime/model": "vertex-gemini",
+                "llm-runtime/model": model_label,
             },
             "annotations": {
                 "serving.kserve.io/deploymentMode": "Standard",
@@ -2323,12 +2581,7 @@ def deploy_gcp_vertex_llm_inference_service(cfg: DocsConfig) -> None:
                         "name": "kserve-container",
                         "image": "mirror.gcr.io/library/python:3.12-slim",
                         "command": ["python3", "/app/gateway.py"],
-                        "env": [
-                            {"name": "GCP_PROJECT_ID", "value": project_id},
-                            {"name": "VERTEX_LOCATION", "value": "global"},
-                            {"name": "VERTEX_MODEL_ID", "value": "google/gemini-3-flash-preview"},
-                            {"name": "SCRIPT_SHA256", "value": script_sha},
-                        ],
+                        "env": env_list,
                         "ports": [{"containerPort": 8080, "protocol": "TCP"}],
                         "readinessProbe": {
                             "httpGet": {"path": "/health", "port": 8080},
@@ -2402,8 +2655,13 @@ def deploy_gcp_vertex_llm_inference_service(cfg: DocsConfig) -> None:
         check=False,
     )
     console.print(
-        "[green]✓ Deployed KServe InferenceService/llm (`flo-llm` -> GCP Vertex AI `google/gemini-3-flash-preview`) in ml-infra[/green]"
+        f"[green]✓ Deployed portable KServe InferenceService/llm (`flo-llm` -> {desc}) in {ns_ml}[/green]"
     )
+
+
+def deploy_gcp_vertex_llm_inference_service(cfg: DocsConfig) -> None:
+    """Backward-compatible wrapper deploying KServe InferenceService `llm`."""
+    deploy_portable_llm_gateway_inference_service(cfg)
 
 
 def deploy_helm_stack(cfg: DocsConfig, skip_kagent: bool = False) -> str:
@@ -2451,11 +2709,11 @@ def deploy_helm_stack(cfg: DocsConfig, skip_kagent: bool = False) -> str:
                 namespace=cfg.platform.namespace_ml_infra,
                 values_file=values_files["llm-runtime"],
             )
-    elif cfg.cloud == "gcp" and not cfg.llm.openai_api_key:
+    elif cfg.cloud in ("gcp", "k8s"):
         console.print(
-            "[bold cyan]Deploying KServe InferenceService/llm backed by GCP Vertex AI (`flo-llm` -> `google/gemini-3-flash-preview`)...[/bold cyan]"
+            "[bold cyan]Deploying portable KServe InferenceService/llm (`flo-llm`) in ml-infra...[/bold cyan]"
         )
-        deploy_gcp_vertex_llm_inference_service(cfg)
+        deploy_portable_llm_gateway_inference_service(cfg)
     else:
         console.print(
             "[yellow]Skipping llm-runtime chart (--no-gpu / external LLM mode)[/yellow]"

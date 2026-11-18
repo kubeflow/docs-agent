@@ -8,7 +8,7 @@ import re
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from rich.console import Console
 from rich.panel import Panel
@@ -49,7 +49,13 @@ def parse_duration_seconds(duration_str: str) -> int:
 
 
 def _kube_env(cfg: DocsConfig) -> Dict[str, str]:
+    if cfg.cloud in ("gcp", "k8s"):
+        from .gcp_auth import ensure_gcloud_on_path
+
+        ensure_gcloud_on_path()
     env = dict(os.environ)
+    if cfg.cloud in ("gcp", "k8s"):
+        env["USE_GKE_GCLOUD_AUTH_PLUGIN"] = "True"
     if cfg.kubeconfig_path.exists():
         env["KUBECONFIG"] = str(cfg.kubeconfig_path)
     return env
@@ -1030,6 +1036,385 @@ def schedule_in_cluster_gcp_ttl_job(
             f"• [bold]Action:[/bold]       Scale {scope_str}\n"
             f"• [bold]Cancel anytime:[/bold] `docs-cli --cloud gcp ttl --cancel`",
             title="GKE Cluster Auto-Scale Timer",
+        )
+    )
+    return ttl_seconds
+
+
+def scale_k8s_workloads(
+    cfg: DocsConfig,
+    hibernate: bool = True,
+    gpu_only: bool = False,
+    apply: bool = False,
+    release_frontend: Optional[bool] = None,
+) -> List[Dict[str, Any]]:
+    """Kubernetes-native workload hibernation/wake (`--cloud k8s`), scaling Deployments & StatefulSets to 0/1 so Cluster Autoscaler or Karpenter can reclaim nodes while preserving PVCs."""
+    from .kube import get_ingress_lb_ip, set_demo_web_released
+
+    if not cfg.kubeconfig_path.exists():
+        raise RuntimeError(
+            f"No kubeconfig found at {cfg.kubeconfig_path}. Pass `--kubeconfig` or run `docs-cli --cloud k8s kubeconfig`."
+        )
+
+    env = _kube_env(cfg)
+    namespaces = (
+        [cfg.platform.namespace_ml_infra]
+        if gpu_only
+        else [
+            cfg.platform.namespace_docs_agent,
+            cfg.platform.namespace_ml_infra,
+            cfg.platform.namespace_kubeflow,
+        ]
+    )
+    target_replicas = 0 if hibernate else 1
+    plan: List[Dict[str, Any]] = []
+
+    for ns in namespaces:
+        res = subprocess.run(
+            ["kubectl", "-n", ns, "get", "deployment,statefulset", "-o", "json", "--request-timeout=15s"],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if res.returncode != 0 or not res.stdout.strip():
+            continue
+        for item in (json.loads(res.stdout).get("items")) or []:
+            kind = str(item.get("kind") or "Deployment").lower()
+            name = str((item.get("metadata") or {}).get("name") or "")
+            if not name:
+                continue
+            if gpu_only and name != "llm-predictor":
+                continue
+            if not hibernate and not cfg.cluster.enable_gpu_pool and name == "llm-predictor":
+                # Wake portable CPU gateway to 1 replica; only skip if user explicitly disabled
+                pass
+            cur_reps = int((item.get("spec") or {}).get("replicas", 1))
+            plan.append(
+                {
+                    "namespace": ns,
+                    "kind": kind,
+                    "name": name,
+                    "current": cur_reps,
+                    "target": target_replicas,
+                }
+            )
+
+    table = Table(
+        title=f"Kubernetes Workload {'Hibernation' if hibernate else 'Wake'} Plan (--cloud k8s)"
+    )
+    table.add_column("Namespace", style="cyan")
+    table.add_column("Workload", style="bold")
+    table.add_column("Current Replicas", justify="right")
+    table.add_column("Target Replicas", justify="right", style="bold green")
+    for row in plan:
+        table.add_row(
+            row["namespace"],
+            f"{row['kind']}/{row['name']}",
+            str(row["current"]),
+            str(row["target"]),
+        )
+    console.print(table)
+
+    if not apply:
+        console.print(
+            "[yellow]Dry-run mode.[/yellow] Pass [bold]--yes[/bold] to execute Kubernetes workload scaling "
+            "(compatible with Kubernetes Cluster Autoscaler / Karpenter)."
+        )
+        return plan
+
+    should_release = release_frontend if release_frontend is not None else hibernate
+    if should_release:
+        lb_ip = get_ingress_lb_ip(cfg, timeout_seconds=5)
+        domain = cfg.resolve_agent_domain(lb_ip=lb_ip)
+        set_demo_web_released(cfg, domain=domain, released=True)
+    elif not hibernate:
+        lb_ip = get_ingress_lb_ip(cfg, timeout_seconds=5)
+        domain = cfg.resolve_agent_domain(lb_ip=lb_ip)
+        set_demo_web_released(cfg, domain=domain, released=False)
+
+    for row in plan:
+        if row["current"] == row["target"]:
+            continue
+        subprocess.run(
+            [
+                "kubectl",
+                "-n",
+                row["namespace"],
+                "scale",
+                f"{row['kind']}/{row['name']}",
+                f"--replicas={row['target']}",
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    console.print(
+        f"[bold green]✓ Scaled {len(plan)} Kubernetes workload(s) to replicas={target_replicas}![/bold green]"
+    )
+    return plan
+
+
+def _build_in_cluster_k8s_autoscale_script() -> str:
+    """Return a pure Python 3 script that sleeps for TTL_SECONDS and scales managed Kubernetes Deployments & StatefulSets to 0 via the in-cluster K8s API."""
+    return r'''
+import json
+import os
+import ssl
+import time
+import urllib.request
+
+ttl_seconds = int(os.environ.get("TTL_SECONDS", "7200"))
+gpu_only = os.environ.get("GPU_ONLY", "false").lower() == "true"
+namespaces = [ns.strip() for ns in os.environ.get("TARGET_NAMESPACES", "docs-agent,ml-infra,kubeflow").split(",") if ns.strip()]
+
+print(f"[docs-agent-ttl-k8s] Armed portable K8s workload auto-scale-down timer for {ttl_seconds}s (gpu_only={gpu_only})", flush=True)
+deadline = time.time() + ttl_seconds
+while True:
+    remaining = int(deadline - time.time())
+    if remaining <= 0:
+        break
+    sleep_chunk = min(60, remaining)
+    if remaining % 300 < 60 or remaining <= 120:
+        print(f"[docs-agent-ttl-k8s] {remaining}s remaining before workload hibernation...", flush=True)
+    time.sleep(sleep_chunk)
+
+print("[docs-agent-ttl-k8s] TTL expired! Scaling Kubernetes workloads down to 0 replicas...", flush=True)
+
+token_path = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+ca_path = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+token = open(token_path, "r", encoding="utf-8").read().strip()
+ctx = ssl.create_default_context(cafile=ca_path)
+api_base = "https://kubernetes.default.svc"
+
+def k8s_req(path: str, method: str = "GET", body: dict = None, content_type: str = "application/json") -> dict:
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    req = urllib.request.Request(
+        f"{api_base}{path}",
+        data=data,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": content_type,
+        },
+    )
+    with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+for ns in namespaces:
+    for res_plural in ("deployments", "statefulsets"):
+        if gpu_only and res_plural != "deployments":
+            continue
+        try:
+            listing = k8s_req(f"/apis/apps/v1/namespaces/{ns}/{res_plural}")
+        except Exception as exc:
+            print(f"[docs-agent-ttl-k8s] Listing {ns}/{res_plural} failed: {exc}", flush=True)
+            continue
+        for item in listing.get("items") or []:
+            name = (item.get("metadata") or {}).get("name", "")
+            if not name or (gpu_only and name != "llm-predictor"):
+                continue
+            try:
+                k8s_req(
+                    f"/apis/apps/v1/namespaces/{ns}/{res_plural}/{name}/scale",
+                    method="PATCH",
+                    body={"spec": {"replicas": 0}},
+                    content_type="application/merge-patch+json",
+                )
+                print(f"[docs-agent-ttl-k8s] Scaled {ns}/{res_plural}/{name} -> replicas=0", flush=True)
+            except Exception as exc:
+                print(f"[docs-agent-ttl-k8s] Failed scaling {ns}/{res_plural}/{name}: {exc}", flush=True)
+
+print("[docs-agent-ttl-k8s] Kubernetes workload hibernation complete.", flush=True)
+'''.lstrip()
+
+
+def schedule_in_cluster_k8s_ttl_job(
+    cfg: DocsConfig,
+    duration_str: str,
+    gpu_only: bool = False,
+) -> int:
+    """Deploy a pure Kubernetes-native TTL Job (`kube-system/docs-agent-autoscale-ttl`) using least-privilege namespace RBAC (zero cloud credentials)."""
+    ttl_seconds = parse_duration_seconds(duration_str)
+    env = _kube_env(cfg)
+
+    target_namespaces = (
+        [cfg.platform.namespace_ml_infra]
+        if gpu_only
+        else [
+            cfg.platform.namespace_docs_agent,
+            cfg.platform.namespace_ml_infra,
+            cfg.platform.namespace_kubeflow,
+        ]
+    )
+
+    sa_manifest = {
+        "apiVersion": "v1",
+        "kind": "ServiceAccount",
+        "metadata": {
+            "name": "docs-agent-autoscale-sa",
+            "namespace": "kube-system",
+            "labels": {"app": "docs-agent-autoscale-ttl"},
+        },
+    }
+    subprocess.run(
+        ["kubectl", "apply", "-f", "-"],
+        input=json.dumps(sa_manifest),
+        env=env,
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    for ns in target_namespaces:
+        subprocess.run(
+            ["kubectl", "create", "namespace", ns],
+            env=env,
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        role_manifest = {
+            "apiVersion": "rbac.authorization.k8s.io/v1",
+            "kind": "Role",
+            "metadata": {
+                "name": "docs-agent-autoscale-role",
+                "namespace": ns,
+                "labels": {"app": "docs-agent-autoscale-ttl"},
+            },
+            "rules": [
+                {
+                    "apiGroups": ["apps"],
+                    "resources": [
+                        "deployments",
+                        "statefulsets",
+                        "deployments/scale",
+                        "statefulsets/scale",
+                    ],
+                    "verbs": ["get", "list", "patch"],
+                }
+            ],
+        }
+        rb_manifest = {
+            "apiVersion": "rbac.authorization.k8s.io/v1",
+            "kind": "RoleBinding",
+            "metadata": {
+                "name": "docs-agent-autoscale-rb",
+                "namespace": ns,
+                "labels": {"app": "docs-agent-autoscale-ttl"},
+            },
+            "subjects": [
+                {
+                    "kind": "ServiceAccount",
+                    "name": "docs-agent-autoscale-sa",
+                    "namespace": "kube-system",
+                }
+            ],
+            "roleRef": {
+                "apiGroup": "rbac.authorization.k8s.io",
+                "kind": "Role",
+                "name": "docs-agent-autoscale-role",
+            },
+        }
+        for obj in (role_manifest, rb_manifest):
+            subprocess.run(
+                ["kubectl", "apply", "-f", "-"],
+                input=json.dumps(obj),
+                env=env,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
+    subprocess.run(
+        [
+            "kubectl",
+            "-n",
+            "kube-system",
+            "delete",
+            "job",
+            "docs-agent-autoscale-ttl",
+            "--ignore-not-found=true",
+        ],
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    scheduled_at = int(time.time())
+    expires_at = scheduled_at + ttl_seconds
+    job_manifest = {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {
+            "name": "docs-agent-autoscale-ttl",
+            "namespace": "kube-system",
+            "labels": {"app": "docs-agent-autoscale-ttl"},
+            "annotations": {
+                "docs-agent.kubeflow.org/cloud": "k8s",
+                "docs-agent.kubeflow.org/ttl-duration": duration_str,
+                "docs-agent.kubeflow.org/ttl-seconds": str(ttl_seconds),
+                "docs-agent.kubeflow.org/scheduled-at": str(scheduled_at),
+                "docs-agent.kubeflow.org/expires-at": str(expires_at),
+                "docs-agent.kubeflow.org/gpu-only": str(gpu_only).lower(),
+            },
+        },
+        "spec": {
+            "backoffLimit": 1,
+            "ttlSecondsAfterFinished": 3600,
+            "template": {
+                "metadata": {"labels": {"app": "docs-agent-autoscale-ttl"}},
+                "spec": {
+                    "serviceAccountName": "docs-agent-autoscale-sa",
+                    "restartPolicy": "OnFailure",
+                    "containers": [
+                        {
+                            "name": "autoscale-timer",
+                            "image": "mirror.gcr.io/library/python:3.12-slim",
+                            "command": [
+                                "python3",
+                                "-c",
+                                _build_in_cluster_k8s_autoscale_script(),
+                            ],
+                            "env": [
+                                {"name": "TTL_SECONDS", "value": str(ttl_seconds)},
+                                {"name": "GPU_ONLY", "value": str(gpu_only).lower()},
+                                {"name": "TARGET_NAMESPACES", "value": ",".join(target_namespaces)},
+                            ],
+                            "resources": {
+                                "requests": {"cpu": "10m", "memory": "32Mi"},
+                                "limits": {"cpu": "100m", "memory": "128Mi"},
+                            },
+                        }
+                    ],
+                },
+            },
+        },
+    }
+    subprocess.run(
+        ["kubectl", "apply", "-f", "-"],
+        input=json.dumps(job_manifest),
+        env=env,
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    scope_str = (
+        "GPU InferenceService (`llm-predictor` -> 0)"
+        if gpu_only
+        else f"all workloads in {', '.join(target_namespaces)} -> replicas=0"
+    )
+    console.print(
+        Panel(
+            f"[bold green]✓ In-Cluster Kubernetes Auto-Scale-Down Timer Armed![/bold green]\n"
+            f"• [bold]Job:[/bold]          [cyan]kube-system/docs-agent-autoscale-ttl[/cyan]\n"
+            f"• [bold]TTL Duration:[/bold] [cyan]{duration_str} ({ttl_seconds}s)[/cyan]\n"
+            f"• [bold]Action:[/bold]       Scale {scope_str}\n"
+            f"• [bold]Cancel anytime:[/bold] `docs-cli --cloud k8s ttl --cancel`",
+            title="Portable Kubernetes Auto-Scale Timer",
         )
     )
     return ttl_seconds

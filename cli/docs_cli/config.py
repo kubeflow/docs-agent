@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -77,6 +78,14 @@ class GcpConfig:
 
 
 @dataclass
+class K8sConfig:
+    kubeconfig: str = "~/.kube/config"
+    context: str = ""
+    storage_class: str = ""
+    lb_service_annotations: Dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
 class ClusterConfig:
     name: str = "kubeflow-docs-agent-dev"
     kubernetes_version: str = "v1.36.4"
@@ -119,7 +128,12 @@ class LlmConfig:
     external_base_url: str = "https://api.openai.com/v1"
     external_model: str = "gpt-4o-mini"
     openai_api_key: str = ""
+    gemini_api_key: str = ""
     hf_token: str = ""
+
+    @property
+    def resolved_api_key(self) -> str:
+        return self.openai_api_key or self.gemini_api_key
 
 
 @dataclass
@@ -174,25 +188,49 @@ class DocsConfig:
     netlify: NetlifyConfig
     repo_root: Path
     gcp: GcpConfig = field(default_factory=GcpConfig)
+    k8s: K8sConfig = field(default_factory=K8sConfig)
     cloud: str = "oci"
+    explicit_kubeconfig: str = ""
 
     @property
     def state_dir(self) -> Path:
         return self.repo_root / ".docs-cli"
 
     @property
+    def source_kubeconfig_path(self) -> Path:
+        """Resolve source kubeconfig file when importing or connecting to a BYO Kubernetes cluster."""
+        if self.explicit_kubeconfig:
+            return Path(self.explicit_kubeconfig).expanduser().resolve()
+        env_kc = os.environ.get("DOCS_KUBECONFIG")
+        if env_kc:
+            return Path(env_kc).expanduser().resolve()
+        std_kc = os.environ.get("KUBECONFIG", "").split(os.pathsep)[0].strip()
+        if std_kc:
+            return Path(std_kc).expanduser().resolve()
+        return Path(self.k8s.kubeconfig or "~/.kube/config").expanduser().resolve()
+
+    @property
     def kubeconfig_path(self) -> Path:
+        if self.explicit_kubeconfig:
+            return Path(self.explicit_kubeconfig).expanduser().resolve()
         env_kc = os.environ.get("DOCS_KUBECONFIG")
         if env_kc:
             return Path(env_kc).expanduser().resolve()
         if self.cloud == "gcp":
             return self.state_dir / "kubeconfig-gcp"
+        if self.cloud == "k8s":
+            imported = self.state_dir / "kubeconfig-k8s"
+            if imported.exists():
+                return imported
+            return self.source_kubeconfig_path
         return self.state_dir / "kubeconfig"
 
     @property
     def platform_tfstate_path(self) -> Optional[Path]:
         if self.cloud == "gcp":
             return self.state_dir / "tfstate" / "platform-gcp.tfstate"
+        if self.cloud == "k8s":
+            return self.state_dir / "tfstate" / "platform-k8s.tfstate"
         return None
 
     @property
@@ -237,11 +275,14 @@ class DocsConfig:
         return origins
 
     def resolve_agent_domain(self, lb_ip: Optional[str] = None) -> str:
-        """Return explicit domain or construct <lb_ip>.nip.io fallback."""
+        """Return explicit domain, <ipv4>.nip.io for IPv4 LoadBalancers, or raw DNS hostname (e.g. AWS ELB)."""
         if self.ingress.domain:
             return self.ingress.domain.strip()
         if lb_ip:
-            return f"{lb_ip.strip()}.nip.io"
+            clean_lb = lb_ip.strip()
+            if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", clean_lb):
+                return f"{clean_lb}.nip.io"
+            return clean_lb
         return "agent.docs-agent.local"
 
     def ensure_milvus_password(self) -> str:
@@ -265,6 +306,8 @@ class DocsConfig:
         path: Optional[Path] = None,
         enable_gpu_override: Optional[bool] = None,
         cloud_override: Optional[str] = None,
+        kubeconfig_override: Optional[str] = None,
+        context_override: Optional[str] = None,
     ) -> "DocsConfig":
         if path is None:
             repo_root = Path(__file__).resolve().parents[2]
@@ -284,6 +327,7 @@ class DocsConfig:
         cloud_raw = dict(raw.get("cloud", {}))
         oci_raw = dict(raw.get("oci", {}))
         gcp_raw = dict(raw.get("gcp", {}))
+        k8s_raw = dict(raw.get("k8s", {}))
         cluster_raw = dict(raw.get("cluster", {}))
         platform_raw = dict(raw.get("platform", {}))
         llm_raw = dict(raw.get("llm", {}))
@@ -297,9 +341,11 @@ class DocsConfig:
             or cloud_raw.get("provider")
             or "oci"
         ).strip().lower()
-        if resolved_cloud not in ("oci", "gcp"):
+        if resolved_cloud == "kubernetes":
+            resolved_cloud = "k8s"
+        if resolved_cloud not in ("oci", "gcp", "k8s"):
             raise ValueError(
-                f"Unsupported cloud provider '{resolved_cloud}'. Expected 'oci' or 'gcp'."
+                f"Unsupported cloud provider '{resolved_cloud}'. Expected 'oci', 'gcp', or 'k8s'."
             )
 
         # Apply environment variable overrides
@@ -348,6 +394,19 @@ class DocsConfig:
             storage_class=gcp_raw.get("storage_class", "standard-rwo"),
         )
 
+        raw_lb_ann = k8s_raw.get("lb_service_annotations") or {}
+        k8s_cfg = K8sConfig(
+            kubeconfig=kubeconfig_override
+            or os.environ.get("DOCS_KUBECONFIG")
+            or k8s_raw.get("kubeconfig", "~/.kube/config"),
+            context=context_override
+            or os.environ.get("DOCS_KUBE_CONTEXT")
+            or k8s_raw.get("context", ""),
+            storage_class=os.environ.get("DOCS_STORAGE_CLASS")
+            or k8s_raw.get("storage_class", ""),
+            lb_service_annotations={str(k): str(v) for k, v in dict(raw_lb_ann).items()},
+        )
+
         default_gpu = bool(cluster_raw.get("enable_gpu_pool", True))
         enable_gpu = _parse_bool(os.environ.get("DOCS_ENABLE_GPU"), default_gpu)
         if enable_gpu_override is not None:
@@ -376,14 +435,22 @@ class DocsConfig:
 
         platform_cfg = PlatformConfig(**platform_raw)
 
+        openai_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("LLM_API_KEY") or ""
+        gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or ""
+        if gemini_key and not openai_key:
+            default_ext_url = os.environ.get("LLM_BASE_URL") or "https://generativelanguage.googleapis.com/v1beta/openai"
+            default_ext_model = os.environ.get("LLM_MODEL") or "gemini-2.5-flash"
+        else:
+            default_ext_url = os.environ.get("LLM_BASE_URL") or llm_raw.get("external_base_url", "https://api.openai.com/v1")
+            default_ext_model = os.environ.get("LLM_MODEL") or llm_raw.get("external_model", "gpt-4o-mini")
+
         llm_cfg = LlmConfig(
             active_profile=os.environ.get("DOCS_LLM_PROFILE")
             or llm_raw.get("active_profile", "gemma4"),
-            external_base_url=os.environ.get("LLM_BASE_URL")
-            or llm_raw.get("external_base_url", "https://api.openai.com/v1"),
-            external_model=os.environ.get("LLM_MODEL")
-            or llm_raw.get("external_model", "gpt-4o-mini"),
-            openai_api_key=os.environ.get("OPENAI_API_KEY", ""),
+            external_base_url=default_ext_url,
+            external_model=default_ext_model,
+            openai_api_key=openai_key,
+            gemini_api_key=gemini_key,
             hf_token=os.environ.get("HF_TOKEN", ""),
         )
 
@@ -451,7 +518,9 @@ class DocsConfig:
         return cls(
             oci=oci_cfg,
             gcp=gcp_cfg,
+            k8s=k8s_cfg,
             cloud=resolved_cloud,
+            explicit_kubeconfig=kubeconfig_override or "",
             cluster=cluster_cfg,
             platform=platform_cfg,
             llm=llm_cfg,

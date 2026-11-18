@@ -14,9 +14,15 @@ variable "kubeconfig_path" {
 }
 
 variable "cloud_provider" {
-  description = "Cloud provider hosting the Kubernetes cluster (oci or gcp)"
+  description = "Cloud provider hosting the Kubernetes cluster (oci, gcp, or k8s for portable BYO Kubernetes)"
   type        = string
   default     = "oci"
+}
+
+variable "lb_service_annotations" {
+  description = "Optional custom annotations for the istio-ingressgateway LoadBalancer Service when cloud_provider is k8s (e.g. AWS NLB, MetalLB, Cilium)"
+  type        = map(string)
+  default     = {}
 }
 
 variable "enable_istio_ingressgateway" {

@@ -29,12 +29,12 @@ class CheckResult:
 
 
 def _kube_env(cfg: DocsConfig) -> dict:
-    if cfg.cloud == "gcp":
+    if cfg.cloud in ("gcp", "k8s"):
         from .gcp_auth import ensure_gcloud_on_path
 
         ensure_gcloud_on_path()
     env = dict(os.environ)
-    if cfg.cloud == "gcp":
+    if cfg.cloud in ("gcp", "k8s"):
         env["USE_GKE_GCLOUD_AUTH_PLUGIN"] = "True"
     if cfg.kubeconfig_path.exists():
         env["KUBECONFIG"] = str(cfg.kubeconfig_path)
@@ -68,8 +68,15 @@ def run_verification_suite(
     # -------------------------------------------------------------------------
     # Stage 1: Native CLI Prerequisite Checks
     # -------------------------------------------------------------------------
-    cloud_clis = ("gcloud", "gke-gcloud-auth-plugin") if cfg.cloud == "gcp" else ("oci",)
-    stage2_label = "2. GKE Cluster" if cfg.cloud == "gcp" else "2. OKE Cluster"
+    if cfg.cloud == "gcp":
+        cloud_clis: tuple[str, ...] = ("gcloud", "gke-gcloud-auth-plugin")
+        stage2_label = "2. GKE Cluster"
+    elif cfg.cloud == "k8s":
+        cloud_clis = ()
+        stage2_label = "2. K8s Cluster"
+    else:
+        cloud_clis = ("oci",)
+        stage2_label = "2. OKE Cluster"
 
     for binary in (*cloud_clis, "terraform", "kubectl", "helm", "openssl", "curl"):
         path = shutil.which(binary)

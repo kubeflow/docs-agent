@@ -6,8 +6,8 @@
 # `gcloud auth application-default login`.
 
 [cloud]
-# Default cloud provider: "oci" (Oracle OKE) or "gcp" (Google Cloud GKE).
-# Override per-invocation with `--cloud gcp` / `--cloud oci` or `DOCS_CLOUD=gcp`.
+# Default target: "oci" (Oracle OKE), "gcp" (Google Cloud GKE), or "k8s" (Bring-Your-Own Kubernetes: EKS, AKS, OpenShift, k3s, bare-metal).
+# Override per-invocation with `--cloud k8s` / `--cloud gcp` / `--cloud oci` or `DOCS_CLOUD=k8s`.
 provider = "oci"
 
 [oci]
@@ -33,6 +33,16 @@ gpu_accelerator_type = "nvidia-l4"
 gpu_accelerator_count = 1
 # Default GKE Persistent Disk CSI StorageClass for the 50Gi Hugging Face model cache PVC
 storage_class = "standard-rwo"
+
+[k8s]
+# Portable Bring-Your-Own Kubernetes (`--cloud k8s`): works on AWS EKS, Azure AKS, OpenShift, k3s, kind, or bare-metal.
+# Override via `--kubeconfig`, `DOCS_KUBECONFIG`, or `KUBECONFIG`
+kubeconfig = "~/.kube/config"
+context = ""
+# Optional StorageClass override for Hugging Face cache PVC (uses cluster default StorageClass when empty)
+storage_class = ""
+# Optional LoadBalancer Service annotations for istio-ingressgateway (e.g. AWS NLB, MetalLB IP pool, Cilium)
+[k8s.lb_service_annotations]
 
 [cluster]
 name = "kubeflow-docs-agent-dev"

@@ -26,6 +26,7 @@ from .kube import (
     deploy_helm_stack,
     expose_kubeflow_dashboard_port_forward,
     get_ingress_lb_ip,
+    inspect_k8s_cluster_capabilities,
     render_helm_values_files,
     run_kfp_and_bootstrap_rag,
     sync_all_secrets,
@@ -37,8 +38,10 @@ from .scale import (
     cancel_in_cluster_ttl_job,
     get_in_cluster_ttl_status,
     scale_gke_node_pools,
+    scale_k8s_workloads,
     scale_node_pools,
     schedule_in_cluster_gcp_ttl_job,
+    schedule_in_cluster_k8s_ttl_job,
     schedule_in_cluster_ttl_job,
 )
 from .netlify import (
@@ -51,11 +54,15 @@ from .netlify import (
 from .nuke import (
     destroy_full_environment,
     destroy_full_gcp_environment,
+    destroy_k8s_platform_environment,
+    discover_k8s_platform_resources,
     discover_labeled_gcp_resources,
     discover_tagged_oci_resources,
+    nuke_k8s_platform_resources,
     nuke_labeled_gcp_resources,
     nuke_tagged_oci_resources,
     ordered_gcp_terraform_down,
+    ordered_k8s_platform_down,
     ordered_terraform_down,
     render_nuke_plan_table,
 )
@@ -64,6 +71,7 @@ from .terraform import (
     fetch_gke_kubeconfig,
     fetch_oke_kubeconfig,
     get_terraform_outputs,
+    import_k8s_kubeconfig,
     render_tfvars_files,
     run_terraform,
 )
@@ -71,13 +79,15 @@ from .verify import print_verification_report, run_verification_suite
 
 console = Console()
 
-CLOUD_CHOICE = click.Choice(["oci", "gcp"], case_sensitive=False)
+CLOUD_CHOICE = click.Choice(["oci", "gcp", "k8s", "kubernetes"], case_sensitive=False)
 
 
 def _load_cfg(
     config_path: Optional[str],
     no_gpu: bool = False,
     cloud: Optional[str] = None,
+    kubeconfig: Optional[str] = None,
+    context: Optional[str] = None,
 ) -> DocsConfig:
     p = Path(config_path) if config_path else None
     gpu_override = False if no_gpu else None
@@ -85,11 +95,21 @@ def _load_cfg(
         path=p,
         enable_gpu_override=gpu_override,
         cloud_override=cloud,
+        kubeconfig_override=kubeconfig,
+        context_override=context,
     )
 
 
 def _resolve_cloud(ctx: click.Context, cloud_opt: Optional[str]) -> Optional[str]:
     return cloud_opt or (ctx.obj or {}).get("cloud")
+
+
+def _resolve_kc(ctx: click.Context, kc_opt: Optional[str] = None) -> Optional[str]:
+    return kc_opt or (ctx.obj or {}).get("kubeconfig")
+
+
+def _resolve_kctx(ctx: click.Context, kctx_opt: Optional[str] = None) -> Optional[str]:
+    return kctx_opt or (ctx.obj or {}).get("context")
 
 
 @click.group()
@@ -104,24 +124,45 @@ def _resolve_cloud(ctx: click.Context, cloud_opt: Optional[str]) -> Optional[str
     "--cloud",
     type=CLOUD_CHOICE,
     default=None,
-    help="Target cloud provider: 'oci' (Oracle OKE) or 'gcp' (Google Cloud GKE).",
+    help="Target environment: 'oci' (Oracle OKE), 'gcp' (Google Cloud GKE), or 'k8s' (portable Bring-Your-Own Kubernetes).",
+)
+@click.option(
+    "-k",
+    "--kubeconfig",
+    default=None,
+    help="Explicit kubeconfig path (ideal with `--cloud k8s` for EKS, AKS, OpenShift, k3s, kind, or bare-metal).",
+)
+@click.option(
+    "--context",
+    default=None,
+    help="Optional kubeconfig context name when using `--cloud k8s`.",
 )
 @click.pass_context
-def main(ctx: click.Context, config_path: Optional[str], cloud: Optional[str]) -> None:
-    """docs-cli (docsctl): Multi-Cloud (OCI OKE & GCP GKE) + Netlify Dev Cluster CLI for Kubeflow Docs Agent."""
+def main(
+    ctx: click.Context,
+    config_path: Optional[str],
+    cloud: Optional[str],
+    kubeconfig: Optional[str],
+    context: Optional[str],
+) -> None:
+    """docs-cli (docsctl): Portable Kubernetes (BYO K8s, OCI OKE & GCP GKE) + Netlify Dev CLI for Kubeflow Docs Agent."""
     ctx.ensure_object(dict)
     ctx.obj["config_path"] = config_path
     ctx.obj["cloud"] = cloud
+    ctx.obj["kubeconfig"] = kubeconfig
+    ctx.obj["context"] = context
 
 
 @main.command()
-@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target provider ('oci', 'gcp', or 'k8s').")
+@click.option("--kubeconfig", "kc_opt", default=None, help="Explicit kubeconfig path when rendering for `--cloud k8s`.")
 @click.option("--no-gpu", is_flag=True, help="Render templates for a CPU-only cluster (external LLM API).")
 @click.option("--domain", default=None, help="Override ingress domain when rendering Helm values.")
 @click.pass_context
 def template(
     ctx: click.Context,
     cloud: Optional[str],
+    kc_opt: Optional[str],
     no_gpu: bool,
     domain: Optional[str],
 ) -> None:
@@ -130,6 +171,8 @@ def template(
         ctx.obj.get("config_path"),
         no_gpu=no_gpu,
         cloud=_resolve_cloud(ctx, cloud),
+        kubeconfig=_resolve_kc(ctx, kc_opt),
+        context=_resolve_kctx(ctx),
     )
     if domain:
         cfg.ingress.domain = domain
@@ -140,7 +183,12 @@ def template(
     )
     helm_files = render_helm_values_files(cfg, domain=domain)
 
-    cluster_label = "GKE Cluster Terraform" if cfg.cloud == "gcp" else "OKE Cluster Terraform"
+    if cfg.cloud == "gcp":
+        cluster_label = "GKE Cluster Terraform"
+    elif cfg.cloud == "k8s":
+        cluster_label = "BYO Kubernetes Descriptor"
+    else:
+        cluster_label = "OKE Cluster Terraform"
     table = Table(title=f"Rendered Configuration Templates (.docs-cli/ — cloud={cfg.cloud})")
     table.add_column("Component", style="cyan")
     table.add_column("File Path", style="green")
@@ -156,20 +204,24 @@ def template(
 
 
 @main.command()
-@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target provider ('oci', 'gcp', or 'k8s').")
+@click.option("--kubeconfig", "kc_opt", default=None, help="Explicit kubeconfig path (for `--cloud k8s` or `--skip-cluster`).")
+@click.option("--context", "kctx_opt", default=None, help="Optional kubeconfig context name when using `--cloud k8s`.")
 @click.option("--no-gpu", is_flag=True, help="Provision a CPU-only cluster and use an external OpenAI-compatible API.")
 @click.option("--skip-oke", is_flag=True, help="Skip cluster Terraform (use existing cluster/kubeconfig).")
 @click.option("--skip-cluster", is_flag=True, help="Cloud-neutral alias for --skip-oke: skip OKE/GKE cluster Terraform.")
 @click.option("--skip-platform", is_flag=True, help="Skip platform Terraform (Istio, Knative, KServe, Milvus, KFP).")
 @click.option("--skip-pods", is_flag=True, help="Skip Helm chart deployment (llm-runtime, docs-agent, gateway-guardrails).")
 @click.option("--with-netlify", is_flag=True, help="Also build and deploy the frontend/website to Netlify.")
-@click.option("--ttl", default=None, help="Auto-scale node pools down to 0 after duration (e.g. '2h', '90m', '45m').")
-@click.option("--ttl-gpu-only", is_flag=True, help="When --ttl expires, scale only the GPU node pool to 0 (keep CPU nodes up).")
+@click.option("--ttl", default=None, help="Auto-scale node pools / workloads down to 0 after duration (e.g. '2h', '90m', '45m').")
+@click.option("--ttl-gpu-only", is_flag=True, help="When --ttl expires, scale only the GPU pool / LLM workload to 0.")
 @click.option("--apply", is_flag=True, help="Execute changes (default is dry-run / plan).")
 @click.pass_context
 def up(
     ctx: click.Context,
     cloud: Optional[str],
+    kc_opt: Optional[str],
+    kctx_opt: Optional[str],
     no_gpu: bool,
     skip_oke: bool,
     skip_cluster: bool,
@@ -180,16 +232,25 @@ def up(
     ttl_gpu_only: bool,
     apply: bool,
 ) -> None:
-    """Spin up the full Kubeflow Docs Agent dev stack on OCI OKE or GCP GKE (including KFP ingestion & optional --ttl auto-scale-down)."""
+    """Spin up the full Kubeflow Docs Agent stack on BYO Kubernetes (`--cloud k8s`), OCI OKE, or GCP GKE."""
     cfg = _load_cfg(
         ctx.obj.get("config_path"),
         no_gpu=no_gpu,
         cloud=_resolve_cloud(ctx, cloud),
+        kubeconfig=_resolve_kc(ctx, kc_opt),
+        context=_resolve_kctx(ctx, kctx_opt),
     )
-    skip_cluster_tf = skip_oke or skip_cluster
+    skip_cluster_tf = skip_oke or skip_cluster or (cfg.cloud == "k8s")
     mode_label = "APPLY" if apply else "DRY-RUN (pass --apply to execute)"
 
-    if cfg.cloud == "gcp":
+    if cfg.cloud == "k8s":
+        loc_str = f"kubeconfig={cfg.kubeconfig_path}" + (
+            f", context={cfg.k8s.context}" if cfg.k8s.context else ""
+        )
+        cpu_desc = "Existing K8s Worker Nodes"
+        gpu_desc = "Cluster GPU Nodes (nvidia.com/gpu)"
+        cloud_banner = "BYO Kubernetes (Portable K8s)"
+    elif cfg.cloud == "gcp":
         loc_str = f"{cfg.gcp.region} / {cfg.gcp.zone}"
         cpu_desc = f"{cfg.cluster.cpu_node_count}x {cfg.gcp.cpu_machine_type}"
         gpu_desc = f"{cfg.cluster.gpu_node_count}x {cfg.gcp.gpu_machine_type} ({cfg.gcp.gpu_accelerator_type})"
@@ -219,7 +280,51 @@ def up(
     gcp_session: Optional[GcpSession] = None
     comp_id: Optional[str] = cfg.oci.compartment_id or None
 
-    if cfg.cloud == "gcp":
+    if cfg.cloud == "k8s":
+        if apply:
+            try:
+                import_k8s_kubeconfig(cfg)
+                cfg.explicit_kubeconfig = ""
+                caps = inspect_k8s_cluster_capabilities(cfg)
+            except Exception as exc:
+                raise click.ClickException(f"BYO Kubernetes pre-flight failed: {exc}")
+            sc_info = (
+                caps["default_storage_class"]
+                or cfg.k8s.storage_class
+                or (", ".join(caps["storage_classes"]) if caps["storage_classes"] else "none")
+            )
+            console.print(
+                f"[green]✓ Connected to BYO Kubernetes ({caps['k8s_version'] or 'k8s'}): "
+                f"{caps['ready_count']}/{caps['total_nodes']} Ready node(s), "
+                f"{caps['total_gpus']} GPU(s), StorageClass={sc_info}[/green]"
+            )
+            if not caps["default_storage_class"] and not cfg.k8s.storage_class:
+                if len(caps["storage_classes"]) == 1:
+                    cfg.k8s.storage_class = caps["storage_classes"][0]
+                    console.print(
+                        f"[yellow]! No default StorageClass annotation found; auto-selecting single cluster StorageClass `{cfg.k8s.storage_class}` for model cache.[/yellow]"
+                    )
+                elif not caps["storage_classes"]:
+                    console.print(
+                        "[yellow]! Warning: No StorageClass detected on cluster; Milvus/KFP PVCs require dynamic volume provisioning.[/yellow]"
+                    )
+            if cfg.cluster.enable_gpu_pool and caps["total_gpus"] < 1:
+                llm_target = (
+                    f"external API (`{cfg.llm.external_model}` @ `{cfg.llm.external_base_url}`)"
+                    if cfg.llm.resolved_api_key
+                    else "portable in-cluster KServe responder (set OPENAI_API_KEY or GEMINI_API_KEY for external LLM)"
+                )
+                console.print(
+                    Panel(
+                        f"[bold yellow]BYO Kubernetes GPU Detection[/bold yellow]\n"
+                        f"• Detected `0` `nvidia.com/gpu` resources across {caps['ready_count']} Ready node(s).\n"
+                        f"• Automatically switching to CPU-native mode and deploying in-cluster KServe `InferenceService/llm` (`flo-llm` -> {llm_target}).",
+                        title="Automatic Portable K8s Fallback",
+                    )
+                )
+                cfg.cluster.enable_gpu_pool = False
+        cluster_tfvars, platform_tfvars = render_tfvars_files(cfg)
+    elif cfg.cloud == "gcp":
         if not skip_cluster_tf or apply:
             try:
                 gcp_session = GcpSession.from_docs_config(cfg)
@@ -287,15 +392,17 @@ def up(
     render_helm_values_files(cfg)
 
     if not apply:
-        cloud_flag = " --cloud gcp" if cfg.cloud == "gcp" else ""
+        cloud_flag = f" --cloud {cfg.cloud}" if cfg.cloud != "oci" else ""
         console.print(
             "[green]✓ Rendered Terraform & Helm configurations into .docs-cli/[/green]\n"
-            f"Re-run with [bold]docs-cli{cloud_flag} up --apply[/bold] to provision the cluster and deploy pods."
+            f"Re-run with [bold]docs-cli{cloud_flag} up --apply[/bold] to deploy the stack."
         )
         return
 
-    # Phase 1: Cloud Cluster Terraform (OKE or GKE)
-    if not skip_cluster_tf:
+    # Phase 1: Cloud Cluster Terraform (OKE or GKE; skipped on portable BYO Kubernetes)
+    if cfg.cloud == "k8s":
+        console.print("[bold]Phase 1/4: Using Bring-Your-Own Kubernetes Cluster (skipping cloud IaaS Terraform)...[/bold]")
+    elif not skip_cluster_tf:
         if cfg.cloud == "gcp":
             assert gcp_session is not None
             console.print("[bold]Phase 1/4: Provisioning GCP GKE Cluster & VPC...[/bold]")
@@ -364,7 +471,13 @@ def up(
 
     # Optional TTL auto-scaler
     if ttl:
-        if cfg.cloud == "gcp" and gcp_session:
+        if cfg.cloud == "k8s":
+            schedule_in_cluster_k8s_ttl_job(
+                cfg,
+                duration_str=ttl,
+                gpu_only=ttl_gpu_only,
+            )
+        elif cfg.cloud == "gcp" and gcp_session:
             schedule_in_cluster_gcp_ttl_job(
                 cfg,
                 gcp_session=gcp_session,
@@ -391,18 +504,34 @@ def up(
 
 
 @main.command()
-@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target provider ('oci', 'gcp', or 'k8s').")
+@click.option("--kubeconfig", "--from", "kc_opt", default=None, help="Source kubeconfig path when importing with `--cloud k8s`.")
+@click.option("--context", "kctx_opt", default=None, help="Optional kubeconfig context name when importing with `--cloud k8s`.")
 @click.option("--cluster-id", default=None, help="Explicit OKE Cluster OCID or GKE cluster name (auto-detected if omitted).")
 @click.option("--location", default=None, help="Explicit GKE zone/region when --cloud gcp.")
 @click.pass_context
 def kubeconfig(
     ctx: click.Context,
     cloud: Optional[str],
+    kc_opt: Optional[str],
+    kctx_opt: Optional[str],
     cluster_id: Optional[str],
     location: Optional[str],
 ) -> None:
-    """Fetch OKE or GKE kubeconfig into .docs-cli/kubeconfig."""
-    cfg = _load_cfg(ctx.obj.get("config_path"), cloud=_resolve_cloud(ctx, cloud))
+    """Fetch OKE/GKE kubeconfig or import a BYO Kubernetes kubeconfig into .docs-cli/."""
+    cfg = _load_cfg(
+        ctx.obj.get("config_path"),
+        cloud=_resolve_cloud(ctx, cloud),
+        kubeconfig=_resolve_kc(ctx, kc_opt),
+        context=_resolve_kctx(ctx, kctx_opt),
+    )
+    if cfg.cloud == "k8s":
+        try:
+            import_k8s_kubeconfig(cfg)
+        except Exception as exc:
+            raise click.ClickException(str(exc))
+        return
+
     if cfg.cloud == "gcp":
         gcp_session = GcpSession.from_docs_config(cfg)
         outputs = get_terraform_outputs(cfg.gke_tf_dir)
@@ -425,18 +554,25 @@ def kubeconfig(
 @click.pass_context
 def secrets(ctx: click.Context, domain: Optional[str]) -> None:
     """Create or update all Kubernetes Secrets from secure environment variables."""
-    cfg = _load_cfg(ctx.obj.get("config_path"), cloud=_resolve_cloud(ctx, None))
+    cfg = _load_cfg(
+        ctx.obj.get("config_path"),
+        cloud=_resolve_cloud(ctx, None),
+        kubeconfig=_resolve_kc(ctx),
+        context=_resolve_kctx(ctx),
+    )
     sync_all_secrets(cfg, domain=domain)
 
 
 @main.command(name="pods")
-@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
-@click.option("--no-gpu", is_flag=True, help="Deploy without in-cluster GPU vLLM (use external LLM API).")
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target provider ('oci', 'gcp', or 'k8s').")
+@click.option("--kubeconfig", "kc_opt", default=None, help="Explicit kubeconfig path (ideal with `--cloud k8s`).")
+@click.option("--no-gpu", is_flag=True, help="Deploy without in-cluster GPU vLLM (use portable LLM gateway / external API).")
 @click.option("--skip-kagent", is_flag=True, help="Skip installing/upgrading Kagent CRDs and controller.")
 @click.pass_context
 def pods_cmd(
     ctx: click.Context,
     cloud: Optional[str],
+    kc_opt: Optional[str],
     no_gpu: bool,
     skip_kagent: bool,
 ) -> None:
@@ -445,6 +581,8 @@ def pods_cmd(
         ctx.obj.get("config_path"),
         no_gpu=no_gpu,
         cloud=_resolve_cloud(ctx, cloud),
+        kubeconfig=_resolve_kc(ctx, kc_opt),
+        context=_resolve_kctx(ctx),
     )
     domain = deploy_helm_stack(cfg, skip_kagent=skip_kagent)
     console.print(
@@ -453,6 +591,8 @@ def pods_cmd(
 
 
 @main.command()
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target provider ('oci', 'gcp', or 'k8s').")
+@click.option("--kubeconfig", "kc_opt", default=None, help="Explicit kubeconfig path.")
 @click.option(
     "--pipeline",
     "pipelines",
@@ -480,13 +620,20 @@ def pods_cmd(
 @click.pass_context
 def ingest(
     ctx: click.Context,
+    cloud: Optional[str],
+    kc_opt: Optional[str],
     pipelines: tuple[str, ...],
     k8s_native: bool,
     apply: bool,
     run_job: bool,
 ) -> None:
     """Compile KFP v4 RAG ingestion pipelines, apply Kubernetes-native Pipeline CRDs, and trigger ingestion runs."""
-    cfg = _load_cfg(ctx.obj.get("config_path"))
+    cfg = _load_cfg(
+        ctx.obj.get("config_path"),
+        cloud=_resolve_cloud(ctx, cloud),
+        kubeconfig=_resolve_kc(ctx, kc_opt),
+        context=_resolve_kctx(ctx),
+    )
     compiled = compile_kfp_pipelines(cfg, selected=pipelines)
     for path in compiled:
         console.print(f"[green]✓ Compiled KFP pipeline YAML:[/green] {path}")
@@ -499,7 +646,11 @@ def ingest(
                 f"[green]✓ Generated K8s-native Pipeline + PipelineVersion CRDs:[/green] {cr_file}"
             )
             if apply:
+                if cfg.cloud in ("gcp", "k8s"):
+                    ensure_gcloud_on_path()
                 env = dict(os.environ)
+                if cfg.cloud in ("gcp", "k8s"):
+                    env["USE_GKE_GCLOUD_AUTH_PLUGIN"] = "True"
                 if cfg.kubeconfig_path.exists():
                     env["KUBECONFIG"] = str(cfg.kubeconfig_path)
                 res_apply = subprocess.run(
@@ -545,7 +696,12 @@ def netlify(
     deploy: bool,
 ) -> None:
     """Wire kubeflow/website (Hugo + Docsy) or standalone demo frontend to the cluster & deploy to Netlify."""
-    cfg = _load_cfg(ctx.obj.get("config_path"))
+    cfg = _load_cfg(
+        ctx.obj.get("config_path"),
+        cloud=_resolve_cloud(ctx, None),
+        kubeconfig=_resolve_kc(ctx),
+        context=_resolve_kctx(ctx),
+    )
     active_mode = mode or cfg.netlify.mode
     lb_ip = None if domain else get_ingress_lb_ip(cfg, timeout_seconds=5)
     resolved_domain = domain or cfg.resolve_agent_domain(lb_ip=lb_ip)
@@ -596,7 +752,8 @@ def netlify(
 
 
 @main.command()
-@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target provider ('oci', 'gcp', or 'k8s').")
+@click.option("--kubeconfig", "kc_opt", default=None, help="Explicit kubeconfig path (ideal with `--cloud k8s`).")
 @click.option("--domain", default=None, help="Explicit Docs Agent ingress domain.")
 @click.option("--page-url", default=None, help="Explicit exposed page URL to test.")
 @click.option("--helm-tests", is_flag=True, help="Also execute in-cluster `helm test` suites.")
@@ -604,12 +761,18 @@ def netlify(
 def verify(
     ctx: click.Context,
     cloud: Optional[str],
+    kc_opt: Optional[str],
     domain: Optional[str],
     page_url: Optional[str],
     helm_tests: bool,
 ) -> None:
     """Run the ordered 6-stage verification suite and print passed tests + exposed page link."""
-    cfg = _load_cfg(ctx.obj.get("config_path"), cloud=_resolve_cloud(ctx, cloud))
+    cfg = _load_cfg(
+        ctx.obj.get("config_path"),
+        cloud=_resolve_cloud(ctx, cloud),
+        kubeconfig=_resolve_kc(ctx, kc_opt),
+        context=_resolve_kctx(ctx),
+    )
     results, all_passed, agent_url, final_page_url = run_verification_suite(
         cfg,
         domain=domain,
@@ -622,17 +785,28 @@ def verify(
 
 
 @main.command()
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target provider ('oci', 'gcp', or 'k8s').")
+@click.option("--kubeconfig", "kc_opt", default=None, help="Explicit kubeconfig path.")
 @click.pass_context
-def status(ctx: click.Context) -> None:
+def status(ctx: click.Context, cloud: Optional[str], kc_opt: Optional[str]) -> None:
     """Show current cluster pods, InferenceServices, Kagent Agents, and Ingress IP."""
-    cfg = _load_cfg(ctx.obj.get("config_path"), cloud=_resolve_cloud(ctx, None))
+    cfg = _load_cfg(
+        ctx.obj.get("config_path"),
+        cloud=_resolve_cloud(ctx, cloud),
+        kubeconfig=_resolve_kc(ctx, kc_opt),
+        context=_resolve_kctx(ctx),
+    )
     if not cfg.kubeconfig_path.exists():
         console.print(
             f"[yellow]No kubeconfig found at {cfg.kubeconfig_path}. Run `docs-cli kubeconfig` or `docs-cli up --apply`.[/yellow]"
         )
         return
 
+    if cfg.cloud in ("gcp", "k8s"):
+        ensure_gcloud_on_path()
     env = dict(os.environ)
+    if cfg.cloud in ("gcp", "k8s"):
+        env["USE_GKE_GCLOUD_AUTH_PLUGIN"] = "True"
     env["KUBECONFIG"] = str(cfg.kubeconfig_path)
 
     for label, cmd in (
@@ -655,19 +829,30 @@ def status(ctx: click.Context) -> None:
 
 
 @main.command()
-@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target provider ('oci', 'gcp', or 'k8s').")
+@click.option("--kubeconfig", "kc_opt", default=None, help="Explicit kubeconfig path when checking `--cloud k8s`.")
 @click.pass_context
-def doctor(ctx: click.Context, cloud: Optional[str]) -> None:
+def doctor(ctx: click.Context, cloud: Optional[str], kc_opt: Optional[str]) -> None:
     """Verify required CLI tools, local repository paths, and environment variables."""
-    cfg = _load_cfg(ctx.obj.get("config_path"), cloud=_resolve_cloud(ctx, cloud))
-    if cfg.cloud == "gcp":
+    cfg = _load_cfg(
+        ctx.obj.get("config_path"),
+        cloud=_resolve_cloud(ctx, cloud),
+        kubeconfig=_resolve_kc(ctx, kc_opt),
+        context=_resolve_kctx(ctx),
+    )
+    if cfg.cloud in ("gcp", "k8s"):
         ensure_gcloud_on_path()
     table = Table(title=f"docs-cli Environment & Prerequisite Check (active cloud={cfg.cloud})")
     table.add_column("Check", style="cyan")
     table.add_column("Status", style="bold")
     table.add_column("Details", style="dim")
 
-    for binary in ("terraform", "kubectl", "helm", "oci", "gcloud", "gke-gcloud-auth-plugin", "hugo"):
+    binaries = (
+        ("terraform", "kubectl", "helm", "hugo")
+        if cfg.cloud == "k8s"
+        else ("terraform", "kubectl", "helm", "oci", "gcloud", "gke-gcloud-auth-plugin", "hugo")
+    )
+    for binary in binaries:
         found = shutil.which(binary)
         table.add_row(
             f"Binary: {binary}",
@@ -703,6 +888,28 @@ def doctor(ctx: click.Context, cloud: Optional[str]) -> None:
         str(website_dir),
     )
 
+    kc_exists = cfg.kubeconfig_path.exists()
+    table.add_row(
+        "Active Kubeconfig",
+        "[green]OK[/green]" if kc_exists else "[yellow]NOT FOUND[/yellow]",
+        str(cfg.kubeconfig_path),
+    )
+    if cfg.cloud == "k8s" and kc_exists and shutil.which("kubectl"):
+        try:
+            caps = inspect_k8s_cluster_capabilities(cfg)
+            sc_label = caps["default_storage_class"] or (", ".join(caps["storage_classes"]) or "none")
+            table.add_row(
+                "BYO K8s Cluster Reachability",
+                "[green]CONNECTED[/green]",
+                f"{caps['ready_count']}/{caps['total_nodes']} Ready ({caps['k8s_version']}), GPUs={caps['total_gpus']}, StorageClass={sc_label}",
+            )
+        except Exception as exc:
+            table.add_row(
+                "BYO K8s Cluster Reachability",
+                "[yellow]UNREACHABLE[/yellow]",
+                str(exc)[:120],
+            )
+
     has_oci = bool(cfg.oci.tenancy_ocid or (Path.home() / ".oci" / "config").exists())
     table.add_row(
         "OCI Credentials",
@@ -719,6 +926,12 @@ def doctor(ctx: click.Context, cloud: Optional[str]) -> None:
         "[green]CONFIGURED[/green]" if has_gcp else "[yellow]UNSET[/yellow]",
         "GCP_PROJECT_ID / GOOGLE_APPLICATION_CREDENTIALS / gcloud ADC",
     )
+    has_ext_llm = bool(cfg.llm.resolved_api_key)
+    table.add_row(
+        "External LLM API Key",
+        "[green]CONFIGURED[/green]" if has_ext_llm else "[dim]OPTIONAL[/dim]",
+        f"{cfg.llm.external_model} @ {cfg.llm.external_base_url} (OPENAI_API_KEY / GEMINI_API_KEY)",
+    )
     table.add_row(
         "Netlify Token",
         "[green]CONFIGURED[/green]" if cfg.netlify.auth_token else "[yellow]UNSET[/yellow]",
@@ -728,26 +941,50 @@ def doctor(ctx: click.Context, cloud: Optional[str]) -> None:
 
 
 @main.command(name="scale-down")
-@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
-@click.option("--gpu-only", is_flag=True, help="Scale only the GPU node pool down to 0 (keep CPU nodes running).")
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target provider ('oci', 'gcp', or 'k8s').")
+@click.option("--kubeconfig", "kc_opt", default=None, help="Explicit kubeconfig path when using `--cloud k8s`.")
+@click.option("--gpu-only", is_flag=True, help="Scale only the GPU pool / LLM workload down to 0.")
 @click.option("--after", default=None, help="Schedule an in-cluster TTL job to scale down after duration (e.g. '2h', '90m').")
 @click.option(
     "--release-frontend/--keep-frontend",
     default=True,
     help="Release the demo frontend (scale docs-agent-demo-web to 0 and disable its VirtualService route) during scale-down.",
 )
-@click.option("--yes", is_flag=True, help="Execute node pool scale-down immediately.")
+@click.option("--yes", is_flag=True, help="Execute scale-down immediately.")
 @click.pass_context
 def scale_down_cmd(
     ctx: click.Context,
     cloud: Optional[str],
+    kc_opt: Optional[str],
     gpu_only: bool,
     after: Optional[str],
     release_frontend: bool,
     yes: bool,
 ) -> None:
-    """Hibernate / scale down OKE or GKE node pools to 0 nodes (preserving PVCs, Milvus data, and LB IP) or schedule with --after."""
-    cfg = _load_cfg(ctx.obj.get("config_path"), cloud=_resolve_cloud(ctx, cloud))
+    """Hibernate / scale down OKE/GKE node pools or BYO K8s workloads to 0 (preserving PVCs & Milvus data) or schedule with --after."""
+    cfg = _load_cfg(
+        ctx.obj.get("config_path"),
+        cloud=_resolve_cloud(ctx, cloud),
+        kubeconfig=_resolve_kc(ctx, kc_opt),
+        context=_resolve_kctx(ctx),
+    )
+    if cfg.cloud == "k8s":
+        if after:
+            schedule_in_cluster_k8s_ttl_job(
+                cfg,
+                duration_str=after,
+                gpu_only=gpu_only,
+            )
+            return
+        scale_k8s_workloads(
+            cfg,
+            hibernate=True,
+            gpu_only=gpu_only,
+            apply=yes,
+            release_frontend=release_frontend,
+        )
+        return
+
     cpu_target = None if gpu_only else 0
     gpu_target = 0
 
@@ -796,17 +1033,19 @@ def scale_down_cmd(
 
 
 @main.command(name="scale-up")
-@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target provider ('oci', 'gcp', or 'k8s').")
+@click.option("--kubeconfig", "kc_opt", default=None, help="Explicit kubeconfig path when using `--cloud k8s`.")
 @click.option("--cpu", default=None, type=int, help="Target CPU node count (defaults to docs.toml cpu_node_count).")
 @click.option("--gpu", default=None, type=int, help="Target GPU node count (defaults to docs.toml gpu_node_count).")
 @click.option("--no-gpu", is_flag=True, help="Wake only CPU nodes (leave GPU node pool at 0).")
 @click.option("--ttl", default=None, help="Also arm an in-cluster auto-scale-down timer (e.g. '2h', '90m').")
-@click.option("--ttl-gpu-only", is_flag=True, help="When --ttl expires, scale only the GPU pool down to 0.")
-@click.option("--yes", is_flag=True, help="Execute node pool scale-up.")
+@click.option("--ttl-gpu-only", is_flag=True, help="When --ttl expires, scale only the GPU pool / LLM workload down to 0.")
+@click.option("--yes", is_flag=True, help="Execute scale-up.")
 @click.pass_context
 def scale_up_cmd(
     ctx: click.Context,
     cloud: Optional[str],
+    kc_opt: Optional[str],
     cpu: Optional[int],
     gpu: Optional[int],
     no_gpu: bool,
@@ -814,12 +1053,30 @@ def scale_up_cmd(
     ttl_gpu_only: bool,
     yes: bool,
 ) -> None:
-    """Wake / scale up OKE or GKE node pools back to active capacity (with optional --ttl auto-scale-down timer)."""
+    """Wake / scale up OKE/GKE node pools or BYO K8s workloads back to active capacity (with optional --ttl timer)."""
     cfg = _load_cfg(
         ctx.obj.get("config_path"),
         no_gpu=no_gpu,
         cloud=_resolve_cloud(ctx, cloud),
+        kubeconfig=_resolve_kc(ctx, kc_opt),
+        context=_resolve_kctx(ctx),
     )
+    if cfg.cloud == "k8s":
+        scale_k8s_workloads(
+            cfg,
+            hibernate=False,
+            gpu_only=False,
+            apply=yes,
+            release_frontend=False,
+        )
+        if yes and ttl:
+            schedule_in_cluster_k8s_ttl_job(
+                cfg,
+                duration_str=ttl,
+                gpu_only=ttl_gpu_only,
+            )
+        return
+
     cpu_target = cpu if cpu is not None else cfg.cluster.cpu_node_count
     gpu_target = 0 if no_gpu else (gpu if gpu is not None else cfg.cluster.gpu_node_count)
 
@@ -865,22 +1122,40 @@ def scale_up_cmd(
 
 
 @main.command(name="scale")
-@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
-@click.option("--cpu", default=None, type=int, help="Target CPU node pool size.")
-@click.option("--gpu", default=None, type=int, help="Target GPU node pool size.")
-@click.option("--yes", is_flag=True, help="Execute node pool scaling.")
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target provider ('oci', 'gcp', or 'k8s').")
+@click.option("--kubeconfig", "kc_opt", default=None, help="Explicit kubeconfig path when using `--cloud k8s`.")
+@click.option("--cpu", default=None, type=int, help="Target CPU node pool size (or replica state 0/1 on k8s).")
+@click.option("--gpu", default=None, type=int, help="Target GPU node pool size (or LLM replica state 0/1 on k8s).")
+@click.option("--yes", is_flag=True, help="Execute scaling.")
 @click.pass_context
 def scale_cmd(
     ctx: click.Context,
     cloud: Optional[str],
+    kc_opt: Optional[str],
     cpu: Optional[int],
     gpu: Optional[int],
     yes: bool,
 ) -> None:
-    """Scale OKE or GKE CPU and/or GPU node pools to an explicit node count."""
+    """Scale OKE/GKE node pools or BYO K8s workloads."""
     if cpu is None and gpu is None:
         raise click.ClickException("Specify at least one of --cpu <count> or --gpu <count>.")
-    cfg = _load_cfg(ctx.obj.get("config_path"), cloud=_resolve_cloud(ctx, cloud))
+    cfg = _load_cfg(
+        ctx.obj.get("config_path"),
+        cloud=_resolve_cloud(ctx, cloud),
+        kubeconfig=_resolve_kc(ctx, kc_opt),
+        context=_resolve_kctx(ctx),
+    )
+    if cfg.cloud == "k8s":
+        gpu_only = cpu is None and gpu is not None
+        target_zero = (gpu == 0) if gpu_only else (cpu == 0)
+        scale_k8s_workloads(
+            cfg,
+            hibernate=target_zero,
+            gpu_only=gpu_only,
+            apply=yes,
+        )
+        return
+
     if cfg.cloud == "gcp":
         gcp_session = GcpSession.from_docs_config(cfg)
         scale_gke_node_pools(
@@ -905,26 +1180,40 @@ def scale_cmd(
 
 
 @main.command(name="ttl")
-@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target provider ('oci', 'gcp', or 'k8s').")
+@click.option("--kubeconfig", "kc_opt", default=None, help="Explicit kubeconfig path when using `--cloud k8s`.")
 @click.option("--set", "set_duration", default=None, help="Arm or update the in-cluster auto-scale-down timer (e.g. '2h', '90m').")
-@click.option("--gpu-only", is_flag=True, help="Scale only the GPU node pool down to 0 when the timer expires.")
+@click.option("--gpu-only", is_flag=True, help="Scale only the GPU pool / LLM workload down to 0 when the timer expires.")
 @click.option("--cancel", is_flag=True, help="Cancel the active in-cluster auto-scale-down timer.")
 @click.option("--status", "show_status", is_flag=True, help="Show the active auto-scale-down timer status.")
 @click.pass_context
 def ttl_cmd(
     ctx: click.Context,
     cloud: Optional[str],
+    kc_opt: Optional[str],
     set_duration: Optional[str],
     gpu_only: bool,
     cancel: bool,
     show_status: bool,
 ) -> None:
     """Manage the in-cluster auto-scale-down TTL Job (`kube-system/docs-agent-autoscale-ttl`)."""
-    cfg = _load_cfg(ctx.obj.get("config_path"), cloud=_resolve_cloud(ctx, cloud))
+    cfg = _load_cfg(
+        ctx.obj.get("config_path"),
+        cloud=_resolve_cloud(ctx, cloud),
+        kubeconfig=_resolve_kc(ctx, kc_opt),
+        context=_resolve_kctx(ctx),
+    )
     if cancel:
         cancel_in_cluster_ttl_job(cfg)
         return
     if set_duration:
+        if cfg.cloud == "k8s":
+            schedule_in_cluster_k8s_ttl_job(
+                cfg,
+                duration_str=set_duration,
+                gpu_only=gpu_only,
+            )
+            return
         if cfg.cloud == "gcp":
             gcp_session = GcpSession.from_docs_config(cfg)
             schedule_in_cluster_gcp_ttl_job(
@@ -957,7 +1246,7 @@ def ttl_cmd(
         Panel(
             f"• [bold]Configured TTL:[/bold]    [cyan]{info['duration']} ({info['ttl_seconds']}s)[/cyan]\n"
             f"• [bold]Time Remaining:[/bold]    [bold green]{hrs}h {mins}m {secs}s[/bold green]\n"
-            f"• [bold]Target Scope:[/bold]      {'GPU pool only (size=0)' if info['gpu_only'] else 'All node pools (GPU=0, CPU=0)'}\n"
+            f"• [bold]Target Scope:[/bold]      {'GPU pool/workload only (0)' if info['gpu_only'] else 'All node pools / workloads (0)'}\n"
             f"• [bold]Pod Status:[/bold]        active={info['active']}, succeeded={info['succeeded']}",
             title="Active In-Cluster Auto-Scale Timer",
         )
@@ -965,12 +1254,29 @@ def ttl_cmd(
 
 
 @main.command()
-@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
-@click.option("--yes", is_flag=True, help="Confirm ordered Terraform teardown.")
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target provider ('oci', 'gcp', or 'k8s').")
+@click.option("--kubeconfig", "kc_opt", default=None, help="Explicit kubeconfig path when using `--cloud k8s`.")
+@click.option("--yes", is_flag=True, help="Confirm ordered teardown.")
 @click.pass_context
-def down(ctx: click.Context, cloud: Optional[str], yes: bool) -> None:
-    """Ordered teardown: remove K8s LoadBalancers & PVCs, then destroy platform and OKE/GKE Terraform stacks."""
-    cfg = _load_cfg(ctx.obj.get("config_path"), cloud=_resolve_cloud(ctx, cloud))
+def down(ctx: click.Context, cloud: Optional[str], kc_opt: Optional[str], yes: bool) -> None:
+    """Ordered teardown: remove K8s LoadBalancers & PVCs, then destroy platform (and OKE/GKE when cloud-managed)."""
+    cfg = _load_cfg(
+        ctx.obj.get("config_path"),
+        cloud=_resolve_cloud(ctx, cloud),
+        kubeconfig=_resolve_kc(ctx, kc_opt),
+        context=_resolve_kctx(ctx),
+    )
+    if cfg.cloud == "k8s":
+        if not yes:
+            console.print(
+                "[yellow]Dry-run:[/yellow] Will uninstall K8s LoadBalancers, PVCs, and platform Terraform from your BYO Kubernetes cluster (underlying cluster is preserved intact).\n"
+                "Re-run with [bold]docs-cli --cloud k8s down --yes[/bold] to execute."
+            )
+            return
+        ordered_k8s_platform_down(cfg)
+        console.print("[bold green]✓ Platform stack removed (BYO Kubernetes cluster preserved).[/bold green]")
+        return
+
     cluster_kind = "GKE" if cfg.cloud == "gcp" else "OKE"
     if not yes:
         cloud_flag = " --cloud gcp" if cfg.cloud == "gcp" else ""
@@ -991,12 +1297,35 @@ def down(ctx: click.Context, cloud: Optional[str], yes: bool) -> None:
 
 
 @main.command()
-@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
-@click.option("--yes", is_flag=True, help="Execute direct cloud API deletion of all tagged/labeled cluster resources.")
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target provider ('oci', 'gcp', or 'k8s').")
+@click.option("--kubeconfig", "kc_opt", default=None, help="Explicit kubeconfig path when using `--cloud k8s`.")
+@click.option("--yes", is_flag=True, help="Execute direct deletion of discovered resources.")
 @click.pass_context
-def nuke(ctx: click.Context, cloud: Optional[str], yes: bool) -> None:
-    """Direct OCI/GCP sweep of any remaining resources tagged/labeled for this cluster (`docs-cli-cluster`)."""
-    cfg = _load_cfg(ctx.obj.get("config_path"), cloud=_resolve_cloud(ctx, cloud))
+def nuke(ctx: click.Context, cloud: Optional[str], kc_opt: Optional[str], yes: bool) -> None:
+    """Direct sweep of any remaining OCI/GCP cluster resources or BYO K8s platform namespaces/PVCs."""
+    cfg = _load_cfg(
+        ctx.obj.get("config_path"),
+        cloud=_resolve_cloud(ctx, cloud),
+        kubeconfig=_resolve_kc(ctx, kc_opt),
+        context=_resolve_kctx(ctx),
+    )
+    if cfg.cloud == "k8s":
+        resources = discover_k8s_platform_resources(cfg)
+        if not resources:
+            console.print(
+                "[green]✓ No docs-cli platform namespaces or PVCs found on BYO Kubernetes cluster.[/green]"
+            )
+            return
+        render_nuke_plan_table(resources, cfg.cluster.name, cloud="k8s")
+        if not yes:
+            console.print(
+                "\n[yellow]Dry-run mode.[/yellow] Re-run with [bold]docs-cli --cloud k8s nuke --yes[/bold] to remove these platform namespaces/PVCs (preserving the cluster itself)."
+            )
+            return
+        nuke_k8s_platform_resources(cfg)
+        console.print("[bold green]✓ BYO Kubernetes platform sweep complete (cluster preserved).[/bold green]")
+        return
+
     if cfg.cloud == "gcp":
         gcp_session = GcpSession.from_docs_config(cfg)
         resources = discover_labeled_gcp_resources(gcp_session, cfg.cluster.name)
@@ -1037,12 +1366,31 @@ def nuke(ctx: click.Context, cloud: Optional[str], yes: bool) -> None:
 
 
 @main.command(name="destroy")
-@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
-@click.option("--yes", is_flag=True, help="Permanently tear down the entire dev environment (K8s LBs/PVCs + Terraform + cloud sweep).")
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target provider ('oci', 'gcp', or 'k8s').")
+@click.option("--kubeconfig", "kc_opt", default=None, help="Explicit kubeconfig path when using `--cloud k8s`.")
+@click.option("--yes", is_flag=True, help="Permanently tear down the dev environment.")
 @click.pass_context
-def destroy_cmd(ctx: click.Context, cloud: Optional[str], yes: bool) -> None:
-    """Tear down the entire dev environment end-to-end (port-forward, K8s LoadBalancers/PVCs, platform & OKE/GKE Terraform, cloud sweep, and local state)."""
-    cfg = _load_cfg(ctx.obj.get("config_path"), cloud=_resolve_cloud(ctx, cloud))
+def destroy_cmd(ctx: click.Context, cloud: Optional[str], kc_opt: Optional[str], yes: bool) -> None:
+    """Tear down the dev environment end-to-end (on `--cloud k8s`, removes only platform stack & local state while preserving your cluster)."""
+    cfg = _load_cfg(
+        ctx.obj.get("config_path"),
+        cloud=_resolve_cloud(ctx, cloud),
+        kubeconfig=_resolve_kc(ctx, kc_opt),
+        context=_resolve_kctx(ctx),
+    )
+    if cfg.cloud == "k8s":
+        resources = discover_k8s_platform_resources(cfg)
+        if resources:
+            render_nuke_plan_table(resources, cfg.cluster.name, cloud="k8s")
+        if not yes:
+            console.print(
+                "[yellow]Dry-run:[/yellow] Will tear down K8s LoadBalancers, PVCs, platform Terraform, and local k8s state while preserving your BYO Kubernetes cluster.\n"
+                "Re-run with [bold]docs-cli --cloud k8s destroy --yes[/bold] to execute."
+            )
+            return
+        destroy_k8s_platform_environment(cfg)
+        return
+
     if cfg.cloud == "gcp":
         gcp_session = GcpSession.from_docs_config(cfg)
         resources = discover_labeled_gcp_resources(gcp_session, cfg.cluster.name)
@@ -1085,7 +1433,8 @@ def destroy_cmd(ctx: click.Context, cloud: Optional[str], yes: bool) -> None:
 
 
 @main.command(name="update")
-@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target provider ('oci', 'gcp', or 'k8s').")
+@click.option("--kubeconfig", "kc_opt", default=None, help="Explicit kubeconfig path when using `--cloud k8s`.")
 @click.option("--pull", is_flag=True, help="Run `git pull --ff-only` before syncing upstream charts and Terraform.")
 @click.option(
     "--track",
@@ -1114,6 +1463,7 @@ def destroy_cmd(ctx: click.Context, cloud: Optional[str], yes: bool) -> None:
 def update_cmd(
     ctx: click.Context,
     cloud: Optional[str],
+    kc_opt: Optional[str],
     pull: bool,
     track: str,
     compile_pipelines: bool,
@@ -1125,7 +1475,12 @@ def update_cmd(
     """Sync CLI defaults from upstream Helm/Terraform/GHCR, recompile pipelines if changed, run tests, and optionally upgrade + verify the active cluster."""
     import sys
 
-    cfg = _load_cfg(ctx.obj.get("config_path"), cloud=_resolve_cloud(ctx, cloud))
+    cfg = _load_cfg(
+        ctx.obj.get("config_path"),
+        cloud=_resolve_cloud(ctx, cloud),
+        kubeconfig=_resolve_kc(ctx, kc_opt),
+        context=_resolve_kctx(ctx),
+    )
 
     if pull:
         console.print("[bold cyan]0. Pulling latest repository changes (`git pull --ff-only`)...[/bold cyan]")
@@ -1218,7 +1573,7 @@ def update_cmd(
         import json as _json
 
         diag_payload = {
-            "supported_clouds": ["oci", "gcp"],
+            "supported_clouds": ["oci", "gcp", "k8s"],
             "active_cloud": cfg.cloud,
             "terraform_modules": {
                 "oke_cluster": str(cfg.oke_tf_dir.relative_to(cfg.repo_root)),
@@ -1310,7 +1665,8 @@ def update_cmd(
 
 
 @main.command(name="expose-dashboard")
-@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target provider ('oci', 'gcp', or 'k8s').")
+@click.option("--kubeconfig", "kc_opt", default=None, help="Explicit kubeconfig path when using `--cloud k8s`.")
 @click.option("--port", default=8085, type=int, help="Local port for the Kubeflow Central Dashboard (default: 8085).")
 @click.option("--address", default="localhost,127.0.0.1", help="Local bind address (default: localhost,127.0.0.1 for IPv4 + IPv6).")
 @click.option(
@@ -1323,12 +1679,18 @@ def update_cmd(
 def expose_dashboard_cmd(
     ctx: click.Context,
     cloud: Optional[str],
+    kc_opt: Optional[str],
     port: int,
     address: str,
     background: bool,
 ) -> None:
     """Port-forward the unified Kubeflow Central Dashboard (Pipelines + KServe Models + Cross-Namespace Selector) to localhost."""
-    cfg = _load_cfg(ctx.obj.get("config_path"), cloud=_resolve_cloud(ctx, cloud))
+    cfg = _load_cfg(
+        ctx.obj.get("config_path"),
+        cloud=_resolve_cloud(ctx, cloud),
+        kubeconfig=_resolve_kc(ctx, kc_opt),
+        context=_resolve_kctx(ctx),
+    )
     if not cfg.kubeconfig_path.exists():
         raise click.ClickException(
             f"No kubeconfig found at {cfg.kubeconfig_path}. Run `docs-cli kubeconfig` first."
@@ -1342,7 +1704,8 @@ def expose_dashboard_cmd(
 
 
 @main.command(name="dashboard")
-@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target cloud provider ('oci' or 'gcp').")
+@click.option("--cloud", type=CLOUD_CHOICE, default=None, help="Target provider ('oci', 'gcp', or 'k8s').")
+@click.option("--kubeconfig", "kc_opt", default=None, help="Explicit kubeconfig path when using `--cloud k8s`.")
 @click.option("--port", default=8085, type=int, help="Local port for the Kubeflow Central Dashboard (default: 8085).")
 @click.option("--address", default="localhost,127.0.0.1", help="Local bind address (default: localhost,127.0.0.1 for IPv4 + IPv6).")
 @click.option(
@@ -1355,12 +1718,13 @@ def expose_dashboard_cmd(
 def dashboard_cmd(
     ctx: click.Context,
     cloud: Optional[str],
+    kc_opt: Optional[str],
     port: int,
     address: str,
     background: bool,
 ) -> None:
     """Alias for `expose-dashboard`: port-forward the Kubeflow Central Dashboard to http://localhost:8085."""
-    ctx.invoke(expose_dashboard_cmd, cloud=cloud, port=port, address=address, background=background)
+    ctx.invoke(expose_dashboard_cmd, cloud=cloud, kc_opt=kc_opt, port=port, address=address, background=background)
 
 
 if __name__ == "__main__":

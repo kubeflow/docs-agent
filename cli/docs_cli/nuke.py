@@ -65,7 +65,11 @@ def delete_k8s_loadbalancers_and_pvcs(cfg: DocsConfig) -> None:
         )
         return
 
+    if cfg.cloud in ("gcp", "k8s"):
+        ensure_gcloud_on_path()
     env = dict(os.environ)
+    if cfg.cloud in ("gcp", "k8s"):
+        env["USE_GKE_GCLOUD_AUTH_PLUGIN"] = "True"
     env["KUBECONFIG"] = str(cfg.kubeconfig_path)
 
     # Check if K8s API is reachable before running pre-clean commands
@@ -323,6 +327,9 @@ def render_nuke_plan_table(
     if cloud == "gcp":
         title = f"GCP Resources Labeled for Cluster '{cluster_name}'"
         id_col = "Resource ID"
+    elif cloud == "k8s":
+        title = f"BYO Kubernetes Platform Resources Managed by docs-cli ('{cluster_name}')"
+        id_col = "Namespace / Ref"
     else:
         title = f"OCI Resources Tagged for Cluster '{cluster_name}'"
         id_col = "OCID"
@@ -774,3 +781,185 @@ def destroy_full_gcp_environment(
             f"[bold green]✓ Verified 0 GCP cloud resources remain for '{cfg.cluster.name}' and cleaned local state![/bold green]"
         )
     return remaining
+
+
+def _k8s_env(cfg: DocsConfig) -> Dict[str, str]:
+    ensure_gcloud_on_path()
+    env = dict(os.environ)
+    env["USE_GKE_GCLOUD_AUTH_PLUGIN"] = "True"
+    if cfg.kubeconfig_path.exists():
+        env["KUBECONFIG"] = str(cfg.kubeconfig_path)
+    return env
+
+
+def discover_k8s_platform_resources(cfg: DocsConfig) -> List[Dict[str, str]]:
+    """Discover docs-cli managed namespaces, Helm releases, LoadBalancers, and PVCs on a BYO Kubernetes cluster (never targets the cluster itself)."""
+    found: List[Dict[str, str]] = []
+    if not cfg.kubeconfig_path.exists():
+        return found
+
+    env = _k8s_env(cfg)
+    managed_ns = (
+        cfg.platform.namespace_docs_agent,
+        cfg.platform.namespace_ml_infra,
+        cfg.platform.namespace_kubeflow,
+    )
+
+    ns_res = subprocess.run(
+        ["kubectl", "get", "ns", "-o", "json", "--request-timeout=10s"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if ns_res.returncode != 0 or not ns_res.stdout.strip():
+        return found
+
+    existing_ns = {
+        str((item.get("metadata") or {}).get("name") or ""): str(
+            (item.get("status") or {}).get("phase") or "Active"
+        )
+        for item in (json.loads(ns_res.stdout).get("items") or [])
+    }
+
+    for ns in managed_ns:
+        if ns in existing_ns:
+            found.append(
+                {
+                    "type": "Namespace",
+                    "name": ns,
+                    "state": existing_ns[ns],
+                    "id": f"namespace/{ns}",
+                }
+            )
+            pvc_res = subprocess.run(
+                ["kubectl", "-n", ns, "get", "pvc", "-o", "json", "--request-timeout=10s"],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if pvc_res.returncode == 0 and pvc_res.stdout.strip():
+                for pvc in json.loads(pvc_res.stdout).get("items") or []:
+                    pname = str((pvc.get("metadata") or {}).get("name") or "")
+                    pphase = str((pvc.get("status") or {}).get("phase") or "Bound")
+                    if pname:
+                        found.append(
+                            {
+                                "type": "PersistentVolumeClaim",
+                                "name": pname,
+                                "state": pphase,
+                                "id": f"{ns}/pvc/{pname}",
+                            }
+                        )
+
+    if "istio-system" in existing_ns:
+        lb_res = subprocess.run(
+            [
+                "kubectl",
+                "-n",
+                "istio-system",
+                "get",
+                "svc",
+                "istio-ingressgateway",
+                "-o",
+                "json",
+                "--request-timeout=10s",
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if lb_res.returncode == 0 and lb_res.stdout.strip():
+            found.append(
+                {
+                    "type": "LoadBalancerService",
+                    "name": "istio-ingressgateway",
+                    "state": "Active",
+                    "id": "istio-system/svc/istio-ingressgateway",
+                }
+            )
+    return found
+
+
+def nuke_k8s_platform_resources(cfg: DocsConfig) -> None:
+    """Uninstall docs-cli platform releases, PVCs, and namespaces from a BYO Kubernetes cluster while keeping the cluster itself untouched."""
+    delete_k8s_loadbalancers_and_pvcs(cfg)
+    if not cfg.kubeconfig_path.exists():
+        return
+    env = _k8s_env(cfg)
+    for ns in (
+        cfg.platform.namespace_docs_agent,
+        cfg.platform.namespace_ml_infra,
+        cfg.platform.namespace_kubeflow,
+    ):
+        subprocess.run(
+            ["kubectl", "delete", "namespace", ns, "--ignore-not-found=true", "--timeout=90s"],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+
+def ordered_k8s_platform_down(cfg: DocsConfig) -> None:
+    """Ordered platform-only teardown for BYO Kubernetes (`--cloud k8s`): removes K8s LBs, PVCs, and platform Terraform without deleting the user's cluster."""
+    _k8s_desc, platform_tfvars = render_tfvars_files(cfg)
+
+    console.print("[bold yellow]Step 1/2: Cleaning up Kubernetes LoadBalancers, Releases & PVCs...[/bold yellow]")
+    delete_k8s_loadbalancers_and_pvcs(cfg)
+
+    k8s_tfstate = cfg.platform_tfstate_path
+    has_plat_state = bool(k8s_tfstate and k8s_tfstate.exists())
+    if (cfg.platform_tf_dir / ".terraform").exists() and has_plat_state:
+        console.print("[bold yellow]Step 2/2: Destroying platform Terraform stack (preserving BYO Kubernetes cluster)...[/bold yellow]")
+        try:
+            run_terraform(
+                cfg.platform_tf_dir,
+                [
+                    "destroy",
+                    "-auto-approve",
+                    f"-state={k8s_tfstate}",
+                    f"-var-file={platform_tfvars}",
+                ],
+            )
+        except Exception as exc:
+            console.print(
+                f"[yellow]! Platform Terraform destroy reported warning ({exc}); sweeping managed namespaces directly.[/yellow]"
+            )
+            nuke_k8s_platform_resources(cfg)
+    else:
+        console.print("[dim]Step 2/2: Platform Terraform state not present; sweeping managed namespaces.[/dim]")
+        nuke_k8s_platform_resources(cfg)
+
+
+def destroy_k8s_platform_environment(cfg: DocsConfig) -> List[Dict[str, str]]:
+    """Complete BYO-Kubernetes platform teardown (`docs-cli --cloud k8s destroy --yes`) — never deletes the underlying K8s cluster."""
+    stop_local_dashboard_port_forward(cfg)
+    ordered_k8s_platform_down(cfg)
+
+    if cfg.platform_tfstate_path:
+        for p in (
+            cfg.platform_tfstate_path,
+            Path(f"{cfg.platform_tfstate_path}.backup"),
+        ):
+            if p.exists():
+                p.unlink(missing_ok=True)
+
+    for ephemeral in (
+        cfg.state_dir / "kubeconfig-k8s",
+        cfg.state_dir / "k8s.cluster.json",
+        cfg.state_dir / "tls_cert-k8s.pem",
+        cfg.state_dir / "tls_key-k8s.pem",
+        cfg.state_dir / "tls_domain-k8s.txt",
+        cfg.state_dir / "dashboard-port-forward.pid",
+        cfg.state_dir / "dashboard-port-forward.log",
+    ):
+        if ephemeral.exists():
+            ephemeral.unlink(missing_ok=True)
+
+    console.print(
+        "[bold green]✓ Removed docs-agent platform stack and local k8s state (underlying BYO Kubernetes cluster preserved intact).[/bold green]"
+    )
+    return []

@@ -255,6 +255,7 @@ def build_platform_tfvars(cfg: DocsConfig) -> Dict[str, Any]:
     tfvars: Dict[str, Any] = {
         "kubeconfig_path": str(cfg.kubeconfig_path),
         "cloud_provider": cfg.cloud,
+        "lb_service_annotations": dict(cfg.k8s.lb_service_annotations),
         "enable_istio_ingressgateway": True,
         "oci_lb_min_bandwidth_mbps": str(cfg.ingress.lb_min_bandwidth_mbps),
         "oci_lb_max_bandwidth_mbps": str(cfg.ingress.lb_max_bandwidth_mbps),
@@ -282,13 +283,26 @@ def build_platform_tfvars(cfg: DocsConfig) -> Dict[str, Any]:
     return tfvars
 
 
+def build_k8s_descriptor(cfg: DocsConfig) -> Dict[str, Any]:
+    """Build portable BYO-Kubernetes cluster descriptor written to .docs-cli/k8s.cluster.json."""
+    return {
+        "mode": "byo-kubernetes",
+        "cluster_name": cfg.cluster.name,
+        "kubeconfig_path": str(cfg.kubeconfig_path),
+        "context": cfg.k8s.context,
+        "storage_class": cfg.k8s.storage_class,
+        "lb_service_annotations": dict(cfg.k8s.lb_service_annotations),
+        "enable_gpu_pool": cfg.cluster.enable_gpu_pool,
+    }
+
+
 def render_tfvars_files(
     cfg: DocsConfig,
     session: Optional[OciSession] = None,
     compartment_id: Optional[str] = None,
     gcp_session: Optional[GcpSession] = None,
 ) -> Tuple[Path, Path]:
-    """Write .docs-cli/{oke,gke}.tfvars.json and .docs-cli/platform.tfvars.json."""
+    """Write .docs-cli/{oke.tfvars.json,gke.tfvars.json,k8s.cluster.json} and .docs-cli/platform.tfvars.json."""
     cfg.state_dir.mkdir(parents=True, exist_ok=True)
     platform_path = cfg.state_dir / "platform.tfvars.json"
     platform_vars = build_platform_tfvars(cfg)
@@ -296,6 +310,14 @@ def render_tfvars_files(
         json.dumps(platform_vars, indent=2) + "\n", encoding="utf-8"
     )
     platform_path.chmod(0o600)
+
+    if cfg.cloud == "k8s":
+        k8s_path = cfg.state_dir / "k8s.cluster.json"
+        k8s_path.write_text(
+            json.dumps(build_k8s_descriptor(cfg), indent=2) + "\n", encoding="utf-8"
+        )
+        k8s_path.chmod(0o600)
+        return k8s_path, platform_path
 
     if cfg.cloud == "gcp":
         gke_path = cfg.state_dir / "gke.tfvars.json"
@@ -446,3 +468,56 @@ def fetch_gke_kubeconfig(
     kc_path.chmod(0o600)
     console.print(f"[green]✓ Wrote GKE kubeconfig via `gcloud` to {kc_path}[/green]")
     return kc_path
+
+
+def import_k8s_kubeconfig(
+    cfg: DocsConfig,
+    source_path: Optional[Path] = None,
+    context: Optional[str] = None,
+) -> Path:
+    """Import and flatten a Bring-Your-Own Kubernetes kubeconfig into `.docs-cli/kubeconfig-k8s` without mutating ~/.kube/config."""
+    import shutil
+
+    src = (source_path or cfg.source_kubeconfig_path).expanduser().resolve()
+    if not src.exists():
+        raise RuntimeError(
+            f"BYO Kubernetes kubeconfig not found at '{src}'. "
+            "Pass `--kubeconfig /path/to/kubeconfig` or set `DOCS_KUBECONFIG` / `KUBECONFIG`."
+        )
+
+    cfg.state_dir.mkdir(parents=True, exist_ok=True)
+    dest = cfg.state_dir / "kubeconfig-k8s"
+    target_ctx = (context if context is not None else cfg.k8s.context).strip()
+
+    if shutil.which("kubectl"):
+        cmd = [
+            "kubectl",
+            f"--kubeconfig={src}",
+            "config",
+            "view",
+            "--raw",
+            "--flatten",
+        ]
+        if target_ctx:
+            cmd.extend(["--minify", f"--context={target_ctx}"])
+        res = subprocess.run(cmd, check=False, text=True, capture_output=True)
+        if res.returncode != 0:
+            raise RuntimeError(
+                f"Failed to read kubeconfig '{src}'"
+                + (f" (context='{target_ctx}')" if target_ctx else "")
+                + f": {res.stderr.strip() or res.stdout.strip()}"
+            )
+        if res.stdout.strip():
+            dest.write_text(res.stdout, encoding="utf-8")
+            dest.chmod(0o600)
+            ctx_note = f" (context={target_ctx})" if target_ctx else ""
+            console.print(
+                f"[green]✓ Imported flattened BYO Kubernetes kubeconfig{ctx_note} -> {dest}[/green]"
+            )
+            return dest
+
+    if src != dest:
+        shutil.copyfile(src, dest)
+    dest.chmod(0o600)
+    console.print(f"[green]✓ Copied BYO Kubernetes kubeconfig -> {dest}[/green]")
+    return dest

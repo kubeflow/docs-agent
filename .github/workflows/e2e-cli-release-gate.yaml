@@ -12,13 +12,14 @@ on:
   workflow_dispatch:
     inputs:
       cloud_provider:
-        description: "Target cloud provider for live E2E spin-up ('oci' or 'gcp')"
+        description: "Target cloud provider for live E2E spin-up ('oci', 'gcp', or 'k8s')"
         required: false
         default: "oci"
         type: choice
         options:
           - oci
           - gcp
+          - k8s
       run_live_oke:
         description: "Provision an ephemeral OKE/GKE cluster, run docs-cli verify, and destroy (--yes)"
         required: false
@@ -73,6 +74,7 @@ jobs:
         run: |
           docs-cli template --cloud oci --domain ci-check.example.org
           docs-cli template --cloud gcp --domain ci-check.example.org
+          docs-cli template --cloud k8s --domain ci-check.example.org
           terraform -chdir=deployments/terraform/oke-cluster init -backend=false
           terraform -chdir=deployments/terraform/oke-cluster validate
           terraform -chdir=deployments/terraform/gke-cluster init -backend=false

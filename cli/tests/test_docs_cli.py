@@ -11,11 +11,14 @@ from docs_cli.cli import main
 from docs_cli.config import DocsConfig
 from docs_cli.gcp_auth import GcpSession
 from docs_cli.kube import (
+    _build_portable_llm_gateway_script,
     build_docs_agent_values,
     build_gateway_guardrails_values,
     build_llm_runtime_values,
     generate_rsa_keypair_pem,
     generate_self_signed_tls_pem,
+    render_helm_values_files,
+    validate_rendered_chart_contracts,
     wrap_compiled_pipeline_as_k8s_native_crs,
 )
 from docs_cli.netlify import (
@@ -32,10 +35,12 @@ from docs_cli.nuke import (
 )
 from docs_cli.scale import (
     _build_in_cluster_gcp_autoscale_script,
+    _build_in_cluster_k8s_autoscale_script,
     parse_duration_seconds,
 )
 from docs_cli.terraform import (
     build_gke_tfvars,
+    build_k8s_descriptor,
     build_oke_tfvars,
     build_platform_tfvars,
 )
@@ -510,3 +515,131 @@ def test_gcp_cli_commands_and_ttl_autoscale_script(monkeypatch, tmp_path: Path) 
         )
     assert "2. GKE Cluster" in res_verify.output
     assert "CLI `gcloud` installed" in res_verify.output
+
+
+def test_k8s_portable_config_elb_hostname_and_gemini_key(monkeypatch, tmp_path: Path) -> None:
+    isolated_state = tmp_path / ".docs-cli"
+    monkeypatch.setattr(DocsConfig, "state_dir", property(lambda self: isolated_state))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "AIzaTestGeminiKey")
+
+    repo_root = Path(__file__).resolve().parents[2]
+    fake_kc = tmp_path / "eks-kubeconfig.yaml"
+    fake_kc.write_text("apiVersion: v1\nkind: Config\n", encoding="utf-8")
+
+    cfg = DocsConfig.load(
+        path=repo_root / "docs.toml",
+        cloud_override="kubernetes",
+        enable_gpu_override=False,
+        kubeconfig_override=str(fake_kc),
+        context_override="eks-prod",
+    )
+    assert cfg.cloud == "k8s"
+    assert cfg.kubeconfig_path == fake_kc.resolve()
+    assert cfg.k8s.context == "eks-prod"
+    assert cfg.platform_tfstate_path == isolated_state / "tfstate" / "platform-k8s.tfstate"
+
+    # Gemini API key auto-configures Google's OpenAI-compatible endpoint
+    assert cfg.llm.resolved_api_key == "AIzaTestGeminiKey"
+    assert cfg.llm.external_base_url == "https://generativelanguage.googleapis.com/v1beta/openai"
+    assert cfg.llm.external_model == "gemini-2.5-flash"
+
+    # IPv4 LoadBalancers get .nip.io; AWS EKS ELB DNS hostnames stay raw DNS names
+    assert cfg.resolve_agent_domain(lb_ip="203.0.113.42") == "203.0.113.42.nip.io"
+    assert (
+        cfg.resolve_agent_domain(lb_ip="a1b2c3d4.us-east-1.elb.amazonaws.com")
+        == "a1b2c3d4.us-east-1.elb.amazonaws.com"
+    )
+
+    llm_vals = build_llm_runtime_values(cfg)
+    assert llm_vals["cache"]["storageClassName"] == ""
+    assert llm_vals["placement"]["nodeSelector"] is None
+
+    # BYO-K8s 0-GPU mode keeps uniform in-cluster KServe ModelConfig (`flo-llm`)
+    da_vals = build_docs_agent_values(cfg)
+    assert "models" not in da_vals["kagent"]
+
+    rendered_files = render_helm_values_files(cfg, domain="eks.agent.local")
+    assert validate_rendered_chart_contracts(cfg, rendered_files) == []
+
+
+def test_k8s_cli_template_verify_ttl_and_portable_gateway_scripts(monkeypatch, tmp_path: Path) -> None:
+    import ast
+    import subprocess
+    from unittest.mock import patch
+
+    isolated_state = tmp_path / ".docs-cli"
+    missing_kc = isolated_state / "kubeconfig-k8s-missing"
+    monkeypatch.setattr(DocsConfig, "state_dir", property(lambda self: isolated_state))
+
+    gw_src = _build_portable_llm_gateway_script()
+    ast.parse(gw_src)
+    assert "external_openai" in gw_src
+    assert "gcp_vertex" in gw_src
+    assert "builtin_fallback" in gw_src
+
+    ttl_src = _build_in_cluster_k8s_autoscale_script()
+    ast.parse(ttl_src)
+    assert "/apis/apps/v1/namespaces/" in ttl_src
+    assert "/var/run/secrets/kubernetes.io/serviceaccount/token" in ttl_src
+
+    runner = CliRunner()
+    res_tmpl = runner.invoke(
+        main,
+        [
+            "template",
+            "--cloud",
+            "k8s",
+            "--kubeconfig",
+            str(missing_kc),
+            "--no-gpu",
+            "--domain",
+            "eks.agent.local",
+        ],
+    )
+    assert res_tmpl.exit_code == 0
+    k8s_desc = json.loads(
+        (isolated_state / "k8s.cluster.json").read_text(encoding="utf-8")
+    )
+    platform_json = json.loads(
+        (isolated_state / "platform.tfvars.json").read_text(encoding="utf-8")
+    )
+    assert k8s_desc["mode"] == "byo-kubernetes"
+    assert platform_json["cloud_provider"] == "k8s"
+    assert platform_json["lb_service_annotations"] == {}
+
+    with patch(
+        "docs_cli.verify._run_quiet",
+        return_value=subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=""),
+    ):
+        res_verify = runner.invoke(
+            main,
+            [
+                "--cloud",
+                "k8s",
+                "--kubeconfig",
+                str(missing_kc),
+                "verify",
+                "--domain",
+                "eks.agent.local",
+            ],
+        )
+    assert "2. K8s Cluster" in res_verify.output
+    assert "CLI `oci` installed" not in res_verify.output
+    assert "CLI `gcloud` installed" not in res_verify.output
+
+    res_down = runner.invoke(
+        main,
+        ["--cloud", "k8s", "--kubeconfig", str(missing_kc), "down"],
+    )
+    assert res_down.exit_code == 0
+    assert "preserving your BYO Kubernetes cluster" in res_down.output or "underlying cluster is preserved intact" in res_down.output
+
+    res_destroy = runner.invoke(
+        main,
+        ["--cloud", "k8s", "--kubeconfig", str(missing_kc), "destroy"],
+    )
+    assert res_destroy.exit_code == 0
+    assert "preserving your BYO Kubernetes cluster" in res_destroy.output

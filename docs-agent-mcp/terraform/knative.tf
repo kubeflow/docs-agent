@@ -135,12 +135,12 @@ resource "helm_release" "istio_ingressgateway" {
         type = "LoadBalancer"
         annotations = var.cloud_provider == "gcp" ? {
           "cloud.google.com/l4-rbs" = "enabled"
-          } : {
+          } : var.cloud_provider == "oci" ? {
           "oci.oraclecloud.com/load-balancer-type"                      = "lb"
           "service.beta.kubernetes.io/oci-load-balancer-shape"          = "flexible"
           "service.beta.kubernetes.io/oci-load-balancer-shape-flex-min" = var.oci_lb_min_bandwidth_mbps
           "service.beta.kubernetes.io/oci-load-balancer-shape-flex-max" = var.oci_lb_max_bandwidth_mbps
-        }
+        } : var.lb_service_annotations
       }
     })
   ]
