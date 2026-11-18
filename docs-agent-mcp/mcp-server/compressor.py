@@ -103,7 +103,54 @@ LIST_OR_HEADING_RE = re.compile(r"^(\s*([-*+]|\d+\.)\s|#{1,6}\s)")
 
 
 def _is_heading(line: str) -> bool:
-    return bool(re.match(r"^#{1,6}\s", line))
+    return bool(re.match(r"^\s*#{1,6}\s", line))
+
+
+def _is_list_item(line: str) -> bool:
+    return bool(re.match(r"^\s*([-*+]|\d+\.)\s", line))
+
+
+def _is_table(text: str) -> bool:
+    stripped = text.strip()
+    return stripped.startswith("|") and stripped.endswith("|")
+
+
+def _is_code_fence(text: str) -> bool:
+    return text.strip().startswith("```")
+
+
+def _join_blocks(parts: list[str]) -> str:
+    """Join compressed blocks while preserving Markdown document hierarchy."""
+    if not parts:
+        return ""
+
+    result = parts[0]
+    for curr in parts[1:]:
+        prev_last_line = result.splitlines()[-1] if result else ""
+
+        prev_is_h = _is_heading(prev_last_line)
+        prev_is_list = _is_list_item(prev_last_line)
+        prev_is_code = _is_code_fence(prev_last_line)
+        prev_is_table = _is_table(prev_last_line)
+
+        curr_first_line = curr.splitlines()[0] if curr else ""
+        curr_is_h = _is_heading(curr_first_line)
+        curr_is_list = _is_list_item(curr_first_line)
+        curr_is_code = _is_code_fence(curr_first_line)
+        curr_is_table = _is_table(curr_first_line)
+
+        if prev_is_h or curr_is_h or prev_is_code or curr_is_code or prev_is_table or curr_is_table:
+            sep = "\n\n"
+        elif prev_is_list and curr_is_list:
+            sep = "\n"
+        elif prev_is_list or curr_is_list:
+            sep = "\n\n"
+        else:
+            sep = " "
+
+        result += sep + curr
+
+    return result
 
 
 def _logical_lines(para: str) -> list[str]:
@@ -311,7 +358,7 @@ def compress_hits(query: str, hits: list[dict], max_chars: int) -> list[dict]:
         surplus_budget = max(0, allocated_budget - used_chars)
 
         parts = [b["text"] for b in selected]
-        combined_text = "\n\n".join(parts) if any(p.startswith("```") for p in parts) else " ".join(parts)
+        combined_text = _join_blocks(parts)
 
         hit_copy = hit.copy()
         hit_copy["entity"] = hit_copy["entity"].copy()

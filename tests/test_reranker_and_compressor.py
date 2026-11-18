@@ -156,3 +156,97 @@ def test_wrapped_sentence_is_not_cut():
         "Katib searches the latest reported `accuracy` metrics for each Trial.",
         "Check the metrics strategies example.",
     ]
+
+
+def test_compressor_preserves_heading_and_list_hierarchy_without_code_blocks():
+    """Headings and list items must not be space-joined into a single heading line."""
+    doc = (
+        "### Katib Configuration\n- Set `parallelTrialCount: 3` in the experiment spec.\n- Enable metrics collector.\n"
+    )
+    hits = [{"entity": {"content_text": doc}}]
+    # Query mentions metrics collector; budget forces compression
+    compressed = compressor.compress_hits("Katib metrics", hits, max_chars=80)
+
+    assert len(compressed) == 1
+    content = compressed[0]["entity"]["content_text"]
+
+    # Heading must be followed by newlines and not consume list items into the header
+    assert content.startswith("### Katib Configuration\n\n")
+    assert "- Enable metrics collector." in content
+    # The heading must not swallow the bullet point on the same line
+    assert "### Katib Configuration - " not in content
+
+
+def test_compressor_preserves_tables_and_prose_transitions():
+    """Tables must retain newline boundaries with adjacent prose and headings."""
+    doc = (
+        "### Compatibility Matrix\n\n"
+        "| Kubeflow | Kubernetes |\n"
+        "| --- | --- |\n"
+        "| v1.9 | v1.29 |\n\n"
+        "Review requirements before installation."
+    )
+    hits = [{"entity": {"content_text": doc}}]
+    compressed = compressor.compress_hits("Kubeflow v1.29 compatibility", hits, max_chars=150)
+
+    assert len(compressed) == 1
+    content = compressed[0]["entity"]["content_text"]
+
+    assert "| Kubeflow | Kubernetes |" in content
+    assert "| v1.9 | v1.29 |" in content
+    # Table must not be joined inline with space
+    assert "### Compatibility Matrix |" not in content
+    assert "| v1.29 | Review" not in content
+
+
+def test_compressor_preserves_multi_row_tables_without_splitting():
+    """Multi-row tables must remain intact as single blocks without row-splitting double newlines."""
+    doc = (
+        "### Compatibility Matrix\n\n"
+        "| Kubeflow | Kubernetes |\n"
+        "| --- | --- |\n"
+        "| v1.8 | v1.28 |\n"
+        "| v1.9 | v1.29 |\n"
+        "| v1.10 | v1.30 |\n\n"
+        "Review requirements before installation."
+    )
+    hits = [{"entity": {"content_text": doc}}]
+    compressed = compressor.compress_hits("Kubeflow v1.29 compatibility", hits, max_chars=250)
+
+    assert len(compressed) == 1
+    content = compressed[0]["entity"]["content_text"]
+
+    expected_table = (
+        "| Kubeflow | Kubernetes |\n"
+        "| --- | --- |\n"
+        "| v1.8 | v1.28 |\n"
+        "| v1.9 | v1.29 |\n"
+        "| v1.10 | v1.30 |"
+    )
+    assert expected_table in content
+    # Consecutive rows must NOT be separated by double newlines (\n\n)
+    assert "| v1.8 | v1.28 |\n\n| v1.9 | v1.29 |" not in content
+    assert "| v1.9 | v1.29 |\n\n| v1.10 | v1.30 |" not in content
+
+
+def test_join_blocks_helper_handles_all_markdown_boundaries():
+    parts = [
+        "### Section Header",
+        "- First bullet point",
+        "- Second bullet point",
+        "Intro sentence for paragraph.",
+        "Second sentence in paragraph.",
+        "```yaml\nkey: value\n```",
+        "Trailing prose after code.",
+    ]
+    joined = compressor._join_blocks(parts)
+
+    expected = (
+        "### Section Header\n\n"
+        "- First bullet point\n"
+        "- Second bullet point\n\n"
+        "Intro sentence for paragraph. Second sentence in paragraph.\n\n"
+        "```yaml\nkey: value\n```\n\n"
+        "Trailing prose after code."
+    )
+    assert joined == expected
