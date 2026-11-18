@@ -90,8 +90,31 @@ STOP_WORDS = {
     "they",
 }
 
-# Regex to detect fenced code blocks (```...```)
-CODE_BLOCK_RE = re.compile(r"(```[a-zA-Z0-9_\-\.]*\n[\s\S]*?\n```)", re.MULTILINE)
+# CommonMark fenced code block opener (``` or ~~~, optionally indented).
+_FENCE_OPEN_RE = re.compile(r"^[ \t]*(?P<fence>`{3,}|~{3,})")
+
+
+def _fence_spans(text: str) -> list[tuple[int, int]]:
+    """Return (start, end) spans of fenced code blocks, including their info strings."""
+    spans: list[tuple[int, int]] = []
+    open_char = ""
+    open_len = 0
+    start = 0
+    pos = 0
+    for line in text.splitlines(keepends=True):
+        line_start = pos
+        pos += len(line)
+        stripped = line.strip()
+        if not open_char:
+            match = _FENCE_OPEN_RE.match(line)
+            if match:
+                fence = match.group("fence")
+                open_char, open_len, start = fence[0], len(fence), line_start
+            continue
+        if stripped and len(stripped) >= open_len and set(stripped) == {open_char}:
+            spans.append((start, pos))
+            open_char = ""
+    return spans
 
 # Sentence boundary regex
 SENTENCE_SPLIT_RE = re.compile(r'(?<=[.?!])\s+(?=[A-Z0-9"`\'])')
@@ -128,11 +151,10 @@ def _split_into_blocks(text: str) -> list[str]:
     # 1. Separate code blocks from non-code text
     segments: list[tuple[bool, str]] = []
     last_end = 0
-    for match in CODE_BLOCK_RE.finditer(text):
-        start, end = match.span()
+    for start, end in _fence_spans(text):
         if start > last_end:
             segments.append((False, text[last_end:start]))
-        segments.append((True, match.group(0)))
+        segments.append((True, text[start:end]))
         last_end = end
     if last_end < len(text):
         segments.append((False, text[last_end:]))
@@ -311,7 +333,7 @@ def compress_hits(query: str, hits: list[dict], max_chars: int) -> list[dict]:
         surplus_budget = max(0, allocated_budget - used_chars)
 
         parts = [b["text"] for b in selected]
-        combined_text = "\n\n".join(parts) if any(p.startswith("```") for p in parts) else " ".join(parts)
+        combined_text = "\n\n".join(parts) if any(p.startswith(("```", "~~~")) for p in parts) else " ".join(parts)
 
         hit_copy = hit.copy()
         hit_copy["entity"] = hit_copy["entity"].copy()
