@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+from citations import extract_clean_content
+
 # Common English stop words to ignore during lexical term matching
 STOP_WORDS = {
     "a",
@@ -262,7 +264,9 @@ def compress_hits(query: str, hits: list[dict], max_chars: int) -> list[dict]:
     surplus_budget = 0
 
     for hit_idx, hit in enumerate(hits):
-        content = hit.get("entity", {}).get("content_text", "")
+        content = hit.get("entity", {}).get("clean_content") or extract_clean_content(
+            hit.get("entity", {}).get("content_text", "")
+        )
         if not content:
             continue
 
