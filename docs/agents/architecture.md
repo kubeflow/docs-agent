@@ -79,7 +79,7 @@ description (`v=<SCHEMA_VERSION>`).
 | Shared TEI / truncation | — | `docs-agent-mcp/pipelines/utils.py` |
 
 Gap: chunking is bounded in characters; TEI is bounded in tokens. With BAAI/bge-base-en-v1.5
-(512 tokens), inputs up to ~1600 characters are safely accommodated. Related: Issue #181.
+(512 tokens), inputs up to ~1400 characters are safely accommodated (even for dense Katib YAML). Related: Issue #181.
 
 ### 3. Vector database — `area/embeddings`
 

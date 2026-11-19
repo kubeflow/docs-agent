@@ -10,12 +10,13 @@ import requests
 import flo_tracing
 
 DEFAULT_TIMEOUT_SEC = int(os.getenv("EMBEDDINGS_TIMEOUT_SEC", "60"))
-# TEI BAAI/bge-base-en-v1.5: inputs up to 512 tokens (~1600 chars safely for dense YAML/code).
-MAX_TEI_INPUT_CHARS = int(os.getenv("MAX_TEI_INPUT_CHARS", "1600"))
-# BAAI/bge-base-en-v1.5 recommends an instruction prefix on queries for asymmetric retrieval.
-BGE_QUERY_PREFIX = os.getenv(
-    "BGE_QUERY_PREFIX", "Represent this sentence for searching relevant passages: "
-)
+# TEI BAAI/bge-base-en-v1.5: inputs up to 512 tokens (~1400 chars safely for dense Katib YAML/code).
+MAX_TEI_INPUT_CHARS = int(os.getenv("MAX_TEI_INPUT_CHARS", "1400"))
+# Instruction prefix for asymmetric retrieval (e.g. BAAI/bge-base-en-v1.5 recommends
+# "Represent this sentence for searching relevant passages: "). Default to empty so
+# queries are not modified while the cluster serves all-mpnet-base-v2; set via chart values
+# when transitioning to BGE.
+BGE_QUERY_PREFIX = os.getenv("BGE_QUERY_PREFIX", "")
 
 
 def embed_texts(

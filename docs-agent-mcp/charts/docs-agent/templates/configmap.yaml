@@ -23,6 +23,8 @@ data:
   HYBRID_RRF_K: {{ .Values.mcp.config.hybridRrfK | quote }}
   HYBRID_DENSE_WEIGHT: {{ .Values.mcp.config.hybridDenseWeight | quote }}
   HYBRID_SPARSE_WEIGHT: {{ .Values.mcp.config.hybridSparseWeight | quote }}
+  MAX_TEI_INPUT_CHARS: {{ .Values.mcp.config.maxTeiInputChars | default 1400 | quote }}
+  BGE_QUERY_PREFIX: {{ .Values.mcp.config.bgeQueryPrefix | default "" | quote }}
   PORT: {{ .Values.mcp.service.port | quote }}
   PYTHONUNBUFFERED: "1"
   PYTHONDONTWRITEBYTECODE: "1"

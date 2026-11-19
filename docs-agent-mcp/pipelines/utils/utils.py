@@ -20,12 +20,12 @@ DEFAULT_MILVUS_HOST = "milvus-milvus.ml-infra.svc.cluster.local"
 # BAAI/bge-base-en-v1.5 output size; other TEI models may differ — pass embedding_dim.
 DEFAULT_EMBEDDING_DIM = 768
 # Docs defaults: chunk size is kept at 600 chars (isolated from model upgrade).
-# BAAI/bge-base-en-v1.5 supports 512 tokens (~1600 chars safely accommodating dense YAML/code).
+# BAAI/bge-base-en-v1.5 supports 512 tokens (~1400 chars safely accommodating dense Katib YAML/code).
 DEFAULT_DOCS_CHUNK_SIZE = 600
 DEFAULT_DOCS_CHUNK_OVERLAP = 60
-DEFAULT_DOCS_MAX_TEI_CHARS = 1600
+DEFAULT_DOCS_MAX_TEI_CHARS = 1400
 # Generic TEI ceiling used by non-docs pipelines / helpers (bge-base-en-v1.5 safe ceiling).
-MAX_TEI_INPUT_CHARS = 1600
+MAX_TEI_INPUT_CHARS = 1400
 # Batch count only; per-input size is limited by max_tei_chars / MAX_TEI_INPUT_CHARS.
 DEFAULT_EMBEDDING_BATCH_SIZE = 8
 
