@@ -14,9 +14,16 @@ def sanitize_evidence_text(value: object) -> str:
     return BARE_HTTP_URL.sub("", text)
 
 
+CONTEXT_DELIMITER = "\n<!--kubeflow:context:end-->\n"
+_SENTINEL_MARKER = "<!--kubeflow:context:end-->"
+
+
 def extract_clean_content(text: object) -> str:
-    """Extract original clean content if text contains a contextual prefix."""
+    """Extract original clean content by stripping the breadcrumb envelope."""
     raw = str(text or "")
+    if _SENTINEL_MARKER in raw:
+        return raw.split(_SENTINEL_MARKER, 1)[1].strip()
+    # Backward-compatible fallback for prototype format
     marker = "\nContent:\n"
     if raw.startswith("Document:") and marker in raw:
         return raw.split(marker, 1)[1].strip()

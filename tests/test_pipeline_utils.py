@@ -290,7 +290,7 @@ class TestContextualRetrievalChunks:
         expected = (
             "Document: Kubeflow Documentation > Katib > Early Stopping\n"
             "Section: Configuring the Median Stopping Rule\n"
-            "Content:\n"
+            "<!--kubeflow:context:end-->\n"
             "spec.replicas specifies the number of instances."
         )
         assert contextual == expected
@@ -307,7 +307,10 @@ class TestContextualRetrievalChunks:
             section_heading=doc_crumb,
         )
         assert "Section:" not in contextual
-        assert "Document: Kubeflow Documentation > Overview\nContent:\nIntroductory text." == contextual
+        assert (
+            "Document: Kubeflow Documentation > Overview\n<!--kubeflow:context:end-->\nIntroductory text."
+            == contextual
+        )
 
     def test_format_contextual_text_respects_max_chars(self):
         from canonical_rag_ingest import MAX_CONTENT_TEXT_CHARS, format_contextual_text
@@ -320,10 +323,34 @@ class TestContextualRetrievalChunks:
         )
         assert len(contextual) <= MAX_CONTENT_TEXT_CHARS
         assert contextual.startswith("Document:")
-        assert "Content:\n" in contextual
+        assert "<!--kubeflow:context:end-->\n" in contextual
+
+    def test_chunk_block_reserves_budget_for_breadcrumb(self):
+        from canonical_rag_ingest import (
+            MAX_CHUNK_BODY_CHARS,
+            CanonicalBlock,
+            CanonicalSection,
+            _chunk_block,
+        )
+
+        long_code = "print('hello')\n" * 200
+        block = CanonicalBlock(block_type="code_fence", content=long_code)
+        section = CanonicalSection(
+            heading="Code Header",
+            heading_level=2,
+            section_path="Docs > Code Header",
+        )
+        chunks = _chunk_block(block, section, target_tokens=350, overlap_tokens=50)
+
+        assert len(chunks) == 1
+        assert len(chunks[0][1]) <= MAX_CHUNK_BODY_CHARS
 
     def test_extract_clean_content_recovers_original_content(self):
-        from canonical_rag_ingest import extract_clean_content, format_contextual_text
+        mcp_dir = Path(__file__).parent.parent / "docs-agent-mcp" / "mcp-server"
+        if str(mcp_dir) not in sys.path:
+            sys.path.insert(0, str(mcp_dir))
+        from canonical_rag_ingest import format_contextual_text
+        from citations import extract_clean_content
 
         original = "- Set median_stop_rule: true in the experiment spec."
         contextual = format_contextual_text(
@@ -335,14 +362,21 @@ class TestContextualRetrievalChunks:
         assert clean == original
 
     def test_extract_clean_content_passes_through_legacy_content(self):
-        from canonical_rag_ingest import extract_clean_content
+        mcp_dir = Path(__file__).parent.parent / "docs-agent-mcp" / "mcp-server"
+        if str(mcp_dir) not in sys.path:
+            sys.path.insert(0, str(mcp_dir))
+        from citations import extract_clean_content
 
         legacy = "Some legacy content without prefix."
         assert extract_clean_content(legacy) == legacy
         assert extract_clean_content("") == ""
 
     def test_build_milvus_records_applies_contextual_enrichment(self):
+        mcp_dir = Path(__file__).parent.parent / "docs-agent-mcp" / "mcp-server"
+        if str(mcp_dir) not in sys.path:
+            sys.path.insert(0, str(mcp_dir))
         from canonical_rag_ingest import build_milvus_records
+        from citations import extract_clean_content
 
         file_data = {
             "path": "content/en/docs/components/katib/early-stopping.md",
@@ -363,7 +397,13 @@ class TestContextualRetrievalChunks:
         assert len(records) > 0
         first_record = records[0]
         assert "content_text" in first_record
-        assert first_record["content_text"].startswith("Document: Kubeflow Documentation > Components > Katib > Early Stopping")
+        assert "clean_content" not in first_record
+        assert first_record["content_text"].startswith(
+            "Document: Kubeflow Documentation > Components > Katib > Early Stopping"
+        )
         assert "Section: Configuring Rules" in first_record["content_text"]
-        assert "Content:\n" in first_record["content_text"]
-        assert first_record["clean_content"] == "Set median_stop_rule: true to stop trials early."
+        assert "<!--kubeflow:context:end-->" in first_record["content_text"]
+        assert (
+            extract_clean_content(first_record["content_text"])
+            == "Set median_stop_rule: true to stop trials early."
+        )

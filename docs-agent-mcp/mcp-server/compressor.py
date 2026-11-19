@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+from citations import extract_clean_content
+
 # Common English stop words to ignore during lexical term matching
 STOP_WORDS = {
     "a",
@@ -100,15 +102,6 @@ ABBREVIATIONS = ("e.g.", "i.e.", "etc.", "vs.", "fig.", "v1.", "v2.", "vol.", "n
 
 BLOCK_START_RE = re.compile(r"^(\s*([-*+]|\d+\.)\s|#{1,6}\s|\||>)")
 LIST_OR_HEADING_RE = re.compile(r"^(\s*([-*+]|\d+\.)\s|#{1,6}\s)")
-
-
-def extract_clean_content(text: object) -> str:
-    """Extract original clean content if text contains a contextual prefix."""
-    raw = str(text or "")
-    marker = "\nContent:\n"
-    if raw.startswith("Document:") and marker in raw:
-        return raw.split(marker, 1)[1].strip()
-    return raw
 
 
 def _is_heading(line: str) -> bool:

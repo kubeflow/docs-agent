@@ -1,29 +1,9 @@
 import re
 
-try:
-    import frontmatter
-    from frontmatter.default_handlers import TOMLHandler, YAMLHandler
-except ImportError:
-    frontmatter = None
-    TOMLHandler = None
-    YAMLHandler = None
-
-try:
-    from html_table_rescuer import ParseConfig, RowspanStrategy, TableParser
-    _TABLE_PARSE_CFG = ParseConfig(
-        rowspan_strategy=RowspanStrategy.REPEAT_VALUE,
-        parser_library="html.parser",
-    )
-except ImportError:
-    TableParser = None
-    ParseConfig = None
-    RowspanStrategy = None
-    _TABLE_PARSE_CFG = None
-
-try:
-    from markdownify import markdownify as html_to_markdown
-except ImportError:
-    html_to_markdown = None
+import frontmatter
+from frontmatter.default_handlers import TOMLHandler, YAMLHandler
+from html_table_rescuer import ParseConfig, RowspanStrategy, TableParser
+from markdownify import markdownify as html_to_markdown
 
 _MD_CONVERT_OPTS = {
     "heading_style": "ATX",
@@ -31,6 +11,10 @@ _MD_CONVERT_OPTS = {
     "escape_underscores": False,
     "strip": ["script", "style"],
 }
+_TABLE_PARSE_CFG = ParseConfig(
+    rowspan_strategy=RowspanStrategy.REPEAT_VALUE,
+    parser_library="html.parser",
+)
 
 
 def parse_frontmatter(content):
@@ -38,26 +22,12 @@ def parse_frontmatter(content):
     if not content:
         return {}, content
     text = content.lstrip("\ufeff")
-    if frontmatter is not None and TOMLHandler is not None:
-        handler = TOMLHandler() if text.startswith("+++") else YAMLHandler()
-        try:
-            meta, body = frontmatter.parse(text, handler=handler)
-            return meta or {}, body
-        except Exception:
-            return {}, content
-
-    # Safe fallback when python-frontmatter is not installed in local environment
-    import yaml
-
-    if text.startswith("---"):
-        parts = text.split("---", 2)
-        if len(parts) >= 3:
-            try:
-                meta = yaml.safe_load(parts[1]) or {}
-                return meta, parts[2]
-            except Exception:
-                pass
-    return {}, content
+    handler = TOMLHandler() if text.startswith("+++") else YAMLHandler()
+    try:
+        meta, body = frontmatter.parse(text, handler=handler)
+        return meta or {}, body
+    except Exception:
+        return {}, content
 
 
 def process_html_table(html):
@@ -68,18 +38,11 @@ def process_html_table(html):
 
     soup = BeautifulSoup(html, "html.parser")
     for table in soup.find_all("table"):
-        if TableParser is not None and _TABLE_PARSE_CFG is not None:
-            parsed = TableParser(str(table), config=_TABLE_PARSE_CFG).parse()
-            if parsed:
-                md = parsed[0].to_markdown()
-            elif html_to_markdown is not None:
-                md = html_to_markdown(str(table), **_MD_CONVERT_OPTS)
-            else:
-                md = table.get_text()
-        elif html_to_markdown is not None:
-            md = html_to_markdown(str(table), **_MD_CONVERT_OPTS)
+        parsed = TableParser(str(table), config=_TABLE_PARSE_CFG).parse()
+        if parsed:
+            md = parsed[0].to_markdown()
         else:
-            md = table.get_text()
+            md = html_to_markdown(str(table), **_MD_CONVERT_OPTS)
         table.replace_with(soup.new_string("\n" + md.strip() + "\n"))
     return str(soup)
 
