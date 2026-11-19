@@ -22,6 +22,9 @@ SECTION_PATH_SEP = " > "
 DEFAULT_TARGET_TOKENS = 350
 DEFAULT_OVERLAP_TOKENS = 50
 MAX_CONTENT_TEXT_CHARS = 2000
+CONTEXT_DELIMITER = "\n<!--kubeflow:context:end-->\n"
+MAX_BREADCRUMB_HEADER_CHARS = 300
+MAX_CHUNK_BODY_CHARS = MAX_CONTENT_TEXT_CHARS - MAX_BREADCRUMB_HEADER_CHARS  # 1700
 CHARS_PER_TOKEN = 4
 
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
@@ -487,27 +490,28 @@ def _chunk_block(
     *,
     target_tokens: int,
     overlap_tokens: int,
+    max_body_chars: int = MAX_CHUNK_BODY_CHARS,
 ) -> list[tuple[str, str, list[LinkRef]]]:
     """Return (chunk_type, content_text, links) tuples for one canonical block."""
     if block.block_type == "code_fence":
         content = block.content.strip()
-        if len(content) > MAX_CONTENT_TEXT_CHARS:
-            content = content[:MAX_CONTENT_TEXT_CHARS]
+        if len(content) > max_body_chars:
+            content = content[:max_body_chars]
         return [("code", content, block.links)]
 
     if block.block_type == "table":
         pieces = _split_table_by_tokens(block.content, target_tokens)
         if len(pieces) == 1 and estimate_tokens(pieces[0]) <= target_tokens:
             content = pieces[0]
-            if len(content) > MAX_CONTENT_TEXT_CHARS:
-                content = content[: MAX_CONTENT_TEXT_CHARS]
+            if len(content) > max_body_chars:
+                content = content[:max_body_chars]
             return [("table", content, block.links)]
 
         rows: list[tuple[str, str, list[LinkRef]]] = []
         for piece in pieces:
             content = piece
-            if len(content) > MAX_CONTENT_TEXT_CHARS:
-                content = content[: MAX_CONTENT_TEXT_CHARS]
+            if len(content) > max_body_chars:
+                content = content[:max_body_chars]
             rows.append(("table_row", content, block.links))
         return rows
 
@@ -520,15 +524,15 @@ def _chunk_block(
         output: list[tuple[str, str, list[LinkRef]]] = []
         for piece in prose_chunks:
             content = piece
-            if len(content) > MAX_CONTENT_TEXT_CHARS:
-                content = content[: MAX_CONTENT_TEXT_CHARS]
+            if len(content) > max_body_chars:
+                content = content[:max_body_chars]
             chunk_type = "admonition" if content.lstrip().startswith(("NOTE:", "WARNING:")) else "text"
             output.append((chunk_type, content, block.links))
         return output
 
     content = block.content.strip()
-    if len(content) > MAX_CONTENT_TEXT_CHARS:
-        content = content[: MAX_CONTENT_TEXT_CHARS]
+    if len(content) > max_body_chars:
+        content = content[:max_body_chars]
     chunk_type = "admonition" if block.block_type == "admonition" else "text"
     return [(chunk_type, content, block.links)]
 
@@ -643,24 +647,13 @@ def format_contextual_text(
     heading = section_heading.strip() if section_heading else ""
     if heading and heading != document_breadcrumb:
         lines.append(f"Section: {heading}")
-    lines.append("Content:")
-    header = "\n".join(lines) + "\n"
+    header = "\n".join(lines) + CONTEXT_DELIMITER
 
     if len(header) + len(clean_content) <= MAX_CONTENT_TEXT_CHARS:
         return f"{header}{clean_content}"
 
     budget = max(50, MAX_CONTENT_TEXT_CHARS - len(header))
     return f"{header}{clean_content[:budget]}"
-
-
-def extract_clean_content(text: str) -> str:
-    """Extract original clean content if text contains a contextual prefix."""
-    if not text:
-        return ""
-    marker = "\nContent:\n"
-    if str(text).startswith("Document:") and marker in str(text):
-        return str(text).split(marker, 1)[1].strip()
-    return str(text)
 
 
 def build_citation_url(file_path: str, base_url: str) -> str:
@@ -833,7 +826,6 @@ def build_milvus_records(
                 "citation_url": citation_url,
                 "chunk_index": chunk_idx,
                 "content_text": contextual_text[:MAX_CONTENT_TEXT_CHARS],
-                "clean_content": clean_text,
                 "title": parsed.title[:256],
                 "weight": parsed.weight,
                 "doc_type": doc_type[:32],
@@ -895,7 +887,6 @@ __all__ = [
     "build_document_breadcrumb",
     "build_milvus_records",
     "chunk_canonical_document",
-    "extract_clean_content",
     "extract_release_date",
     "dumps_jsonl",
     "estimate_tokens",
