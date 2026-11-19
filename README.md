@@ -610,7 +610,7 @@ if data.get('citations'):
 </tr>
 <tr>
 <td><code>EMBEDDING_MODEL</code></td>
-<td><code>sentence-transformers/all-mpnet-base-v2</code></td>
+<td><code>BAAI/bge-base-en-v1.5</code></td>
 <td>Embedding model</td>
 </tr>
 </tbody>

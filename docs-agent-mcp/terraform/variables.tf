@@ -71,7 +71,7 @@ variable "milvus_version" {
 variable "embeddings_model_id" {
   description = "Hugging Face model ID served by TEI (must match pipeline/MCP embedding dimension)"
   type        = string
-  default     = "sentence-transformers/all-mpnet-base-v2"
+  default     = "BAAI/bge-base-en-v1.5"
 }
 
 variable "embeddings_max_client_batch_size" {
