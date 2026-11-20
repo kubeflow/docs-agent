@@ -12,7 +12,6 @@ Kubeflow Pipelines (KFP) definitions for indexing Kubeflow documentation and rel
 | **`utils/`** | Shared helpers used by the live pipelines: ingest, parsers, Milvus store, TEI |
 | **`Dockerfile.pipeline`** | Slim ingest image (`docs-rag-ingest`) that copies docs helpers from `utils/` as flat `/app` modules |
 | **`github_rag_pipeline.yaml`** | Compiled docs pipeline (regenerate via `python kubeflow-pipeline.py`) |
-| **`legacy/pipelines/`** (repo root) | Older pipelines, including **incremental** docs ingest — **not** the live v4 docs path |
 
 ## Docs pipeline (core)
 
@@ -43,10 +42,6 @@ python code-pipeline.py
 ```
 
 These pipelines are self-contained KFP components. Parsers and test helpers live in `utils/issues_utils.py` and `utils/code_utils.py`.
-
-## Incremental docs ingest
-
-The incremental GitHub docs pipeline lives under **`legacy/pipelines/incremental-pipeline.py`**. It predates v4 hybrid schema and is kept for reference only; use **`kubeflow-pipeline.py`** for production docs indexing.
 
 ## Dependencies
 

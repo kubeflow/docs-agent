@@ -46,8 +46,6 @@ jobs:
           python -m compileall \
             docs-agent-mcp/pipelines \
             docs-agent-mcp/mcp-server \
-            legacy/server \
-            legacy/server-https \
             scripts \
             tests
 
