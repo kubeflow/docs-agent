@@ -119,7 +119,7 @@ Deterministic rules in MCP when `SEARCH_MODE=auto`. No LLM involvement. Legacy c
 
 | Intent | Triggers (examples) | Mode | Post-search |
 | --- | --- | --- | --- |
-| **temporal** | `latest`, `current`, `newest`, `most recent` | **bm25** | Filter `doc_type=release`; rerank by `release_date` DESC |
+| **temporal** | `latest`, `newest`, `most recent`; `current` / `supported` only near `version` / `release` (e.g. "current version") | **bm25** | Filter `doc_type=release`; rerank by `release_date` DESC |
 | **release_date** | `when was`, `release date`, `released` + version | **bm25** | Prefer matching `version` chunk |
 | **lexical / exact** | Semver literals, config keys, error strings | **bm25** | — |
 | **conceptual** | `how`, `why`, `explain`, `overview`, `architecture` | **hybrid** (0.3 dense / 0.7 sparse, depth 50) | Weighted ranker |

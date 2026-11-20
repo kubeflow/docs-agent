@@ -32,6 +32,15 @@ ERROR_WORDS = re.compile(
     r"\b(?:error|exception|errno|failed|failure|timeout|crashloop|oom)\b",
     re.I,
 )
+# "current" and "supported" also show up in everyday how-to questions ("the current run ID",
+# "is ParallelFor supported in v2?"). On their own they only ask about the latest release
+# when they sit within a few words of "version" or "release".
+AMBIGUOUS_LATEST_WORDS = {"current", "supported"}
+CURRENT_OR_SUPPORTED_NEAR_RELEASE = re.compile(
+    r"\b(?:current|supported)\W+(?:\w+\W+){0,3}?(?:versions?|releases?)\b"
+    r"|\b(?:versions?|releases?)\W+(?:\w+\W+){0,3}?(?:current|supported)\b",
+    re.I,
+)
 
 
 @dataclass(frozen=True)
@@ -86,6 +95,19 @@ def downgrade_plan_for_collection(
     return plan
 
 
+def asks_for_latest_release(query: str) -> bool:
+    """True when the query asks about the latest release, not when it only uses the word.
+
+    "latest", "newest" and "most recent" always count. "current" and "supported" count
+    only near "version" or "release": "current version of KFP" does, "the current run ID"
+    does not.
+    """
+    words = {word.lower() for word in LATEST_OR_CURRENT_WORDS.findall(query)}
+    if words - AMBIGUOUS_LATEST_WORDS:
+        return True
+    return bool(words) and bool(CURRENT_OR_SUPPORTED_NEAR_RELEASE.search(query))
+
+
 def pick_search_plan(query: str) -> RetrievalPlan:
     """First matching branch wins. Same rules as before."""
     versions = VERSION_NUMBER.findall(query)
@@ -109,8 +131,9 @@ def pick_search_plan(query: str) -> RetrievalPlan:
             prefer_version_match=True,
         )
 
-    # "Latest / current / newest" — keyword search release notes, then sort by date.
-    if LATEST_OR_CURRENT_WORDS.search(query):
+    # "Latest / newest", or "current / supported" next to version/release — keyword search
+    # release notes, then sort by date.
+    if asks_for_latest_release(query):
         return RetrievalPlan(
             intent="temporal",
             retrieval_mode="bm25",
