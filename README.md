@@ -475,3 +475,55 @@ The ingestion pipeline was rewritten to maximize efficiency and avoid Kubernetes
 | **`tests.yml`** | Every PR and push to `main` | Ruff lint/format + pytest (no cluster) |
 
 Operator forks set `ENABLE_OKE_DEPLOY=true` and configure the `kubeflow` GitHub Environment (OCI secrets) for cluster deploy and `smoke_tools.py` validation. GHCR push uses the built-in `GITHUB_TOKEN`; optional `GHCR_TOKEN` / `GHCR_USERNAME` are only needed if the package is private.
+
+### Argo CD staging & promotion (`deploy/argocd/`)
+
+Argo CD deploys everything in this repo. The root Application `flo-apps`
+(`deploy/argocd/root.yaml`) keeps the Applications in `deploy/argocd/apps/`
+in line with `main`.
+
+| Application | Tracks | Sync |
+|---|---|---|
+| `docs-agent-staging` | `main`, image = each commit's short SHA | Automatic; every merge runs the staging eval |
+| `docs-agent`, `gateway-guardrails` | The commit in `# prod-revision` | Automatic; merging a promotion PR deploys it |
+| `llm-runtime`, `llm-judge` | `main` | Manual: a sync restarts the GPU pod and reloads the model |
+| `langfuse` | Chart 2.1.0 + `main` values | Manual: stateful, review the diff first |
+
+Every merge to `main` builds `ghcr.io/kubeflow/mcp-kubeflow-docs:<short sha>`
+and staging deploys and evaluates that commit. Production moves only when
+someone promotes a commit, usually every week or two:
+```bash
+deploy/promote.sh            # promote the tip of main
+deploy/promote.sh 9145c31    # or a specific commit
+deploy/promote.sh --open     # also push to your fork and open the PR
+```
+
+The script checks both images exist, moves the `# prod-revision` lines, and
+writes the PR description with the commits since the current production
+revision and the staging eval for that commit (Langfuse project `flo-eval`).
+Reviewers check the eval and approve; after merge, Argo CD syncs production
+to that commit. To roll back, revert the promotion PR.
+
+See [`deploy/argocd/README.md`](deploy/argocd/README.md) for the full
+workflow, including secrets and what lives where.
+
+### Operator commands
+
+There is no single CLI binary. Operators run these commands from the repo root:
+
+```bash
+# Promote a commit on main to production (see Argo CD above)
+deploy/promote.sh            # tip of main
+deploy/promote.sh 9145c31    # a specific commit
+deploy/promote.sh --open     # also push to your fork and open the PR
+```
+
+- **Pre-merge eval**: a maintainer comments `/eval` on a PR. CI builds the
+  PR's MCP image, Argo CD deploys it to a throwaway `docs-agent-preview`
+  namespace, and an eval job compares it against staging (`main`) and comments
+  the metrics, the cases that got worse or better, the judge's reasons, and a
+  public Langfuse trace per case on the PR. It only runs when an OWNERS
+  approver asks, because it uses the shared GPU model — review the diff
+  before asking, as for `/ok-to-test`.
+- **Diagnostics**: see [Troubleshooting](#troubleshooting) (`kubectl` checks
+  for Milvus, TEI, and the MCP server).
