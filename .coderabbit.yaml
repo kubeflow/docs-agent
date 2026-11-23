@@ -1,0 +1,128 @@
+# Copyright The Kubeflow Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "AGENTS.md"
+      - files: "docs-agent-mcp/charts/RUNTIME_DECISIONS.md"
+        applyTo: "docs-agent-mcp/charts/**, deploy/**"
+
+reviews:
+  profile: quiet
+  in_progress_fortune: false
+  poem: false
+  high_level_summary_in_walkthrough: true
+
+  auto_review:
+    labels:
+      - "!do-not-merge/work-in-progress"
+      - "!do-not-merge/hold"
+
+  # ruff runs in CI (tests.yml) with a pinned rule set; flake8 and pylint would
+  # flag rules this repo does not enforce. Prose linters are too noisy for docs PRs.
+  tools:
+    ruff:
+      enabled: false
+    flake8:
+      enabled: false
+    pylint:
+      enabled: false
+    languagetool:
+      enabled: false
+    markdownlint:
+      enabled: false
+
+  path_filters:
+    - "!legacy/**"
+    - "!proposal/**"
+    - "!**/*.docx"
+    - "!**/*.lock"
+    - "!**/uv.lock"
+    - "!assets/**"
+
+  path_instructions:
+    - path: "docs-agent-mcp/charts/**"
+      instructions: |
+        Helm charts deployed by Argo CD. Check that images use an explicit
+        version tag (the vLLM image also a digest) and Hugging Face models a
+        `revision`; flag floating tags such as `latest`.
+        A chart change needs a `version` bump in Chart.yaml. For llm-runtime,
+        every catalog profile must still render, and context length, GPU and
+        cache changes should be explained in RUNTIME_DECISIONS.md. Secrets come
+        only from existing Secret references, never from values.
+
+    - path: "deploy/argocd/**"
+      instructions: |
+        Argo CD Applications. Production apps are pinned to a commit on lines
+        marked `# prod-revision`; those lines change only through
+        deploy/promote.sh, so flag hand edits in a normal PR. GPU apps
+        (llm-runtime, llm-judge) and langfuse have no automated syncPolicy and
+        must stay manual. Flag storage size changes on existing PVCs, which
+        Argo CD cannot shrink.
+
+    - path: "deploy/envs/**"
+      instructions: |
+        Per-environment values. Check that staging and prod differ only where
+        intended and that no credentials, OCIDs or internal IPs are committed.
+
+    - path: "docs-agent-mcp/mcp-server/**"
+      instructions: |
+        FastMCP server used by the kagent agents. Tool names, arguments and
+        return shapes are a contract with the agents and the widget; flag
+        breaking changes. Failures from Milvus, TEI, the reranker or the LLM
+        should return a clear tool error, not raise or return empty results
+        silently. Changes to retrieval, reranking, compression, routing or
+        citations affect answer quality and should say whether `/eval` was run.
+
+    - path: "docs-agent-mcp/pipelines/**"
+      instructions: |
+        Kubeflow Pipelines ingestion. Check that re-runs are idempotent, that
+        deleted or renamed sources remove their old vectors, and that chunk
+        sizes stay within the embedding model's token limit. Note when a change
+        needs a re-ingest of staging before it can be evaluated.
+
+    - path: "docs-agent-mcp/terraform/**"
+      instructions: |
+        OKE infrastructure. Flag hardcoded OCIDs, regions, IPs or credentials;
+        they belong in variables or terraform.tfvars (which is not committed).
+
+    - path: "tests/eval/**"
+      instructions: |
+        Evaluation harness and datasets. The judge model must be a different
+        family from the generation model. Flag hardcoded model names, context
+        lengths or endpoints that should come from configuration, and dataset
+        edits that change results without explaining why.
+
+    - path: "tests/**/*.py"
+      instructions: |
+        Default pytest runs exclude the `integration`, `slow` and `legacy`
+        markers (pytest.ini). Unit tests must not need network, Milvus, KServe
+        or model downloads; mark them otherwise.
+
+    - path: ".github/workflows/**"
+      instructions: |
+        Workflows run on PRs from forks. Check token permissions are minimal,
+        `pull_request_target` never checks out and runs untrusted code with
+        secrets, and new third-party (non-GitHub) actions are pinned by commit SHA.
+
+    - path: "frontend/**"
+      instructions: |
+        Chat widget embedded in kubeflow.org. Model output and citations are
+        untrusted; flag any HTML insertion that is not escaped or sanitized and
+        any link scheme other than http(s).

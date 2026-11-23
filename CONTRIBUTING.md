@@ -12,6 +12,15 @@ The contributor's guide:
 * Describes the pull request and review workflow in detail, including the
   OWNERS files and automated workflow tool
 
+## Pull request reviews
+
+[CodeRabbit](https://www.coderabbit.ai/) reviews each pull request automatically.
+Reply to its comments or resolve them before asking a maintainer for review.
+Comment `@coderabbitai review` to request a new review. Repo rules for
+reviewers and coding agents are in [`AGENTS.md`](AGENTS.md). CodeRabbit also
+has an optional [IDE extension](https://docs.coderabbit.ai/ide/install) for
+local reviews.
+
 ## Opening issues
 
 Use a title of the form `<type>(<area>): <summary>` so the issue triage workflow
