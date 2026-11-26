@@ -74,7 +74,7 @@
       "ingest": {
         "pipeline": "docs-agent-mcp/pipelines/code-pipeline.py",
         "compiled": "code_rag_pipeline.yaml",
-        "why": "Default code pipeline is kubeflow/manifests apps/katib (install manifests/CRDs), not kubeflow/katib examples/. random.yaml will not be in the index until that repo/path is ingested.",
+        "why": "Default code pipeline is kubeflow/manifests applications/katib (install manifests/CRDs), not kubeflow/katib examples/. random.yaml will not be in the index until that repo/path is ingested.",
         "arguments": {
           "repos": "kubeflow/katib",
           "directory_paths": "examples/v1beta1/hp-tuning",
