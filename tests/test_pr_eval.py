@@ -142,17 +142,24 @@ def test_lost_query_terms_count_as_worse():
     assert "query lost key terms" in pr_eval.describe(diff["pr"]["a"])
 
 
-def test_report_links_every_case_even_when_nothing_changed(monkeypatch):
+def test_report_lists_only_changed_cases_with_both_traces(monkeypatch):
     monkeypatch.setattr(pr_eval, "LANGFUSE_UI", "https://langfuse.example.org")
-    rec = {"dataset_id": "ds1", "items": {"a": {"trace": "t", "agent_trace": "at-main"}}}
-    base = {"summary": summary(), "rows": [row("a")], "recorded": rec}
+    items = lambda suffix: {c: {"trace": "t", "agent_trace": f"{c}-{suffix}"} for c in ("a", "b")}  # noqa: E731
+    base = {
+        "summary": summary(),
+        "rows": [row("a"), row("b")],
+        "recorded": {"dataset_id": "ds1", "items": items("main")},
+    }
     cand = {
-        "summary": summary(cases=1),
-        "rows": [row("a")],
-        "recorded": {"dataset_id": "ds1", "items": {"a": {"trace": "t2", "agent_trace": "at-pr"}}},
+        "summary": summary(cases=2),
+        "rows": [row("a", grounded="partial"), row("b")],
+        "recorded": {"dataset_id": "ds1", "items": items("pr")},
     }
     text = pr_eval.render("7", "abcdef12", "1234567", base, cand, "proj1")
-    assert "All cases (1)" in text
-    assert "[main](https://langfuse.example.org/project/proj1/traces/at-main)" in text
-    assert "[this PR](https://langfuse.example.org/project/proj1/traces/at-pr)" in text
+    assert "Got worse (1)" in text
+    assert "All cases" not in text
+    assert "[main](https://langfuse.example.org/project/proj1/traces/a-main)" in text
+    assert "[this PR](https://langfuse.example.org/project/proj1/traces/a-pr)" in text
+    # Unchanged cases are not listed.
+    assert "`b`" not in text and "b-pr" not in text
     assert "weak evidence" in text
