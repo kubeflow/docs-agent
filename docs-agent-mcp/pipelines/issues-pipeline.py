@@ -113,14 +113,28 @@ def download_github_issues(
 
         while True:
             comments = api_request(comments_url, {"per_page": 100, "page": page})
+            if comments is None:
+                print(
+                    f"WARNING: Failed to fetch comments for "
+                    f"{owner}/{name}#{issue_number} (page {page}); "
+                    f"indexing with {len(comments_list)} comments "
+                    f"fetched so far."
+                )
+                break
             if not comments:
                 break
 
             for comment in comments:
+                if not isinstance(comment, dict):
+                    continue
+                user = comment.get("user") or {}
+                if not isinstance(user, dict):
+                    user = {}
                 comments_list.append({
-                    "author": comment.get("user", {}).get("login", "unknown"),
+                    "author": user.get("login", "unknown"),
                     "created_at": (comment.get("created_at", "") or "")[:10],
                     "body": comment.get("body", "") or "",
+                    "url": comment.get("html_url", "") or "",
                 })
 
             if len(comments) < 100:
@@ -142,10 +156,14 @@ def download_github_issues(
         content += f"**Updated:** {updated_at}\n\n"
         content += body or ""
         for comment in comments:
-            content += (
-                f"\n\n---\n**Comment by @{comment['author']}** "
-                f"({comment['created_at']}):\n{comment['body']}"
+            header = (
+                f"**Comment by @{comment['author']}** "
+                f"({comment['created_at']}):"
             )
+            curl = comment.get("url", "") or ""
+            if curl:
+                header += f" {curl}"
+            content += f"\n\n---\n{header}\n{comment['body']}"
         return content
 
     for repo in repos.split(","):
@@ -362,7 +380,11 @@ def chunk_and_embed_issues(
                 author = comment.get("author", "unknown")
                 created = comment.get("created_at", "")
                 cbody = comment.get("body", "") or ""
-                seg = f"**Comment by @{author}** ({created}):\n{cbody}".strip()
+                curl = comment.get("url", "") or ""
+                header = f"**Comment by @{author}** ({created}):"
+                if curl:
+                    header += f" {curl}"
+                seg = f"{header}\n{cbody}".strip()
                 if seg:
                     segments.append(seg)
             return segments if segments else [issue.get("content", "") or ""]

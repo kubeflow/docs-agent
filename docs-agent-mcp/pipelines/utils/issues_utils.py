@@ -39,7 +39,11 @@ def format_issue_markdown(
         author = comment.get("author", "unknown")
         created = comment.get("created_at", "")
         cbody = comment.get("body", "") or ""
-        content += f"\n\n---\n**Comment by @{author}** ({created}):\n{cbody}"
+        curl = comment.get("url", "") or ""
+        header = f"**Comment by @{author}** ({created}):"
+        if curl:
+            header += f" {curl}"
+        content += f"\n\n---\n{header}\n{cbody}"
 
     return content
 
@@ -125,11 +129,7 @@ def metadata_from_structured(record: dict[str, Any]) -> dict[str, Any]:
         "issue_number": issue_number,
         "issue_state": (record.get("issue_state") or "").strip(),
         "issue_labels": (record.get("issue_labels") or "").strip(),
-        "citation_url": (
-            record.get("url")
-            or record.get("citation_url")
-            or ""
-        ).strip(),
+        "citation_url": (record.get("url") or record.get("citation_url") or "").strip(),
     }
 
 
@@ -147,12 +147,12 @@ def parse_issue_metadata(content: str) -> dict:
         issue_labels, citation_url. Missing fields default to empty string
         (or 0 for issue_number).
     """
-    title_match = re.search(r'^#\s+(.+)', content, re.MULTILINE)
-    repo_match = re.search(r'\*\*Repository:\*\*\s*(.+)', content)
-    number_match = re.search(r'\*\*Issue:\*\*\s*#(\d+)', content)
-    url_match = re.search(r'\*\*URL:\*\*\s*(.+)', content)
-    labels_match = re.search(r'\*\*Labels:\*\*[ \t]*(.*)', content)
-    state_match = re.search(r'\*\*State:\*\*\s*(\w+)', content)
+    title_match = re.search(r"^#\s+(.+)", content, re.MULTILINE)
+    repo_match = re.search(r"\*\*Repository:\*\*\s*(.+)", content)
+    number_match = re.search(r"\*\*Issue:\*\*\s*#(\d+)", content)
+    url_match = re.search(r"\*\*URL:\*\*\s*(.+)", content)
+    labels_match = re.search(r"\*\*Labels:\*\*[ \t]*(.*)", content)
+    state_match = re.search(r"\*\*State:\*\*\s*(\w+)", content)
 
     return {
         "title": title_match.group(1).strip() if title_match else "",
@@ -177,10 +177,7 @@ def resolve_issue_metadata(record: dict[str, Any] | str) -> dict[str, Any]:
     if isinstance(record, str):
         metadata = parse_issue_metadata(record)
         if _is_empty_metadata(metadata):
-            print(
-                "WARNING: Failed to parse GitHub issue metadata. "
-                "Upstream markdown format may have changed."
-            )
+            print("WARNING: Failed to parse GitHub issue metadata. Upstream markdown format may have changed.")
         return metadata
 
     if has_structured_metadata(record):
@@ -188,10 +185,7 @@ def resolve_issue_metadata(record: dict[str, Any] | str) -> dict[str, Any]:
 
     metadata = parse_issue_metadata(record.get("content", "") or "")
     if _is_empty_metadata(metadata):
-        print(
-            "WARNING: Failed to parse GitHub issue metadata. "
-            "Upstream markdown format may have changed."
-        )
+        print("WARNING: Failed to parse GitHub issue metadata. Upstream markdown format may have changed.")
     return metadata
 
 
@@ -214,11 +208,70 @@ def build_metadata_prefix(metadata: dict) -> str:
     return " | ".join(parts) + "\n\n"
 
 
+def fetch_issue_comments(
+    owner: str,
+    repo: str,
+    issue_number: int,
+    request_fn,
+    per_page: int = 100,
+) -> list[dict[str, Any]]:
+    """Fetch all comments for one issue, keeping each comment's URL.
+
+    Args:
+        owner: GitHub repo owner, e.g. "kubeflow".
+        repo: GitHub repo name, e.g. "docs-agent".
+        issue_number: Issue number to fetch comments for.
+        request_fn: Callable ``request_fn(url, params) -> list | None``.
+            In the pipeline, pass the nested ``api_request`` as
+            ``request_fn``. Tests pass a mock. Returning ``None``
+            means the API call failed (after retries / non-200).
+        per_page: Comments per API page (GitHub max 100).
+
+    Returns:
+        List of comment dicts with ``author``, ``created_at`` (date
+        only), ``body`` and ``url`` (the comment's ``html_url``).
+        On a failed page it prints a WARNING and returns the
+        comments fetched so far, instead of silently returning [].
+    """
+    comments: list[dict[str, Any]] = []
+    page = 1
+    url = f"https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/comments"
+    while True:
+        result = request_fn(url, {"per_page": per_page, "page": page})
+        if result is None:
+            print(
+                f"WARNING: Failed to fetch comments for "
+                f"{owner}/{repo}#{issue_number} (page {page}); "
+                f"indexing with {len(comments)} comments fetched so far."
+            )
+            break
+        for comment in result or []:
+            if not isinstance(comment, dict):
+                continue
+            user = comment.get("user") or {}
+            comments.append(
+                {
+                    "author": user.get("login", "unknown"),
+                    "created_at": (comment.get("created_at", "") or "")[:10],
+                    "body": comment.get("body", "") or "",
+                    "url": comment.get("html_url", "") or "",
+                }
+            )
+        if len(result) < per_page:
+            break
+        page += 1
+    return comments
+
+
 def _comment_segment(comment: dict[str, Any]) -> str:
     author = comment.get("author", "unknown")
     created = comment.get("created_at", "")
     body = comment.get("body", "") or ""
-    return f"**Comment by @{author}** ({created}):\n{body}"
+    url = comment.get("url", "") or ""
+    header = f"**Comment by @{author}** ({created}):"
+    if url:
+        header += f" {url}"
+    return f"{header}\n{body}"
 
 
 def issue_content_segments(record: dict[str, Any]) -> list[str]:
@@ -227,9 +280,7 @@ def issue_content_segments(record: dict[str, Any]) -> list[str]:
     Prefers structured `body` + `comments` when present; otherwise falls back
     to splitting the human-readable `content` on comment separators.
     """
-    if isinstance(record.get("body"), str) and (
-        "comments" in record or has_structured_metadata(record)
-    ):
+    if isinstance(record.get("body"), str) and ("comments" in record or has_structured_metadata(record)):
         segments: list[str] = []
         # Include title + body as the first segment (matches prior MD layout)
         title = (record.get("title") or "").strip()
