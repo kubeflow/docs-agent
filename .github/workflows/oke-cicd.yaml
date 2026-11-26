@@ -1,5 +1,5 @@
-# Test on every PR and push; on main, also build and push the MCP and session-issuer
-# images to GHCR.
+# Test on every PR and push; on main, also build and push the MCP, session-issuer and
+# ingest images to GHCR.
 # Deployment is Argo CD's job (deploy/argocd/): this workflow never touches the
 # cluster, so it holds no cluster credentials. To roll out an image, change its
 # tag in deploy/envs/<env>/docs-agent.yaml and sync the Application in Argo CD.
@@ -23,6 +23,7 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: mcp-kubeflow-docs
   ISSUER_IMAGE_NAME: kubeflow-session-issuer
+  INGEST_IMAGE_NAME: docs-rag-ingest
 
 jobs:
   test-and-compile:
@@ -67,6 +68,8 @@ jobs:
             --set domain=agent.example.org --set gateway.tls.acme.email=ci@example.org
           helm template docs-agent docs-agent-mcp/charts/docs-agent \
             --namespace docs-agent --set-string mcp.image.tag=ci-test >/dev/null
+          helm template docs-agent docs-agent-mcp/charts/docs-agent \
+            --namespace docs-agent --set-string mcp.image.tag=ci-test --set ingest.enabled=true >/dev/null
           # Every catalog profile must lint and render, not just the active one.
           for profile in $(helm show values docs-agent-mcp/charts/llm-runtime | yq '.catalog | keys | .[]'); do
             helm lint docs-agent-mcp/charts/llm-runtime --set "model=${profile}"
@@ -121,6 +124,7 @@ jobs:
           fi
           echo "IMAGE_REPO=ghcr.io/${owner_lc}/${{ env.IMAGE_NAME }}" >> "$GITHUB_ENV"
           echo "ISSUER_IMAGE_REPO=ghcr.io/${owner_lc}/${{ env.ISSUER_IMAGE_NAME }}" >> "$GITHUB_ENV"
+          echo "INGEST_IMAGE_REPO=ghcr.io/${owner_lc}/${{ env.INGEST_IMAGE_NAME }}" >> "$GITHUB_ENV"
           echo "issuer_tag=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
           echo "tag=${image_tag}" >> "$GITHUB_ENV"
           echo "release_tag_requested=${release_tag_requested}" >> "$GITHUB_OUTPUT"
@@ -167,11 +171,23 @@ jobs:
           tags: |
             ${{ env.ISSUER_IMAGE_REPO }}:${{ env.issuer_tag }}
 
+      # Always tagged by commit SHA: the chart runs it with the same tag as the MCP image
+      # to register the recurring ingest runs, and the docs pipeline steps run in it.
+      - name: Build and Push ingest Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./docs-agent-mcp/pipelines
+          file: ./docs-agent-mcp/pipelines/Dockerfile.pipeline
+          push: true
+          tags: |
+            ${{ env.INGEST_IMAGE_REPO }}:${{ env.issuer_tag }}
+
       - name: Summary
         run: |
           {
             echo "Pushed ${IMAGE_REPO}:${tag}"
             echo "Pushed ${ISSUER_IMAGE_REPO}:${issuer_tag}"
+            echo "Pushed ${INGEST_IMAGE_REPO}:${issuer_tag}"
             echo
             echo "Nothing was deployed. To roll it out, set the image tag in"
             echo "deploy/envs/<env>/ (PR) and sync the Application in Argo CD."

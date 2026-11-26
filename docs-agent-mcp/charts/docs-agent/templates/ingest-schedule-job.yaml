@@ -1,0 +1,68 @@
+{{- if .Values.ingest.enabled }}
+{{- $tag := .Values.ingest.image.tag | default .Values.mcp.image.tag }}
+{{- $image := printf "%s:%s" .Values.ingest.image.repository $tag }}
+# Recurring ingest. After every Argo CD sync this Job compiles the pipelines shipped in the
+# ingest image, uploads them to Kubeflow Pipelines and replaces the recurring runs with the
+# ones listed in .Values.ingest.schedules (docs-agent-mcp/pipelines/ingest_schedule.py).
+# The pipelines run in the Kubeflow Pipelines namespace and write to Milvus; this Job only
+# talks to the Pipelines API.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-ingest-schedules
+  labels:
+    {{- include "docs-agent.labels" . | nindent 4 }}
+data:
+  schedules.json: |
+    {{- dict "experiment" .Values.ingest.experiment "schedules" .Values.ingest.schedules | toPrettyJson | nindent 4 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-ingest-schedule
+  labels:
+    {{- include "docs-agent.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}-ingest-schedule
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: register
+          image: {{ $image }}
+          command: ["python", "/app/pipelines/ingest_schedule.py", "register", "--config", "/config/schedules.json"]
+          env:
+            - name: KFP_HOST
+              value: {{ .Values.ingest.kfpHost | quote }}
+            # The docs pipeline's chunk and store steps run in this same image.
+            - name: DOCS_INGEST_IMAGE
+              value: {{ $image }}
+            - name: INGEST_VERSION
+              value: {{ $tag | quote }}
+            - name: HOME
+              value: /tmp
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+          resources:
+            requests: {cpu: 50m, memory: 192Mi}
+            limits: {memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: config
+          configMap:
+            name: {{ .Release.Name }}-ingest-schedules
+{{- end }}

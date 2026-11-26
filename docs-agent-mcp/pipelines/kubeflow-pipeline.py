@@ -29,100 +29,97 @@ INGEST_IMAGE = os.getenv(
 )
 
 @dsl.component(
-    base_image="docker.io/library/python:3.9",
-    packages_to_install=["requests", "beautifulsoup4"]
+    base_image="docker.io/library/python:3.11-slim",
+    packages_to_install=["requests==2.33.0", "beautifulsoup4==4.15.0"],
 )
 def download_github_directory(
     repo_owner: str,
     repo_name: str,
     directory_path: str,
+    exclude_paths: str,
     github_token: str,
-    github_data: dsl.Output[dsl.Dataset]
+    github_data: dsl.Output[dsl.Dataset],
 ):
-    import os
-    import requests
+    """Download every .md/.html file under directory_path at the default branch head.
+
+    One tree listing, then one raw download per file. Any file that cannot be read fails
+    the step: a partial download must not reach the store step, which removes documents
+    that are missing from the run.
+    """
     import json
-    import base64
+    import os
     import time
+
+    import requests
     from bs4 import BeautifulSoup
 
-    def resolve_github_token(token):
-        for candidate in (token, os.environ.get("Github_Pat"), os.environ.get("GITHUB_TOKEN")):
-            if candidate and str(candidate).strip():
-                return str(candidate).strip()
-        return ""
+    token = ""
+    for candidate in (github_token, os.environ.get("Github_Pat"), os.environ.get("GITHUB_TOKEN")):
+        if candidate and str(candidate).strip():
+            token = str(candidate).strip()
+            break
+    if not token:
+        print("WARNING: no github_token or Github_Pat; GitHub allows 60 API requests per hour")
+    headers = {"Authorization": f"token {token}"} if token else {}
 
-    github_token = resolve_github_token(github_token)
-    if github_token:
-        print("Using authenticated GitHub API requests")
-    else:
-        print("WARNING: No github_token or Github_Pat env set; rate limits will be low (60 req/hr)")
-
-    headers = {"Authorization": f"token {github_token}"} if github_token else {}
-
-    def api_request(url, params=None):
-        max_retries = 3
-        for attempt in range(max_retries):
+    def get(url, **kwargs):
+        last_error = ""
+        for attempt in range(4):
             try:
-                resp = requests.get(url, params=params, headers=headers)
+                resp = requests.get(url, headers=headers, timeout=60, **kwargs)
+            except requests.RequestException as exc:
+                last_error = str(exc)
+                time.sleep(2**attempt)
+                continue
+            if resp.status_code == 200:
+                return resp
+            last_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
+            if resp.status_code in (403, 429) and resp.headers.get("X-RateLimit-Remaining") == "0":
+                reset = int(resp.headers.get("X-RateLimit-Reset", "0") or 0)
+                wait = min(max(reset - int(time.time()), 30), 600)
+                print(f"GitHub rate limit reached; waiting {wait}s")
+                time.sleep(wait)
+            elif resp.status_code >= 500 or resp.status_code == 429:
+                time.sleep(2**attempt)
+            else:
+                break
+        raise RuntimeError(f"GET {url} failed: {last_error}")
 
-                if resp.status_code == 403:
-                    remaining = resp.headers.get("X-RateLimit-Remaining", "0")
-                    if remaining == "0":
-                        reset_time = int(resp.headers.get("X-RateLimit-Reset", 0))
-                        wait_time = max(reset_time - int(time.time()), 60)
-                        print(f"Rate limited. Waiting {wait_time}s...")
-                        time.sleep(min(wait_time, 300))
-                        continue
-                    print(f"Forbidden (403) for {url}: {resp.text[:200]}")
+    repo_api = f"https://api.github.com/repos/{repo_owner}/{repo_name}"
+    branch = get(repo_api).json()["default_branch"]
+    commit_sha = get(f"{repo_api}/commits/{branch}").json()["sha"]
+    tree = get(f"{repo_api}/git/trees/{commit_sha}", params={"recursive": "1"}).json()
+    if tree.get("truncated"):
+        raise RuntimeError(f"Tree listing of {repo_owner}/{repo_name} is truncated; narrow directory_path")
 
-                if resp.status_code == 200:
-                    return resp.json()
+    prefix = directory_path.strip("/")
+    prefix = f"{prefix}/" if prefix else ""
+    excluded = tuple(part.strip().strip("/") for part in exclude_paths.split(",") if part.strip())
 
-                print(f"API error: HTTP {resp.status_code} for {url}")
-                return None
+    def wanted(path):
+        if not path.startswith(prefix) or not path.endswith((".md", ".html")):
+            return False
+        return not any(path == ex or path.startswith(f"{ex}/") for ex in excluded)
 
-            except Exception as e:
-                print(f"Request failed (attempt {attempt + 1}): {e}")
-                time.sleep(2 ** attempt)
+    paths = sorted(item["path"] for item in tree["tree"] if item["type"] == "blob" and wanted(item["path"]))
+    if not paths:
+        raise RuntimeError(f"No .md/.html files under '{prefix}' in {repo_owner}/{repo_name}@{commit_sha[:7]}")
+    print(f"{repo_owner}/{repo_name}@{commit_sha[:7]} ({branch}): {len(paths)} files under '{prefix}'")
 
-        return None
-
-    def get_files_recursive(url):
-        files = []
-        items = api_request(url)
-        if not items or not isinstance(items, list):
-            return files
-
-        for item in items:
-            if item['type'] == 'file' and (item['name'].endswith('.md') or item['name'].endswith('.html')):
-                file_data = api_request(item['url'])
-                if not file_data or 'content' not in file_data:
-                    print(f"Skipping unreadable file: {item['path']}")
-                    continue
-                content = base64.b64decode(file_data['content']).decode('utf-8')
-
-                if item['name'].endswith('.html'):
-                    soup = BeautifulSoup(content, 'html.parser')
-                    content = soup.get_text(separator=' ', strip=True)
-
-                files.append({
-                    'path': item['path'],
-                    'content': content,
-                    'file_name': item['name']
-                })
-            elif item['type'] == 'dir':
-                files.extend(get_files_recursive(item['url']))
-
-        return files
-
-    api_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{directory_path}"
-    files = get_files_recursive(api_url)
-    print(f"Downloaded {len(files)} files")
-
-    with open(github_data.path, 'w', encoding='utf-8') as f:
-        for file_data in files:
-            f.write(json.dumps(file_data, ensure_ascii=False) + '\n')
+    with open(github_data.path, "w", encoding="utf-8") as out:
+        for path in paths:
+            raw_url = f"https://raw.githubusercontent.com/{repo_owner}/{repo_name}/{commit_sha}/{path}"
+            content = get(raw_url).content.decode("utf-8", errors="replace")
+            if path.endswith(".html"):
+                content = BeautifulSoup(content, "html.parser").get_text(separator=" ", strip=True)
+            record = {
+                "path": path,
+                "content": content,
+                "file_name": path.rsplit("/", 1)[-1],
+                "commit_sha": commit_sha,
+            }
+            out.write(json.dumps(record, ensure_ascii=False) + "\n")
+    print(f"Downloaded {len(paths)} files")
 
 
 @dsl.component(base_image=INGEST_IMAGE)
@@ -132,6 +129,7 @@ def chunk_and_embed(
     base_url: str,
     target_tokens: int,
     overlap_tokens: int,
+    doc_type: str,
     embeddings_service_url: str,
     embedding_batch_size: int,
     embedded_data: dsl.Output[dsl.Dataset],
@@ -147,6 +145,7 @@ def chunk_and_embed(
         base_url=base_url,
         target_tokens=int(target_tokens),
         overlap_tokens=int(overlap_tokens),
+        doc_type=doc_type,
     )
     records = embed_chunk_records(
         records,
@@ -168,8 +167,15 @@ def store_milvus(
     clean_rebuild: bool,
     clean_rebuild_confirmation: str,
     maintenance_lock_token: str,
+    prune_removed: bool,
+    repo_name: str,
+    directory_path: str,
 ):
     from milvus_store import store_embedded_records
+
+    # document_id is "<repo_name>:<file path>"; exclude_paths under it are pruned too.
+    directory = directory_path.strip("/")
+    prune_prefix = f"{repo_name}:{directory}/" if directory else f"{repo_name}:"
 
     store_embedded_records(
         embedded_data.path,
@@ -179,6 +185,7 @@ def store_milvus(
         clean_rebuild=clean_rebuild,
         clean_rebuild_confirmation=clean_rebuild_confirmation,
         maintenance_lock_token=maintenance_lock_token,
+        prune_prefix=prune_prefix if prune_removed else "",
     )
 
 
@@ -190,8 +197,16 @@ def github_rag_pipeline(
     repo_owner: str = "kubeflow",
     repo_name: str = "website", 
     directory_path: str = "content/en/docs",
+    # Comma-separated paths (files or directories) to skip under directory_path.
+    exclude_paths: str = "",
     github_token: str = "",
     base_url: str = "https://www.kubeflow.org/docs",
+    # Empty = infer from the Hugo path (documentation, release, nav, redirect). Set it for
+    # other sources, e.g. "distribution" for kubeflow/community-distribution.
+    doc_type: str = "",
+    # Remove indexed pages of this source that are gone upstream. Needs a full download
+    # of the source, which is what this pipeline does.
+    prune_removed: bool = True,
     target_tokens: int = DEFAULT_TARGET_TOKENS,
     overlap_tokens: int = DEFAULT_OVERLAP_TOKENS,
     embeddings_service_url: str = (
@@ -210,7 +225,8 @@ def github_rag_pipeline(
         repo_owner=repo_owner,
         repo_name=repo_name,
         directory_path=directory_path,
-        github_token=github_token
+        exclude_paths=exclude_paths,
+        github_token=github_token,
     )
 
     if k8s is not None:
@@ -227,6 +243,7 @@ def github_rag_pipeline(
         base_url=base_url,
         target_tokens=target_tokens,
         overlap_tokens=overlap_tokens,
+        doc_type=doc_type,
         embeddings_service_url=embeddings_service_url,
         embedding_batch_size=embedding_batch_size,
     )
@@ -240,6 +257,9 @@ def github_rag_pipeline(
         clean_rebuild=clean_rebuild,
         clean_rebuild_confirmation=clean_rebuild_confirmation,
         maintenance_lock_token=maintenance_lock_token,
+        prune_removed=prune_removed,
+        repo_name=repo_name,
+        directory_path=directory_path,
     )
 
     if k8s is not None:

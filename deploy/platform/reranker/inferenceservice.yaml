@@ -1,0 +1,37 @@
+# Cross-encoder reranker for the MCP server (RERANKER_URL in the docs-agent chart):
+# Hugging Face Text Embeddings Inference on CPU, same shape as embeddings-service.
+# Without it the MCP server skips reranking and returns hits in retrieval order.
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: reranker-service
+  namespace: ml-infra
+  annotations:
+    serving.kserve.io/deploymentMode: RawDeployment
+spec:
+  predictor:
+    minReplicas: 1
+    maxReplicas: 1
+    containers:
+      - name: kserve-container
+        image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.7
+        args:
+          - --model-id
+          - BAAI/bge-reranker-base
+          - --port
+          - "8080"
+          - --auto-truncate
+          - --max-client-batch-size
+          - "32"
+          - --max-batch-tokens
+          - "16384"
+        ports:
+          - containerPort: 8080
+            protocol: TCP
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: "4"
+            memory: 4Gi

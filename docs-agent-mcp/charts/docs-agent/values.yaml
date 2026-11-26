@@ -16,7 +16,10 @@ mcp:
     issuesCollection: issues_rag
     codeCollection: code_rag
     embeddingsUrl: http://embeddings-service-predictor.ml-infra.svc.cluster.local/embed
+    # Cross-encoder reranker (deploy/platform/reranker). Empty = no reranking.
     rerankerUrl: http://reranker-service-predictor.ml-infra.svc.cluster.local/rerank
+    # Candidates fetched for the reranker when a query would otherwise fetch only top_k.
+    rerankCandidateDepth: 20
     milvusUri: http://milvus-milvus.ml-infra.svc.cluster.local:19530
     milvusUser: root
     maxQueryChars: 512
@@ -164,6 +167,51 @@ triage:
   langfuseSecret: mcp-langfuse-keys
   judgeUrl: http://llm-judge.ml-infra.svc.cluster.local/v1/chat/completions
   judgeModel: flo-judge
+
+# Recurring ingest into Milvus as Kubeflow Pipelines recurring runs (see
+# templates/ingest-schedule-job.yaml). Enable in one environment only: every schedule
+# writes to the collections named in its arguments (the pipelines default to the
+# production collections), and the schedules listed here replace all recurring runs in
+# the experiment.
+ingest:
+  enabled: false
+  image:
+    repository: ghcr.io/kubeflow/docs-rag-ingest
+    # Empty = mcp.image.tag: CI builds both images from the same commit.
+    tag: ""
+  kfpHost: http://ml-pipeline.kubeflow.svc.cluster.local:8888
+  experiment: flo-ingest
+  # cron has six fields, seconds first (UTC). arguments override the pipeline defaults
+  # in docs-agent-mcp/pipelines/{kubeflow,issues,code}-pipeline.py.
+  schedules:
+    # kubeflow.org documentation, daily. Pages removed upstream leave the index.
+    - name: docs-website
+      pipeline: docs
+      cron: "0 0 2 * * *"
+      arguments: {}
+    # Community distribution (formerly kubeflow/manifests): README, Helm chart READMEs,
+    # release notes and proposals, in the same collection with doc_type "distribution".
+    - name: docs-distribution
+      pipeline: docs
+      cron: "0 30 2 * * *"
+      arguments:
+        repo_name: community-distribution
+        directory_path: ""
+        exclude_paths: ".github,tests,AGENTS.md"
+        base_url: https://github.com/kubeflow/community-distribution/blob/master
+        doc_type: distribution
+    # Issues updated in the last day, every six hours (the overlap covers a missed run).
+    # First backfill: ingest_schedule.py run --name issues --set updated_within_hours=0
+    - name: issues
+      pipeline: issues
+      cron: "0 0 */6 * * *"
+      arguments:
+        updated_within_hours: 24
+    # Manifests and Helm charts, weekly.
+    - name: code
+      pipeline: code
+      cron: "0 0 3 * * 0"
+      arguments: {}
 
 tests:
   enabled: true

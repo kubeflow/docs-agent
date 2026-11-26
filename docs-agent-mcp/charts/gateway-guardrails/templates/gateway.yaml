@@ -10,14 +10,17 @@ spec:
   selector:
     {{- toYaml .Values.gateway.selector | nindent 4 }}
   servers:
+    # With TLS on, port 80 exists only for cert-manager's HTTP-01 challenge: the
+    # VirtualService routes match port 443, so anything else here is a 404. Do not set
+    # httpsRedirect: it makes Envoy redirect before routing (require_tls), the challenge
+    # request is redirected to 443 where no route serves it, and the certificate cannot
+    # be renewed.
     - port:
         number: 80
         name: http
         protocol: HTTP
       hosts:
         - {{ include "gateway-guardrails.domain" . | quote }}
-      tls:
-        httpsRedirect: {{ .Values.gateway.tls.enabled }}
     {{- if .Values.gateway.tls.enabled }}
     - port:
         number: 443

@@ -25,8 +25,13 @@ SCHEMA_DESCRIPTION = (
 )
 
 APPROVED_DOCS_COLLECTION = DOCS_COLLECTION
+# Test copies of the docs collection (kubeflow_docs_staging, kubeflow_docs_preview, ...).
+APPROVED_DOCS_COLLECTION_PREFIX = f"{DOCS_COLLECTION}_"
 CLEAN_REBUILD_CONFIRMATION = f"DROP {APPROVED_DOCS_COLLECTION}"
 MAINTENANCE_LOCK_ENV = "MILVUS_MAINTENANCE_LOCK"
+# A sync that would remove more than this share of a source's indexed documents is
+# treated as a failed download, not as upstream deleting its docs.
+MAX_PRUNE_FRACTION = 0.2
 
 DENSE_FIELD = "vector"
 SPARSE_FIELD = "sparse_vector"
@@ -53,11 +58,18 @@ def truncate_utf8(value: Any, max_bytes: int) -> str:
 
 def validate_production_collection_name(collection_name: str) -> None:
     name = (collection_name or "").strip()
-    if name != APPROVED_DOCS_COLLECTION:
+    suffix = name[len(APPROVED_DOCS_COLLECTION_PREFIX) :]
+    is_test_copy = name.startswith(APPROVED_DOCS_COLLECTION_PREFIX) and suffix.replace("_", "").isalnum()
+    if name != APPROVED_DOCS_COLLECTION and not is_test_copy:
         raise ValueError(
             f"Refusing unexpected collection name '{collection_name}'. "
-            f"Production docs indexing must target exactly '{APPROVED_DOCS_COLLECTION}'."
+            f"Docs indexing must target '{APPROVED_DOCS_COLLECTION}' or a test copy named "
+            f"'{APPROVED_DOCS_COLLECTION_PREFIX}<suffix>'."
         )
+
+
+def clean_rebuild_confirmation_for(collection_name: str) -> str:
+    return f"DROP {(collection_name or '').strip()}"
 
 
 def validate_clean_rebuild_gates(
@@ -66,11 +78,12 @@ def validate_clean_rebuild_gates(
     clean_rebuild_confirmation: str,
     maintenance_lock_token: str,
     maintenance_lock_env: str | None = None,
+    collection_name: str = APPROVED_DOCS_COLLECTION,
 ) -> None:
     if not clean_rebuild:
         return
 
-    expected_confirmation = CLEAN_REBUILD_CONFIRMATION
+    expected_confirmation = clean_rebuild_confirmation_for(collection_name)
     provided = (clean_rebuild_confirmation or "").strip()
     if provided != expected_confirmation:
         raise ValueError(
@@ -179,6 +192,7 @@ def chunk_github_jsonl(
     base_url: str,
     target_tokens: int = DEFAULT_TARGET_TOKENS,
     overlap_tokens: int = DEFAULT_OVERLAP_TOKENS,
+    doc_type: str = "",
     ingest_module: Any | None = None,
 ) -> list[dict[str, Any]]:
     """Parse/chunk downloaded GitHub JSONL using canonical ingestion logic."""
@@ -191,12 +205,14 @@ def chunk_github_jsonl(
             if not stripped:
                 continue
             file_data = json.loads(stripped)
+            kwargs = {"doc_type": doc_type} if doc_type else {}
             file_records = build_records(
                 file_data,
                 repo_name=repo_name,
                 base_url=base_url,
                 target_tokens=target_tokens,
                 overlap_tokens=overlap_tokens,
+                **kwargs,
             )
             records.extend(file_records)
 
@@ -290,6 +306,56 @@ def compute_validation_metrics(
     }
 
 
+def _quoted(values: Sequence[str]) -> str:
+    return ", ".join(json.dumps(value) for value in values)
+
+
+def find_stale_document_ids(
+    milvus: MilvusClient,
+    collection_name: str,
+    *,
+    prune_prefix: str,
+    current_ids: set[str],
+) -> list[str]:
+    """Indexed documents under prune_prefix that the source no longer has."""
+    indexed: set[str] = set()
+    iterator = milvus.query_iterator(
+        collection_name=collection_name,
+        filter=f'{DOCUMENT_ID_FIELD} like "{prune_prefix}%"',
+        output_fields=[DOCUMENT_ID_FIELD],
+        batch_size=1000,
+    )
+    try:
+        while True:
+            batch = iterator.next()
+            if not batch:
+                break
+            indexed.update(row[DOCUMENT_ID_FIELD] for row in batch)
+    finally:
+        iterator.close()
+
+    stale = sorted(indexed - current_ids)
+    if indexed and len(stale) > MAX_PRUNE_FRACTION * len(indexed):
+        raise RuntimeError(
+            f"Refusing to prune {len(stale)} of {len(indexed)} indexed documents under "
+            f"'{prune_prefix}' (limit {MAX_PRUNE_FRACTION:.0%}). The download is probably "
+            "incomplete; nothing was written."
+        )
+    return stale
+
+
+def delete_documents(milvus: MilvusClient, collection_name: str, document_ids: Sequence[str]) -> int:
+    deleted = 0
+    for start in range(0, len(document_ids), DELETE_BATCH_SIZE):
+        batch_ids = document_ids[start : start + DELETE_BATCH_SIZE]
+        result = milvus.delete(
+            collection_name=collection_name,
+            filter=f"{DOCUMENT_ID_FIELD} in [{_quoted(batch_ids)}]",
+        )
+        deleted += int(result.get("delete_count", 0) or 0)
+    return deleted
+
+
 def store_embedded_records(
     embedded_data_path: str,
     *,
@@ -299,14 +365,21 @@ def store_embedded_records(
     clean_rebuild: bool,
     clean_rebuild_confirmation: str,
     maintenance_lock_token: str,
+    prune_prefix: str = "",
     client: MilvusClient | None = None,
 ) -> dict[str, Any]:
-    """Read embedded JSONL and write the docs collection."""
+    """Read embedded JSONL and write the docs collection.
+
+    prune_prefix: when set (for example "website:content/en/docs/"), documents indexed
+    under that document_id prefix that are not in this run are deleted, so pages removed
+    upstream leave the index. Only pass it when the run downloaded that whole source.
+    """
     validate_production_collection_name(collection_name)
     validate_clean_rebuild_gates(
         clean_rebuild=clean_rebuild,
         clean_rebuild_confirmation=clean_rebuild_confirmation,
         maintenance_lock_token=maintenance_lock_token,
+        collection_name=collection_name,
     )
 
     milvus_user = os.environ.get("MILVUS_USER", "root")
@@ -339,6 +412,8 @@ def store_embedded_records(
     if clean_rebuild and milvus.has_collection(collection_name):
         milvus.drop_collection(collection_name)
 
+    collection_created = False
+
     if milvus.has_collection(collection_name):
         info = milvus.describe_collection(collection_name)
         description = info.get("description") or ""
@@ -349,6 +424,7 @@ def store_embedded_records(
                 "Use clean_rebuild=true with typed confirmation to recreate."
             )
     else:
+        collection_created = True
         milvus.create_collection(
             collection_name=collection_name,
             schema=build_lean_v4_schema(),
@@ -358,19 +434,26 @@ def store_embedded_records(
 
     rows = [prepare_v4_insert_row(record) for record in records]
 
+    pruned_documents = 0
     if not clean_rebuild:
         unique_ids = sorted({row[DOCUMENT_ID_FIELD] for row in rows})
-        deleted = 0
-        for start in range(0, len(unique_ids), DELETE_BATCH_SIZE):
-            batch_ids = unique_ids[start : start + DELETE_BATCH_SIZE]
-            quoted = ", ".join(f'"{doc_id}"' for doc_id in batch_ids)
-            result = milvus.delete(
-                collection_name=collection_name,
-                filter=f"{DOCUMENT_ID_FIELD} in [{quoted}]",
+        stale_ids: list[str] = []
+        if prune_prefix and not collection_created:
+            # Checked before any write, so a refused prune leaves the index untouched.
+            milvus.load_collection(collection_name)
+            stale_ids = find_stale_document_ids(
+                milvus,
+                collection_name,
+                prune_prefix=prune_prefix,
+                current_ids=set(unique_ids),
             )
-            deleted += int(result.get("delete_count", 0) or 0)
+        deleted = delete_documents(milvus, collection_name, unique_ids)
         if deleted:
             print(f"Deleted {deleted} existing chunks for {len(unique_ids)} documents")
+        if stale_ids:
+            delete_documents(milvus, collection_name, stale_ids)
+            pruned_documents = len(stale_ids)
+            print(f"Pruned {pruned_documents} documents no longer in the source: {stale_ids[:20]}")
 
     inserted_count = 0
     batch: list[dict[str, Any]] = []
@@ -407,6 +490,7 @@ def store_embedded_records(
         sparse_ready=SPARSE_FIELD in index_names,
         clean_rebuild=clean_rebuild,
     )
+    metrics["pruned_documents"] = pruned_documents
     print("VALIDATION_METRICS=" + json.dumps(metrics, ensure_ascii=False, separators=(",", ":")))
     return metrics
 

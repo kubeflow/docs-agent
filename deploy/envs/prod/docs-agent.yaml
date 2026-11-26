@@ -15,3 +15,6 @@ mcp:
       value: production
 triage:
   enabled: true
+# Recurring ingest (Kubeflow Pipelines recurring runs) is registered from production only.
+ingest:
+  enabled: true

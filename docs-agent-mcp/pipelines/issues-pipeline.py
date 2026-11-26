@@ -37,6 +37,7 @@ def download_github_issues(
     labels: str,
     state: str,
     max_issues_per_repo: int,
+    updated_within_hours: int,
     github_token: str,
     issues_data: dsl.Output[dsl.Dataset]
 ):
@@ -53,6 +54,8 @@ def download_github_issues(
         labels: Comma-separated labels to filter (e.g., "kind/bug,kind/question")
         state: Issue state - "open", "closed", or "all"
         max_issues_per_repo: Maximum issues to fetch per repository
+        updated_within_hours: Only issues updated in the last N hours (0 = no limit).
+            Scheduled runs use a window longer than their interval; a first backfill uses 0.
         github_token: GitHub personal access token for API authentication
         issues_data: Output dataset path (JSONL)
     """
@@ -148,6 +151,14 @@ def download_github_issues(
             )
         return content
 
+    since = ""
+    if int(updated_within_hours) > 0:
+        from datetime import datetime, timedelta, timezone
+
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=int(updated_within_hours))
+        since = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
+        print(f"Only issues updated since {since}")
+
     for repo in repos.split(","):
         repo = repo.strip()
         if "/" not in repo:
@@ -165,9 +176,14 @@ def download_github_issues(
             params = {
                 "state": state,
                 "labels": labels,
+                # Most recently updated first, so the per-repo cap keeps active issues.
+                "sort": "updated",
+                "direction": "desc",
                 "per_page": 100,
                 "page": page
             }
+            if since:
+                params["since"] = since
 
             issues = api_request(url, params)
             if not issues:
@@ -597,10 +613,16 @@ def store_issues_milvus(
     description="RAG pipeline for GitHub issues ingestion"
 )
 def github_issues_rag_pipeline(
-    repos: str = "kubeflow/kubeflow,kubeflow/pipelines,kubeflow/manifests",
+    repos: str = (
+        "kubeflow/pipelines,kubeflow/trainer,kubeflow/notebooks,kubeflow/katib,kubeflow/sdk,"
+        "kubeflow/hub,kubeflow/spark-operator,kubeflow/community-distribution,kubeflow/dashboard,"
+        "kubeflow/website"
+    ),
     labels: str = "",
     state: str = "all",
     max_issues_per_repo: int = 200,
+    # 0 = no limit (backfill). Scheduled runs pass a window longer than their interval.
+    updated_within_hours: int = 0,
     github_token: str = "",
     chunk_size: int = 1500,
     chunk_overlap: int = 150,
@@ -617,6 +639,7 @@ def github_issues_rag_pipeline(
         labels=labels,
         state=state,
         max_issues_per_repo=max_issues_per_repo,
+        updated_within_hours=updated_within_hours,
         github_token=github_token,
     )
 

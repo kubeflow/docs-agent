@@ -27,3 +27,12 @@ corsPolicy:
 session-issuer.{{ .Values.namespaces.docsAgent }}.svc.cluster.local
 {{- end }}
 
+{{/*
+With TLS on, routes are served on the HTTPS listener only; port 80 is left to the
+ACME HTTP-01 solver (see templates/gateway.yaml).
+*/}}
+{{- define "gateway-guardrails.tlsPortMatch" -}}
+{{- if .Values.gateway.tls.enabled -}}
+port: 443
+{{- end }}
+{{- end }}

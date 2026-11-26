@@ -19,8 +19,10 @@ spec:
       match:
         - uri:
             exact: /api/session
+          {{- with include "gateway-guardrails.tlsPortMatch" . }}{{ . | nindent 10 }}{{- end }}
         - uri:
             exact: /.well-known/jwks.json
+          {{- with include "gateway-guardrails.tlsPortMatch" . }}{{ . | nindent 10 }}{{- end }}
       {{- include "gateway-guardrails.corsPolicy" . | nindent 6 }}
       timeout: 10s
       route:
@@ -34,6 +36,7 @@ spec:
       match:
         - uri:
             exact: /api/feedback
+          {{- with include "gateway-guardrails.tlsPortMatch" . }}{{ . | nindent 10 }}{{- end }}
       {{- include "gateway-guardrails.corsPolicy" . | nindent 6 }}
       timeout: 20s
       route:
@@ -54,6 +57,7 @@ spec:
       match:
         - uri:
             regex: "/(api/)?a2a/[A-Za-z0-9._~/-]+"
+          {{- with include "gateway-guardrails.tlsPortMatch" . }}{{ . | nindent 10 }}{{- end }}
       {{- include "gateway-guardrails.corsPolicy" . | nindent 6 }}
       # kagent-ui answers with `access-control-allow-origin: *`. Drop its CORS
       # headers so only corsPolicy (the allowed origins) decides.

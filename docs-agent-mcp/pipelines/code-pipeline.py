@@ -157,11 +157,16 @@ def chunk_and_embed_code(
     code_data: dsl.Input[dsl.Dataset],
     chunk_size: int,
     chunk_overlap: int,
+    exclude_resource_kinds: str,
     embeddings_service_url: str,
     embedding_batch_size: int,
     embedded_data: dsl.Output[dsl.Dataset],
 ):
     """Chunk code files using YAML-aware and Python AST-aware parsing, then embed.
+
+    exclude_resource_kinds: comma-separated Kubernetes kinds to leave out. Generated
+    CustomResourceDefinitions were more than half of the index and crowd out the
+    manifests people ask about.
 
     Routes files to the appropriate parser:
     - .yaml/.yml: Split at --- boundaries, extract K8s metadata
@@ -339,6 +344,7 @@ def chunk_and_embed_code(
 
     # --- End inline chunking logic ---
 
+    excluded_kinds = {kind.strip() for kind in exclude_resource_kinds.split(",") if kind.strip()}
     records = []
 
     with open(code_data.path, "r", encoding="utf-8") as f:
@@ -362,6 +368,7 @@ def chunk_and_embed_code(
             citation_url = file_data.get("citation_url") or f"https://github.com/{repo}/blob/main/{file_path}"
 
             chunks = chunk_code_file(content, file_path, chunk_size, chunk_overlap)
+            chunks = [chunk for chunk in chunks if chunk["resource_kind"] not in excluded_kinds]
 
             print(f"File: {file_path} -> {len(chunks)} chunks")
             if not chunks:
@@ -559,12 +566,15 @@ def store_code_milvus(
     description="RAG pipeline for ingesting Kubeflow code and YAML manifests"
 )
 def code_rag_pipeline(
-    repos: str = "kubeflow/manifests",
-    directory_paths: str = "apps/pipeline/upstream,apps/katib,common/istio,apps/jupyter",
+    # kubeflow/manifests was renamed; chunks indexed under the old repo name need a
+    # one-time delete (repo_name == "kubeflow/manifests") after the first run.
+    repos: str = "kubeflow/community-distribution",
+    directory_paths: str = "applications,common,experimental/helm",
     file_extensions: str = "yaml,yml,py,json",
     github_token: str = "",
     chunk_size: int = 1000,
     chunk_overlap: int = 100,
+    exclude_resource_kinds: str = "CustomResourceDefinition",
     embeddings_service_url: str = (
         "http://embeddings-service-predictor.ml-infra.svc.cluster.local/embed"
     ),
@@ -591,6 +601,7 @@ def code_rag_pipeline(
         code_data=download_task.outputs["code_data"],
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
+        exclude_resource_kinds=exclude_resource_kinds,
         embeddings_service_url=embeddings_service_url,
         embedding_batch_size=embedding_batch_size,
     )

@@ -17,10 +17,13 @@ data:
     q() { clickhouse-client --host "$CH_HOST" --user "$CH_USER" --password "$CH_PASSWORD" -q "$1"; }
     sed 's/#.*//' /policy/policy.txt | while read -r project days; do
       [ -n "$project" ] || continue
+      # A literal cutoff: the tables are replicated, and ClickHouse refuses a DELETE whose
+      # condition calls a non-deterministic function such as now().
+      cutoff=$(date -u -d "-$days days" '+%Y-%m-%d %H:%M:%S')
       for spec in events_full:start_time events_core:start_time observations:start_time \
                   traces:timestamp scores:timestamp blob_storage_file_log:created_at; do
         table=${spec%%:*}; column=${spec#*:}
-        where="project_id = '$project' AND $column < now() - INTERVAL $days DAY"
+        where="project_id = '$project' AND $column < toDateTime('$cutoff', 'UTC')"
         n=$(q "SELECT count() FROM $table WHERE $where")
         echo "$project $table: $n rows older than $days days"
         if [ "$n" -gt 0 ] && [ "$DRY_RUN" != "true" ]; then q "DELETE FROM $table WHERE $where"; fi

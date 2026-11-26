@@ -252,36 +252,22 @@ def render(pr: str, head: str, base_rev: str, base: dict, cand: dict, project_id
             "",
             f"<details><summary>{title} ({len(ids)})</summary>",
             "",
-            "| case | main | this PR | judge on this PR | |",
+            "| case | main | this PR | judge on this PR | traces |",
             "|---|---|---|---|---|",
         ]
         for cid in ids:
             b, p = diff["base"][cid], diff["pr"][cid]
             reason = plain(p["reason"])
-            lines.append(
-                f"| `{cid}` | {describe(b)} | {describe(p)} | {reason} | {trace_link(cand.get('recorded'), cid, project_id)} |"
+            traces = " · ".join(
+                t
+                for t in (
+                    trace_link(base.get("recorded"), cid, project_id, "main"),
+                    trace_link(cand.get("recorded"), cid, project_id, "this PR"),
+                )
+                if t
             )
+            lines.append(f"| `{cid}` | {describe(b)} | {describe(p)} | {reason} | {traces} |")
         lines += ["", "</details>"]
-    # Every case, so contributors can open any trace, not only the ones that changed.
-    lines += [
-        "",
-        f"<details><summary>All cases ({len(diff['pr'])})</summary>",
-        "",
-        "| case | main | this PR | traces |",
-        "|---|---|---|---|",
-    ]
-    for cid, p in diff["pr"].items():
-        b = diff["base"].get(cid)
-        traces = " · ".join(
-            t
-            for t in (
-                trace_link(base.get("recorded"), cid, project_id, "main"),
-                trace_link(cand.get("recorded"), cid, project_id, "this PR"),
-            )
-            if t
-        )
-        lines.append(f"| `{cid}` | {describe(b) if b else '–'} | {describe(p)} | {traces} |")
-    lines += ["", "</details>"]
     links = []
     if LANGFUSE_UI and project_id and (cand.get("recorded") or {}).get("dataset_id"):
         links.append(

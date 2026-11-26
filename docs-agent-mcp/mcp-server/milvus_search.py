@@ -11,6 +11,7 @@ import flo_tracing
 from embeddings_client import embed_query
 from intent_router import (
     downgrade_plan_for_collection,
+    merge_release_and_general_hits,
     pick_search_plan,
     rerank_hits_after_search,
     retrieval_metadata,
@@ -42,6 +43,10 @@ HYBRID_RANKER = os.getenv("HYBRID_RANKER", "rrf").strip().lower()
 HYBRID_DENSE_WEIGHT = float(os.getenv("HYBRID_DENSE_WEIGHT", "0.7"))
 HYBRID_SPARSE_WEIGHT = float(os.getenv("HYBRID_SPARSE_WEIGHT", "0.3"))
 HYBRID_RRF_K = int(os.getenv("HYBRID_RRF_K", "60"))
+# With a reranker configured, fetch at least this many candidates for it to choose from.
+# Reranking only the top_k that retrieval returned can reorder them but never rescue a
+# good chunk that ranked just below.
+RERANK_CANDIDATE_DEPTH = int(os.getenv("RERANK_CANDIDATE_DEPTH", "20"))
 
 client: MilvusClient | None = None
 _connect_lock = threading.Lock()
@@ -208,7 +213,11 @@ def search_docs_auto(
         has_release_fields=collection_has_release_fields(COLLECTION_NAME),
     )
 
+    import reranker_client
+
     fetch_limit = plan.candidate_depth or top_k
+    if reranker_client.enabled() and not plan.rerank_by_release_date:
+        fetch_limit = max(fetch_limit, RERANK_CANDIDATE_DEPTH)
     filter_expr = plan.filter_expr
     filter_fallback = False
     embedding = None
@@ -237,18 +246,36 @@ def search_docs_auto(
         kind = "hybrid_search" if plan.retrieval_mode == "hybrid" else "search"
         raise RuntimeError(f"Milvus {kind} failed for {COLLECTION_NAME}: {exc}") from exc
 
-    import reranker_client
-
     if plan.retrieval_mode == "bm25":
         hits = rerank_hits_after_search(plan, hits, query, fetch_limit)
         if not plan.rerank_by_release_date:
             hits = reranker_client.rerank_hits(query, hits)
+        general_added = 0
+        if plan.add_general_hits and not filter_fallback:
+            general_depth = max(top_k, RERANK_CANDIDATE_DEPTH) if reranker_client.enabled() else top_k
+            try:
+                general = hybrid_search(
+                    COLLECTION_NAME,
+                    query,
+                    _require_embedding(query),
+                    general_depth,
+                    output_fields,
+                )
+            except Exception as exc:
+                # The release-note hits are still a valid answer to a "latest" question.
+                print(f"General search for a latest/current query failed: {exc}")
+                general = []
+            general = reranker_client.rerank_hits(query, general)
+            merged = merge_release_and_general_hits(hits[:top_k], general, top_k)
+            general_added = sum(1 for hit in merged if hit.get("entity", {}).get("doc_type") != "release")
+            hits = merged
         hits = hits[:top_k]
         meta = retrieval_metadata(
             plan,
             candidate_depth=fetch_limit,
             filter_expr=filter_expr or None,
             filter_fallback=filter_fallback,
+            general_hits=general_added,
         )
         return hits, meta
     if plan.retrieval_mode == "hybrid":

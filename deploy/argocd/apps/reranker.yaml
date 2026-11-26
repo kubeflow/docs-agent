@@ -1,0 +1,19 @@
+# Cross-encoder reranker (TEI on CPU) used by the MCP server after retrieval.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: reranker
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/kubeflow/docs-agent
+    targetRevision: main
+    path: deploy/platform/reranker
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ml-infra
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

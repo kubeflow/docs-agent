@@ -16,7 +16,7 @@ UPSTREAM=${UPSTREAM:-origin}
 FORK=${FORK:-fork}
 REPO=kubeflow/docs-agent
 APPS=(deploy/argocd/apps/docs-agent.yaml deploy/argocd/apps/gateway-guardrails.yaml)
-IMAGES=(mcp-kubeflow-docs kubeflow-session-issuer)
+IMAGES=(mcp-kubeflow-docs kubeflow-session-issuer docs-rag-ingest)
 
 die() { echo "promote: $*" >&2; exit 1; }
 
@@ -42,7 +42,7 @@ old=$(git show "$UPSTREAM/main:${APPS[0]}" | sed -n 's/.*targetRevision: \([0-9a
 [ "$old" != "$new" ] || die "$short is already in production"
 git merge-base --is-ancestor "$old" "$new" || die "$short is older than production (${old:0:7}); to roll back, revert the promotion PR"
 
-# CI pushes both images on every main build, tagged with the short SHA.
+# CI pushes these images on every main build, tagged with the short SHA.
 for image in "${IMAGES[@]}"; do
   token=$(curl -fsS "https://ghcr.io/token?scope=repository:kubeflow/$image:pull" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
   code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" \
