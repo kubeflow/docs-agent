@@ -444,3 +444,33 @@ class TestFetchIssueComments:
             ],
         )
         assert "https://github.com/kubeflow/docs-agent/issues/9#issuecomment-1001" in md
+
+    def test_malformed_comment_non_dict_user(self):
+        # CodeRabbit on PR #310: a truthy non-dict user (e.g. "invalid")
+        # used to crash on user.get() and lose all collected comments.
+        def request_fn(url, params):
+            return [
+                {
+                    "user": "invalid",
+                    "created_at": "2026-01-16T10:00:00Z",
+                    "body": "First.",
+                    "html_url": "https://github.com/kubeflow/docs-agent/issues/9#issuecomment-1001",
+                },
+                _api_comment("bob", "2026-01-17T10:00:00Z", "Second.", ""),
+            ]
+
+        comments = fetch_issue_comments("kubeflow", "docs-agent", 9, request_fn)
+        assert comments == [
+            {
+                "author": "unknown",
+                "created_at": "2026-01-16",
+                "body": "First.",
+                "url": "https://github.com/kubeflow/docs-agent/issues/9#issuecomment-1001",
+            },
+            {
+                "author": "bob",
+                "created_at": "2026-01-17",
+                "body": "Second.",
+                "url": "",
+            },
+        ]

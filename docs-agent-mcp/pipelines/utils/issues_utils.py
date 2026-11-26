@@ -249,6 +249,8 @@ def fetch_issue_comments(
             if not isinstance(comment, dict):
                 continue
             user = comment.get("user") or {}
+            if not isinstance(user, dict):
+                user = {}
             comments.append(
                 {
                     "author": user.get("login", "unknown"),
