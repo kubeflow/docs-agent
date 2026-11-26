@@ -1,7 +1,10 @@
 # Pre-merge eval, part 1: deploys a pull request labelled `eval` (added by /eval, see
 # .github/workflows/pr-eval.yaml) into the shared preview namespace. One PR at a time:
 # the /eval workflow refuses while another PR holds the label. Removing the label
-# deletes the Application and everything it deployed.
+# deletes the Application but keeps what it deployed: every preview uses the same
+# names in the same namespace, and the next PR's Application takes those objects over.
+# Deleting them instead races with that takeover and can leave the Agents stuck
+# terminating while kagent recreates their Deployments.
 #
 # The commit deployed is the one the maintainer reviewed, pinned by the workflow in a
 # second label `eval-sha:<sha>`, not the PR's head: commits pushed after /eval are not
@@ -14,6 +17,8 @@ metadata:
 spec:
   goTemplate: true
   goTemplateOptions: ["missingkey=error"]
+  syncPolicy:
+    preserveResourcesOnDeletion: true
   generators:
     - pullRequest:
         github:
