@@ -15,6 +15,7 @@ sys.path.insert(0, str(PIPELINES_DIR / "utils"))
 from issues_utils import (
     build_issue_record,
     build_metadata_prefix,
+    fetch_issue_comments,
     format_issue_markdown,
     has_structured_metadata,
     issue_content_segments,
@@ -88,11 +89,13 @@ SAMPLE_STRUCTURED_RECORD = build_issue_record(
             "author": "alice",
             "created_at": "2026-01-16",
             "body": "Have you tried setting memory limits in your InferenceService spec?",
+            "url": "https://github.com/kubeflow/kubeflow/issues/42#issuecomment-1001",
         },
         {
             "author": "bob",
             "created_at": "2026-01-17",
             "body": "Fixed by upgrading KServe to v0.12. The GPU memory allocation was improved.",
+            "url": "https://github.com/kubeflow/kubeflow/issues/42#issuecomment-1002",
         },
     ],
 )
@@ -309,3 +312,165 @@ class TestSplitIssueIntoChunks:
     def test_handles_empty_content(self):
         chunks = split_issue_into_chunks("", "prefix\n\n", chunk_size=1000)
         assert len(chunks) == 1
+
+
+def _api_comment(login, created_at, body, html_url):
+    """Build one fake GitHub API comment dict."""
+    return {
+        "user": {"login": login} if login is not None else None,
+        "created_at": created_at,
+        "body": body,
+        "html_url": html_url,
+    }
+
+
+class TestFetchIssueComments:
+    """Tests for fetch_issue_comments (mocked request_fn, no network)."""
+
+    def test_maps_author_date_body_url(self):
+        def request_fn(url, params):
+            assert url == ("https://api.github.com/repos/kubeflow/docs-agent/issues/9/comments")
+            assert params == {"per_page": 100, "page": 1}
+            return [
+                _api_comment(
+                    "alice",
+                    "2026-01-16T10:00:00Z",
+                    "Have you tried setting memory limits?",
+                    "https://github.com/kubeflow/docs-agent/issues/9#issuecomment-1001",
+                )
+            ]
+
+        comments = fetch_issue_comments("kubeflow", "docs-agent", 9, request_fn)
+        assert comments == [
+            {
+                "author": "alice",
+                "created_at": "2026-01-16",
+                "body": "Have you tried setting memory limits?",
+                "url": "https://github.com/kubeflow/docs-agent/issues/9#issuecomment-1001",
+            }
+        ]
+
+    def test_pagination_two_pages(self):
+        def request_fn(url, params):
+            if params["page"] == 1:
+                return [_api_comment("a", "2026-01-01T00:00:00Z", f"c{i}", "") for i in range(100)]
+            return [_api_comment("b", "2026-01-02T00:00:00Z", "last", "")]
+
+        comments = fetch_issue_comments("kubeflow", "docs-agent", 9, request_fn)
+        assert len(comments) == 101
+        assert comments[0]["author"] == "a"
+        assert comments[-1]["author"] == "b"
+
+    def test_empty_comments_returns_empty(self):
+        comments = fetch_issue_comments("kubeflow", "docs-agent", 9, lambda url, params: [])
+        assert comments == []
+
+    def test_malformed_comment_missing_user_body(self):
+        def request_fn(url, params):
+            return [
+                {"created_at": "2026-01-16T10:00:00Z", "body": None},
+                "not-a-dict",
+            ]
+
+        comments = fetch_issue_comments("kubeflow", "docs-agent", 9, request_fn)
+        assert comments == [
+            {
+                "author": "unknown",
+                "created_at": "2026-01-16",
+                "body": "",
+                "url": "",
+            }
+        ]
+
+    def test_failed_fetch_returns_empty_and_warns(self, capsys):
+        comments = fetch_issue_comments("kubeflow", "docs-agent", 9, lambda url, params: None)
+        assert comments == []
+        captured = capsys.readouterr()
+        assert "WARNING: Failed to fetch comments" in captured.out
+        assert "kubeflow/docs-agent#9" in captured.out
+
+    def test_failed_second_page_keeps_first_page_and_warns(self, capsys):
+        def request_fn(url, params):
+            if params["page"] == 1:
+                return [_api_comment("a", "2026-01-01T00:00:00Z", "c0", "") for _ in range(100)]
+            return None
+
+        comments = fetch_issue_comments("kubeflow", "docs-agent", 9, request_fn)
+        assert len(comments) == 100
+        captured = capsys.readouterr()
+        assert "WARNING: Failed to fetch comments" in captured.out
+
+    def test_comment_segment_includes_url_when_present(self):
+        segments = issue_content_segments(SAMPLE_STRUCTURED_RECORD)
+        assert "https://github.com/kubeflow/kubeflow/issues/42#issuecomment-1001" in segments[1]
+        assert "https://github.com/kubeflow/kubeflow/issues/42#issuecomment-1002" in segments[2]
+
+    def test_comment_without_url_still_renders_old_format(self):
+        record = build_issue_record(
+            repo_name="kubeflow/kubeflow",
+            repo_short_name="kubeflow",
+            issue_number=42,
+            title="KServe model not loading",
+            url="https://github.com/kubeflow/kubeflow/issues/42",
+            labels="",
+            state="open",
+            created_at="2026-01-15",
+            updated_at="2026-01-20",
+            body="Body.",
+            comments=[{"author": "alice", "created_at": "2026-01-16", "body": "Hi."}],
+        )
+        segments = issue_content_segments(record)
+        assert segments[1] == "**Comment by @alice** (2026-01-16):\nHi."
+        assert "http" not in segments[1]
+
+    def test_format_issue_markdown_includes_comment_url(self):
+        md = format_issue_markdown(
+            title="T",
+            repo_name="kubeflow/docs-agent",
+            issue_number=9,
+            url="https://github.com/kubeflow/docs-agent/issues/9",
+            labels="",
+            state="open",
+            created_at="2026-01-30",
+            updated_at="2026-03-22",
+            body="Body.",
+            comments=[
+                {
+                    "author": "alice",
+                    "created_at": "2026-01-16",
+                    "body": "Hi.",
+                    "url": "https://github.com/kubeflow/docs-agent/issues/9#issuecomment-1001",
+                }
+            ],
+        )
+        assert "https://github.com/kubeflow/docs-agent/issues/9#issuecomment-1001" in md
+
+    def test_malformed_comment_non_dict_user(self):
+        # CodeRabbit on PR #310: a truthy non-dict user (e.g. "invalid")
+        # used to crash on user.get() and lose all collected comments.
+        def request_fn(url, params):
+            return [
+                {
+                    "user": "invalid",
+                    "created_at": "2026-01-16T10:00:00Z",
+                    "body": "First.",
+                    "html_url": "https://github.com/kubeflow/docs-agent/issues/9#issuecomment-1001",
+                },
+                _api_comment("bob", "2026-01-17T10:00:00Z", "Second.", ""),
+            ]
+
+        comments = fetch_issue_comments("kubeflow", "docs-agent", 9, request_fn)
+        assert comments == [
+            {
+                "author": "unknown",
+                "created_at": "2026-01-16",
+                "body": "First.",
+                "url": "https://github.com/kubeflow/docs-agent/issues/9#issuecomment-1001",
+            },
+            {
+                "author": "bob",
+                "created_at": "2026-01-17",
+                "body": "Second.",
+                "url": "",
+            },
+        ]
