@@ -123,10 +123,14 @@ def parse_python_ast(content: str, file_path: str = "") -> list[dict]:
             "file_type": "python",
         }]
 
-    # Extract module header (everything before first function/class)
-    first_node_line = nodes[0].lineno  # 1-indexed
-    if first_node_line > 1:
-        header = "\n".join(lines[:first_node_line - 1]).strip()
+    # Extract module header (everything before the first function/class). Use
+    # the decorator line as the boundary when the first node is decorated, so
+    # the decorator is not duplicated in both the header and the function chunk.
+    first_start_line = nodes[0].lineno  # 1-indexed
+    if nodes[0].decorator_list:
+        first_start_line = nodes[0].decorator_list[0].lineno
+    if first_start_line > 1:
+        header = "\n".join(lines[:first_start_line - 1]).strip()
         if header and len(header) >= 10:
             chunks.append({
                 "content": header,
