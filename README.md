@@ -1,58 +1,82 @@
-# Kubeflow Documentation AI Assistant
+# Kubeflow Documentation AI Assistant (Flo)
 
 **Author**: Santhosh Toorpu
 
 [![KEP-867](https://img.shields.io/badge/KEP-867-Documentation%20AI%20Assistant-blue)](https://github.com/kubeflow/community/issues/867)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.11-blue.svg)](https://www.python.org/)
+[![Milvus](https://img.shields.io/badge/Milvus-v2.6%2B-blue.svg)](https://milvus.io/)
+[![FastMCP](https://img.shields.io/badge/FastMCP-Enabled-green.svg)](https://github.com/jlowin/fastmcp)
+[![Model](https://img.shields.io/badge/Model-Gemma%204%20E4B-orange.svg)](https://huggingface.co/google/gemma-4-E4B-it)
 
-The official LLM implementation of the Kubeflow Documentation Assistant powered by Retrieval-Augmented Generation (RAG). This repository provides a comprehensive solution for Kubeflow users to search across documentation and get accurate, contextual answers to their queries.
+The official LLM implementation of the Kubeflow Documentation Assistant (**Flo / ARISE FLO**) powered by Retrieval-Augmented Generation (RAG) and the Model Context Protocol (MCP). This system provides an intelligent, contextual assistant for Kubeflow users to search across documentation, GitHub issues, and code manifests to get accurate, grounded answers to their questions.
+
+<p align="center">
+  <img src="assets/flo_avatar.png" alt="Flo AI Assistant Avatar" width="120" />
+</p>
+
+---
 
 ## Table of Contents
 
 - [Overview](#overview)
-- [Architecture](#architecture)
-- [Prerequisites](#prerequisites)
-- [Installation](#installation)
+  - [Why This Project Exists](#why-this-project-exists)
+  - [Key Features](#key-features)
+- [Architecture & Design](#architecture--design)
+  - [High-Level Architecture](#high-level-architecture)
+  - [RAG v4 & Intent Routing](#rag-v4--intent-routing)
+  - [Two-Stage Retrieval: TEI Cross-Encoder Reranking & Sentence Compression](#two-stage-retrieval-tei-cross-encoder-reranking--sentence-compression)
+- [Repository Layout](#repository-layout)
+- [Model Serving Runtime (`llm-runtime`)](#model-serving-runtime-llm-runtime)
+- [FastMCP Server & Available Tools](#fastmcp-server--available-tools)
+- [RAG Ingestion Pipelines](#rag-ingestion-pipelines)
+  - [Pipelines Overview](#pipelines-overview)
+  - [In-Cluster TEI Embeddings Service](#in-cluster-tei-embeddings-service)
+  - [Pipeline Details & Manifests](#pipeline-details--manifests)
+- [Frontend Widget & Local Development](#frontend-widget--local-development)
+  - [Chatbot Widget & User Feedback](#chatbot-widget--user-feedback)
+  - [Local Mock Server for UI Testing](#local-mock-server-for-ui-testing)
+- [Automated Nightly Feedback Triage](#automated-nightly-feedback-triage)
+- [Observability & Tracing](#observability--tracing)
+- [Evaluation & Testing](#evaluation--testing)
+- [Prerequisites & Infrastructure Installation](#prerequisites--infrastructure-installation)
+  - [Prerequisites](#prerequisites)
   - [Milvus Vector Database](#milvus-vector-database)
-  - [KServe Inference Service](#kserve-inference-service)
-  - [Kubeflow Pipelines](#kubeflow-pipelines)
-  - [API Server](#api-server)
-- [Usage](#usage)
+  - [Gateway Guardrails & Edge Security](#gateway-guardrails--edge-security)
 - [Configuration](#configuration)
 - [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
+- [License & Acknowledgments](#license)
+- [Modern Infrastructure & CI/CD (Kagent & MCP)](#modern-infrastructure--cicd-kagent--mcp)
 
-## Repository layout
-
-| Path | Purpose |
-|------|---------|
-| `docs-agent-mcp/` | MCP server, Kagent manifests, RAG pipelines, and Terraform platform stack |
-| `docs/agents/` | Issue-triage instruction Markdown, labels (`area/mcp`, …), architecture map |
-| `legacy/` | Historical FastAPI servers, older manifests, and Feast-era pipeline copies |
-| `frontend/` | Docs site chatbot assets (`docs_scripts/`, `docs_styles/`) |
-| `.github/workflows/` | CI/CD (`oke-cicd.yaml` builds MCP, runs tests, deploys to OKE) |
+---
 
 ## Overview
 
 ### Why This Project Exists
 
-Kubeflow users often struggle to find relevant information across the extensive documentation scattered across different services, components, and repositories. The traditional search approach lacks context and often returns irrelevant results. This documentation assistant addresses these challenges by:
+Kubeflow users often navigate an extensive ecosystem spanning multiple components, distributions, and repositories. Finding relevant configurations, version-specific installation instructions, or debugging active issues can be difficult with traditional keyword-based search. 
 
-- **Semantic Search**: Understanding the intent behind queries rather than just keyword matching
-- **Contextual Responses**: Providing answers based on the most relevant documentation chunks
-- **Real-time Processing**: Enabling instant responses through streaming APIs
-- **Scalable Architecture**: Leveraging Kubernetes for automatic scaling and resource management
+**Flo** addresses these challenges by combining:
+- **Multi-Source RAG**: Unified retrieval across official documentation, GitHub issues/discussions, and Kubernetes component manifests.
+- **Two-Stage Re-Ranking & Compression**: Candidate hits retrieved via hybrid vector + BM25 search are reranked with a dedicated cross-encoder and compressed to preserve high-density context within strict model limits.
+- **Agentic Model Context Protocol (MCP)**: Deterministic intent routing and structured citations ensure answers are grounded without hallucinations.
+- **Continuous Quality Feedback**: Built-in thumbs up/down user feedback in the chat widget connected to nightly triage jobs that categorize gaps using an LLM-as-a-judge.
 
 ### Key Features
 
-- 🔍 **Intelligent Search**: Semantic search across Kubeflow documentation
-- 🤖 **AI-Powered Responses**: Contextual answers using Llama 3.1-8B model
-- ⚡ **Real-time Streaming**: WebSocket and HTTP streaming support
-- 🔧 **Tool Calling**: Automatic documentation lookup when needed
-- 📊 **Vector Database**: Milvus for efficient similarity search
-- 🚀 **Kubernetes Native**: Built for cloud-native environments
-- 🔄 **Automated ETL**: Kubeflow Pipelines for data processing
+- 🤖 **Production SLM Serving**: Powered by **Google's Gemma 4 E4B** (`google/gemma-4-E4B-it`) served via vLLM for high-throughput, low-latency contextual reasoning.
+- 🔍 **3-Tool FastMCP Server**: Native FastMCP tools for searching documentation, GitHub issues, and code/manifests with parameter boundaries and metadata filters.
+- ⚡ **RAG v4 Hybrid Retrieval**: Dense 768-d MPNet embeddings combined with native Milvus BM25 sparse search and typed `release_date` temporal routing.
+- 🎯 **TEI Cross-Encoder Reranking**: In-cluster Text Embeddings Inference (TEI) reranking (`BAAI/bge-reranker-large`) for precision top-K scoring.
+- ✂️ **Extractive Sentence Compression**: Token-aware lexical scoring that keeps sentences, lists, and markdown tables intact while eliminating irrelevant filler.
+- 🔄 **Automated Kubeflow Pipelines**: Scheduled ingestion pipelines for docs, issues, code, and incremental updates calling an in-cluster TEI embedding service.
+- 👍 **User Feedback & Triage**: Interactive thumbs up/down feedback widget logged to Langfuse, triaged nightly by a dedicated `flo-judge` model to identify content gaps.
+- 📊 **Comprehensive Observability**: OpenTelemetry spans and Langfuse tracing across every tool execution, retrieval step, and embedding call.
 
-## Architecture
+---
+
+## Architecture & Design
 
 ### High-Level Architecture
 
@@ -62,46 +86,229 @@ Kubeflow users often struggle to find relevant information across the extensive 
 
 ![Data Flow](assets/querying.svg)
 
-## RAG v4
+### RAG v4 & Intent Routing
 
-Production docs retrieval uses Milvus v4 hybrid search (768-d MPNet + native
-BM25), typed `release_date`, and a deterministic MCP intent router
-(`SEARCH_MODE=auto`). Structured citations flow to the chatbot UI; the LLM
-never renders URLs.
+Production docs retrieval operates under the **RAG v4** data contract against Milvus (`kubeflow_docs` collection):
+- **Embeddings**: 768-dimensional MPNet embeddings generated via Hugging Face Text Embeddings Inference (TEI).
+- **Hybrid Retrieval**: Combines dense vector similarity with native BM25 sparse search.
+- **Deterministic Intent Router (`SEARCH_MODE=auto`)**: Resolves user queries into specific retrieval modes (temporal/version queries route to BM25 with `release_date` sorting; conceptual queries use hybrid search with 0.3 dense / 0.7 sparse weights).
+- **Structured Citations**: The model never prints raw URLs. Structured citation objects flow directly to the frontend widget to render clickable source pills.
 
-Full architecture, eval numbers, and artifact trail:
-**[docs/RAG_V4_ARCHITECTURE.md](docs/RAG_V4_ARCHITECTURE.md)**
+Full architecture, eval numbers, and artifact trails: **[docs/RAG_V4_ARCHITECTURE.md](docs/RAG_V4_ARCHITECTURE.md)**.
 
-| Component | Location |
-| --- | --- |
-| Ingest pipeline | `docs-agent-mcp/pipelines/kubeflow-pipeline.py` |
-| Parser/chunker | `docs-agent-mcp/pipelines/canonical_rag_ingest.py` |
-| MCP router + citations | `docs-agent-mcp/mcp-server/server.py` |
-| Milvus infra | `docs-agent-mcp/terraform/milvus.tf` |
+### Two-Stage Retrieval: TEI Cross-Encoder Reranking & Sentence Compression
 
-## Prerequisites
+To optimize context precision and fit within token budgets, `search_kubeflow_docs` applies a two-stage retrieval pipeline:
 
-- Kubernetes cluster (1.20+)
+1. **Candidate Retrieval**: Hybrid search retrieves the top candidates from Milvus.
+2. **TEI Cross-Encoder Reranking**: Candidates are sent to the in-cluster TEI reranker service running `BAAI/bge-reranker-large` (`docs-agent-mcp/mcp-server/reranker_client.py`), which scores query-document pairs jointly.
+3. **Extractive Context Compression**: The compressor (`docs-agent-mcp/mcp-server/compressor.py`) scores individual sentences lexically, allocates character budgets across ranked hits, and preserves markdown headers, code blocks, bullet lists, and tables within `DOCS_CONTEXT_MAX_CHARS` (default: 4000).
+
+---
+
+## Repository Layout
+
+| Path | Purpose |
+|------|---------|
+| `docs-agent-mcp/` | FastMCP server, Kagent agent manifests, RAG pipelines, Helm charts, and Terraform platform stack |
+| `docs-agent-mcp/charts/` | Production Helm charts: `docs-agent` (MCP + Kagent), `llm-runtime` (vLLM / Gemma 4), and `gateway-guardrails` |
+| `docs-agent-mcp/pipelines/` | Kubeflow Pipelines: documentation, GitHub issues, code, and incremental ingestion |
+| `docs-agent-mcp/session-issuer/` | FastAPI microservice issuing anonymous RS256 session JWTs for chat auth |
+| `frontend/` | Docs site chatbot widget (`docs_scripts/chatbot.js`, `docs_styles/chatbot.css`) and local test harness (`demo/`) |
+| `docs/agents/` | Issue triage documentation, area mappings (`area-map.json`), and triage labels |
+| `tests/eval/` | Small Language Model (SLM) tool-use eval suite, Prompt Lab, and golden datasets |
+| `deploy/` | Argo CD GitOps Application definitions, environment values (`prod`, `staging`), and promotion scripts |
+| `legacy/` | Historical standalone FastAPI servers (`server/`, `server-https/`), older manifests, and Feast pipeline copies |
+| `.github/workflows/` | CI/CD test workflows (`tests.yml`, `oke-cicd.yaml`) and pre-merge `/eval` workflows |
+
+---
+
+## Model Serving Runtime (`llm-runtime`)
+
+The primary assistant is powered by **Google's Gemma 4 E4B** (`google/gemma-4-E4B-it`), served with vLLM v0.30.0 for high-performance inference, custom chat templating, and tool-calling support. A second GPU runtime is deployed as **`flo-judge`** (using Qwen2.5) for automated quality evaluations and nightly issue triage.
+
+Model serving is managed declaratively via the `llm-runtime` Helm chart (`docs-agent-mcp/charts/llm-runtime/`).
+
+<details>
+<summary><b>View LLM Runtime Configuration & Values</b></summary>
+
+```yaml
+# docs-agent-mcp/charts/llm-runtime/values.yaml
+model:
+  name: "flo-llm"
+  id: "google/gemma-4-E4B-it"
+  maxModelLen: 32768
+  gpuMemoryUtilization: 0.90
+  tensorParallelSize: 1
+
+resources:
+  requests:
+    cpu: "4"
+    memory: "16Gi"
+    nvidia.com/gpu: "1"
+  limits:
+    cpu: "8"
+    memory: "32Gi"
+    nvidia.com/gpu: "1"
+
+vllm:
+  image:
+    repository: "vllm/vllm-openai"
+    tag: "v0.30.0"
+  extraArgs:
+    - "--enable-auto-tool-choice"
+    - "--tool-call-parser=gemma4"
+```
+
+*Note: Historical standalone KServe manifests for Llama 3.1-8B have been archived in [`legacy/manifests/`](legacy/manifests).*
+</details>
+
+---
+
+## FastMCP Server & Available Tools
+
+The MCP server is implemented with **FastMCP** (`docs-agent-mcp/mcp-server/server.py`) and exposes three production tools with bounded inputs, query normalization, and structured citations:
+
+1. **`search_kubeflow_docs(query: str, top_k: int = 5)`**:
+   - Searches official documentation in `kubeflow_docs`.
+   - Automatically applies intent routing (`SEARCH_MODE=auto`), cross-encoder reranking, and extractive compression.
+   - Emits structured citation metadata (`structured_content.citations`) and router provenance (`structured_content.retrieval`).
+
+2. **`search_github_issues(query: str, top_k: int = 5, repo: str = "", state: str = "")`**:
+   - Searches historical GitHub issues and discussion threads in `issues_rag`.
+   - Supports safe filtering by repository (e.g., `kubeflow/manifests`, `kubeflow/pipelines`) and state (`open` or `closed`).
+
+3. **`search_kubeflow_code(query: str, top_k: int = 5, resource_kind: str = "", repo: str = "")`**:
+   - Searches repository code, component scripts, and Kubernetes YAML manifests in `code_rag`.
+   - Supports filtering by Kubernetes `resource_kind` (e.g., `InferenceService`, `PipelineRun`, `ConfigMap`) and repository.
+
+<details>
+<summary><b>View Tool Definition Example & Arguments</b></summary>
+
+```python
+@mcp.tool()
+@flo_tracing.traced("tool", inputs=("query", "top_k"))
+def search_kubeflow_docs(query: str, top_k: int = 5) -> ToolResult:
+    """Search Kubeflow documentation. Search mode is chosen here, not by the LLM."""
+    query, top_k = _search_args(query, top_k)
+    hits, retrieval_meta = search_docs_auto(query, top_k, DOCS_OUTPUT_FIELDS)
+    hits = compressor.compress_hits(query, hits, DOCS_CONTEXT_MAX_CHARS)
+    body, citations = format_docs_hits(hits)
+    return search_tool_result(body, citations, retrieval=retrieval_meta)
+```
+
+The MCP server runs in-cluster and communicates with Kagent via the streaming Agent-to-Agent (A2A) protocol. Historical standalone REST/WebSocket servers are archived in [`legacy/server/`](legacy/server) and [`legacy/server-https/`](legacy/server-https).
+</details>
+
+---
+
+## RAG Ingestion Pipelines
+
+### Pipelines Overview
+
+The ETL (Extract, Transform, Load) processes are implemented as Kubeflow Pipelines (`docs-agent-mcp/pipelines/`):
+
+- **Documentation Ingestion (`kubeflow-pipeline.py`)**: Traverses documentation trees, parses Hugo/Markdown frontmatter, extracts release dates, splits into token-bounded chunks, embeds via TEI, and uploads into `kubeflow_docs`.
+- **GitHub Issues Ingestion (`issues-pipeline.py`)**: Extracts issues, PR discussions, and comments with metadata (state, labels, author, reactions) into `issues_rag`.
+- **Code & Manifest Ingestion (`code-pipeline.py`)**: Ingests repository files and YAML manifests, parsing Kubernetes resource kinds into `code_rag`.
+- **Incremental Ingestion (`incremental-pipeline.py`)**: Synchronizes doc changes incrementally by comparing git commits and updating only modified files.
+
+### In-Cluster TEI Embeddings Service
+
+Instead of bundling heavy PyTorch libraries and sentence-transformers models inside the pipeline images:
+- Pipeline components run as lightweight `python:3.11-slim` containers (`Dockerfile.pipeline`).
+- Chunk embeddings are computed over HTTP via an in-cluster **Text Embeddings Inference (TEI)** service (`sentence-transformers/all-mpnet-base-v2` / `BAAI/bge-base-en-v1.5`).
+- Embeddings and native BM25 text are written directly to Milvus via `pymilvus` (Feast has been removed).
+
+<details>
+<summary><b>View Pipeline Execution & Compilation</b></summary>
+
+```bash
+# Compile pipelines to YAML packages
+cd docs-agent-mcp/pipelines
+python3 kubeflow-pipeline.py   # outputs kubeflow_docs_rag_pipeline.yaml
+python3 issues-pipeline.py     # outputs github_issues_rag_pipeline.yaml
+python3 code-pipeline.py       # outputs code_rag_pipeline.yaml
+python3 incremental-pipeline.py
+
+# Submit a pipeline run directly to Kubeflow Pipelines
+python3 submit_run.py \
+  --pipeline-package kubeflow_docs_rag_pipeline.yaml \
+  --run-name "manual-docs-ingest" \
+  --experiment-name "docs-agent"
+```
+</details>
+
+---
+
+## Frontend Widget & Local Development
+
+### Chatbot Widget & User Feedback
+
+The documentation assistant UI (`frontend/docs_scripts/chatbot.js` and `frontend/docs_styles/chatbot.css`) is an interactive chat widget styled with Material 3 tokens:
+- **Streaming Tokens**: Real-time markdown rendering and code syntax highlighting.
+- **Structured Citations**: Clickable source pills displaying referenced doc titles, sections, and repository links.
+- **Helpful / Unhelpful Feedback**: A "Helpful?" bar appears beneath completed turns. Users can submit thumbs up or down with optional feedback comments, which are sent to the gateway feedback service (`POST /api/feedback`) and recorded in Langfuse.
+
+### Local Mock Server for UI Testing
+
+Developers can test and iterate on the chatbot frontend locally without a Kubernetes cluster using the bundled mock server:
+
+```bash
+# Start the local mock server
+python3 frontend/demo/mock_server.py
+```
+Open `http://localhost:8000/demo/index.html` in your browser. The mock server serves the frontend assets and simulates the streaming A2A agent protocol with canned markdown and code responses.
+
+---
+
+## Automated Nightly Feedback Triage
+
+To ensure ongoing answer quality and identify documentation gaps:
+- A nightly Kubernetes CronJob (`docs-agent-mcp/charts/docs-agent/templates/triage-cronjob.yaml`) runs daily at 03:00 UTC.
+- The triage runner (`tests/feedback/triage.py`) pulls negative feedback scores (`user_feedback=false`) from Langfuse.
+- Negative turns are probed with the live MCP server and evaluated by `flo-judge`.
+- The evaluation classifies failures into categories (e.g., `content_gap`, `hallucination`, `retrieval_failure`) and generates a Markdown report attributing issues to the correct component repository using [`docs/agents/area-map.json`](docs/agents/area-map.json).
+
+---
+
+## Observability & Tracing
+
+Full observability is built into the MCP server via `docs-agent-mcp/mcp-server/flo_tracing.py`:
+- **Langfuse Integration**: Traces user sessions, MCP tool calls, Milvus search parameters, retrieval modes, and embedding generation spans.
+- **OpenTelemetry**: OpenTelemetry spans are emitted and collected by the in-cluster collector (`deploy/platform/otel-collector/`).
+- **Data Retention**: Automated CronJob (`deploy/platform/langfuse-retention/`) trims traces older than 4 weeks for production and 2 weeks for evaluations.
+
+---
+
+## Evaluation & Testing
+
+Quality regression testing and model benchmarks are located under `tests/eval/`:
+
+- **Small Model Tool-Use Evals (`tests/eval/slm_tool_eval.py`)**: Tests candidate models across 97 test cases (x3 repeats) for tool schema adherence, streaming latency, and argument formatting. See [tests/eval/SLM_EVALS.md](tests/eval/SLM_EVALS.md).
+- **Prompt Lab (`tests/eval/prompt_lab.py`)**: Live harness to evaluate prompt variations against retrieval accuracy and defining terms.
+- **Showcase Evals (`tests/eval/run_showcase_eval.py`)**: Evaluates core regression queries defined in `tests/eval/queries.json`.
+
+Run unit and integration tests locally:
+```bash
+pytest
+```
+
+---
+
+## Prerequisites & Infrastructure Installation
+
+### Prerequisites
+
+- Kubernetes cluster (1.28+)
 - Helm 3.x
-- Kubeflow Pipelines
-- GPU nodes (for LLM inference)
-- SSL certificate (for HTTPS API)
-
-## Installation
+- Kubeflow Pipelines v2
+- GPU nodes (`nvidia.com/gpu >= 1` for LLM inference)
 
 ### Milvus Vector Database
 
-#### What is Milvus?
-
-Milvus is an open-source vector database designed for AI applications. It provides:
-
-- **High Performance**: Optimized for vector similarity search
-- **Scalability**: Horizontal scaling capabilities
-- **Multiple Index Types**: Support for various vector indexing algorithms
-- **Cloud Native**: Built for Kubernetes environments
-- **Multiple APIs**: REST, gRPC, and Python SDK support
-
-#### Installation Steps
+<details>
+<summary><b>View Milvus Helm Deployment Steps</b></summary>
 
 1. **Add Helm Repository**:
    ```bash
@@ -109,7 +316,7 @@ Milvus is an open-source vector database designed for AI applications. It provid
    helm repo update
    ```
 
-2. **Install Milvus**:
+2. **Install Milvus Standalone**:
    ```bash
    helm upgrade --install my-release zilliztech/milvus -n docs-agent \
      --set cluster.enabled=false \
@@ -123,598 +330,94 @@ Milvus is an open-source vector database designed for AI applications. It provid
      --set standalone.podAnnotations."sidecar\.istio\.io/inject"="false"
    ```
 
-#### Configuration Rationale
-
-- **Standalone Mode**: Single-node deployment for development/testing
-- **Single etcd Replica**: Reduced resource usage with `etcd.persistence.enabled=false`
-- **Standalone MinIO**: Single MinIO instance for object storage
-- **Disabled Pulsar**: Not needed for standalone deployment
-- **Istio Sidecar Injection**: Disabled to avoid networking issues
-
-3. **Test Connection**:
-   ```python
-   from pymilvus import connections
-   connections.connect("default", host="my-release-milvus.docs-agent.svc.cluster.local", port="19530")
-   print("Connected to Milvus successfully!")
-   ```
-
-4. **External Access** (if needed for different clusters):
+3. **Configure KFP Access RBAC**:
    ```bash
-   kubectl expose service my-release-milvus \
-     --name milvus-external \
-     --type=NodePort \
-     --port=19530
+   kubectl create role milvus-access \
+     --namespace docs-agent \
+     --verb=get,list,watch \
+     --resource=services,endpoints
+
+   kubectl create rolebinding kfp-to-milvus-editor \
+     --namespace docs-agent \
+     --role=milvus-access \
+     --serviceaccount=kubeflow:default-editor
    ```
+</details>
 
-### KServe Inference Service
+### Gateway Guardrails & Edge Security
 
-The LLM inference is handled by KServe with vLLM backend for high-performance serving.
+The edge gateway is deployed via the `gateway-guardrails` Helm chart (`docs-agent-mcp/charts/gateway-guardrails/`):
+- **Rate Limiting**: 60 req/min global token bucket on the public HTTPS listener.
+- **CORS Lockdown**: Restricts chat requests to verified documentation domains.
+- **Session Auth**: Integrates with `session-issuer` to enforce anonymous JWT verification on `/a2a/*` and `/api/feedback`.
 
-#### Serving Runtime Configuration
-
-```yaml
-# manifests/serving-runtime.yaml
-apiVersion: serving.kserve.io/v1alpha1
-kind: ServingRuntime
-metadata:
-  name: llm-runtime
-  namespace: docs-agent
-spec:
-  supportedModelFormats:
-    - name: huggingface
-      version: "1"
-      autoSelect: true
-  containers:
-    - name: kserve-container
-      image: kserve/huggingfaceserver:latest-gpu
-      command: ["python", "-m", "huggingfaceserver"]
-      resources:
-        requests:
-          cpu: "4"
-          memory: "16Gi"
-          nvidia.com/gpu: "1"
-        limits:
-          cpu: "6"
-          memory: "24Gi"
-          nvidia.com/gpu: "1"
-```
-
-#### Inference Service Configuration
-
-```yaml
-# manifests/inference-service.yaml
-apiVersion: serving.kserve.io/v1beta1
-kind: InferenceService
-metadata:
-  name: llama
-  namespace: docs-agent
-spec:
-  predictor:
-    model:
-      modelFormat:
-        name: huggingface
-        version: "1"
-      runtime: llm-runtime
-      args:
-        - --model_name=llama3.1-8B
-        - --model_id=RedHatAI/Llama-3.1-8B-Instruct
-        - --backend=vllm
-        - --max-model-len=32768
-        - --gpu-memory-utilization=0.90
-        - --enable-auto-tool-choice
-        - --tool-call-parser=llama3_json
-        - --enable-tool-call-parser
-      env:
-        - name: HF_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: huggingface-secret
-              key: token
-        - name: CUDA_VISIBLE_DEVICES
-          value: "0"
-      resources:
-        requests:
-          cpu: "4"
-          memory: "16Gi"
-          nvidia.com/gpu: "1"
-        limits:
-          cpu: "6"
-          memory: "24Gi"
-          nvidia.com/gpu: "1"
-```
-
-#### Key Configuration Points
-
-- **Tool Calling**: Enabled with `--enable-auto-tool-choice` and `--enable-tool-call-parser`
-- **Custom Template**: vLLM supports custom templates for different model formats
-- **Resource Allocation**: GPU memory utilization set to 90% for optimal performance
-- **HuggingFace Token**: Required for accessing the model
-
-**Connection Details**:
-```python
-KSERVE_URL = os.getenv("KSERVE_URL", "http://llama.docs-agent.svc.cluster.local/openai/v1/chat/completions")
-MODEL = os.getenv("MODEL", "llama3.1-8B")
-```
-
-For more details, refer to [KServe documentation](https://kserve.github.io/website/) and [vLLM documentation](https://docs.vllm.ai/).
-
-### Kubeflow Pipelines
-
-The ETL (Extract, Transform, Load) process is implemented as a Kubeflow Pipeline for automated, scalable data processing.
-
-#### Why Kubeflow Pipelines?
-
-- **Infrastructure Management**: Kubernetes handles all infrastructure automatically
-- **Scalability**: Auto-scaling based on workload demands
-- **Reproducibility**: Version-controlled pipeline definitions
-- **Integration**: Seamless integration with other Kubeflow components
-- **CI/CD Ready**: Can be triggered via GitHub Actions or other automation tools
-
-#### Pipeline Components
-
-The pipeline consists of three main phases:
-
-##### 1. Repository Fetching
-
-```python
-@dsl.component(
-    base_image="python:3.9",
-    packages_to_install=["requests", "beautifulsoup4"]
-)
-def download_github_directory(
-    repo_owner: str,
-    repo_name: str,
-    directory_path: str,
-    github_token: str,
-    github_data: dsl.Output[dsl.Dataset]
-):
-    # Fetches documentation files from GitHub repositories
-    # Supports .md and .html files
-    # Handles authentication and recursive directory traversal
-```
-
-##### 2. Text Chunking and Embedding
-
-```python
-@dsl.component(
-    base_image="pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime",
-    packages_to_install=["sentence-transformers", "langchain"]
-)
-def chunk_and_embed(
-    github_data: dsl.Input[dsl.Dataset],
-    repo_name: str,
-    base_url: str,
-    target_tokens: int,
-    overlap_tokens: int,
-    embedded_data: dsl.Output[dsl.Dataset]
-):
-    # Uses canonical Hugo/Markdown parsing and release_date extraction
-    # Calls the deployed TEI service for 768-dimensional embeddings
-    # Emits token-aware chunks with native BM25 input text
-```
-
-##### 3. Vector Database Storage
-
-```python
-@dsl.component(
-    base_image="python:3.9",
-    packages_to_install=["pymilvus", "numpy"]
-)
-def store_milvus(
-    embedded_data: dsl.Input[dsl.Dataset],
-    milvus_host: str,
-    milvus_port: str,
-    collection_name: str
-):
-    # Creates the v4 hybrid schema with dense and native BM25 vectors
-    # Inserts vectors in batches for efficiency
-    # Creates dense and sparse indexes for hybrid retrieval
-```
-
-#### RBAC Configuration
-
-For Kubeflow Pipelines to access Milvus, proper RBAC permissions are required:
-
-```bash
-# Create role for Milvus access
-kubectl create role milvus-access \
-  --namespace docs-agent \
-  --verb=get,list,watch \
-  --resource=services,endpoints
-
-# Bind role to KFP service account
-kubectl create rolebinding kfp-to-milvus-editor \
-  --namespace docs-agent \
-  --role=milvus-access \
-  --serviceaccount=kubeflow:default-editor
-```
-
-**Note**: Without these permissions, you'll encounter RBAC errors during the embedding phase.
-
-#### Future Improvements
-
-A better improvement would be using the embedding model as a service where users could call the service instead of installing heavy sentence transformers package every time. This would:
-
-- Reduce pipeline execution time
-- Lower resource requirements
-- Enable better caching and optimization
-- Improve scalability
-
-### API Server
-
-Two API implementations are provided for different use cases:
-
-#### WebSocket API (`server/app.py`)
-
-**Use Case**: Real-time chat applications, interactive interfaces
-
-**Features**:
-- Bidirectional communication
-- Real-time streaming responses
-- Tool call execution with live updates
-- Connection management and error handling
-
-**Key Components**:
-```python
-async def handle_websocket(websocket, path):
-    """Handle WebSocket connections with tool calling support"""
-    # Manages connection lifecycle
-    # Handles message routing and tool execution
-    # Provides real-time streaming responses
-
-async def stream_llm_response(payload, websocket, citations_collector):
-    """Stream LLM responses with tool call handling"""
-    # Processes streaming responses from KServe
-    # Manages tool call accumulation and execution
-    # Handles follow-up requests after tool execution
-```
-
-#### HTTPS API (`server-https/app.py`)
-
-**Use Case**: RESTful integrations, server-to-server communication, web applications
-
-**Key Features**:
-- **Dual Response Modes**: Both streaming (Server-Sent Events) and non-streaming JSON responses
-- **RAG Integration**: Automatic tool calling for Kubeflow documentation search
-- **CORS Support**: Full cross-origin resource sharing for web applications
-- **FastAPI Framework**: Automatic OpenAPI documentation and type validation
-- **Production Ready**: Health checks, error handling, and Kubernetes integration
-- **Citation Management**: Automatic collection and deduplication of source citations
-
-**API Endpoints**:
-
-**Main Chat Endpoint**:
-```python
-@app.post("/chat")
-async def chat(request: ChatRequest):
-    """Main chat endpoint with RAG capabilities"""
-    # Supports both streaming and non-streaming responses
-    # Handles tool calling and citation collection
-    # Returns structured JSON responses
-```
-
-**Health Check Endpoint**:
-```python
-@app.get("/health")
-async def health_check():
-    """Health check for Kubernetes probes"""
-    # Essential for production deployments
-    # Used by readiness and liveness probes
-```
-
-**Request/Response Models**:
-```python
-class ChatRequest(BaseModel):
-    message: str
-    stream: Optional[bool] = True  # Default to streaming
-
-# Streaming Response (SSE)
-data: {"type": "content", "content": "response text"}
-data: {"type": "tool_result", "tool_name": "search_kubeflow_docs", "content": "search results"}
-data: {"type": "citations", "citations": ["url1", "url2"]}
-data: {"type": "done"}
-
-# Non-streaming Response
-{
-    "response": "Complete response text",
-    "citations": ["url1", "url2"]  # or null if no citations
-}
-```
-
-**Advanced Features**:
-
-- **Intelligent Tool Calling**: Automatically determines when to search documentation based on query context
-- **Streaming Tool Execution**: Real-time tool call execution with live updates
-- **Citation Tracking**: Automatic collection and deduplication of source URLs
-- **Error Handling**: Comprehensive error handling with detailed error messages
-- **CORS Configuration**: Full CORS support for web application integration
-- **Resource Management**: Proper connection pooling and cleanup for Milvus and KServe
-
-#### SSL Certificate Requirements
-
-**Critical**: Both APIs require SSL certificates from a trusted Certificate Authority. Without proper SSL certificates, browsers will block WebSocket connections and HTTPS requests.
-
-## Usage
-
-### Starting the Services
-
-1. **Deploy Milvus and KServe** (as described above)
-
-2. **Run the Pipeline**:
-   ```bash
-   python docs-agent-mcp/pipelines/kubeflow-pipeline.py
-   ```
-
-3. **Start the API Server**:
-   ```bash
-   # WebSocket API
-   python server/app.py
-
-   # HTTPS API
-   python server-https/app.py
-   ```
-
-### API Usage Examples
-
-#### WebSocket API
-
-```javascript
-const ws = new WebSocket('wss://your-domain.com:8000');
-
-ws.onmessage = function(event) {
-    const data = JSON.parse(event.data);
-    switch(data.type) {
-        case 'content':
-            // Handle streaming content
-            break;
-        case 'citations':
-            // Handle citations
-            break;
-        case 'done':
-            // Handle completion
-            break;
-    }
-};
-
-ws.send(JSON.stringify({
-    message: "How do I create a Kubeflow pipeline?"
-}));
-```
-
-#### HTTPS API
-
-**Streaming Request (Server-Sent Events)**:
-```bash
-curl -X POST "https://your-domain.com/chat" \
-  -H "Content-Type: application/json" \
-  -H "Accept: text/event-stream" \
-  -d '{"message": "What is KServe?", "stream": true}'
-```
-
-**Non-streaming Request (JSON Response)**:
-```bash
-curl -X POST "https://your-domain.com/chat" \
-  -H "Content-Type: application/json" \
-  -d '{"message": "What is KServe?", "stream": false}'
-```
-
-**JavaScript Integration Example**:
-```javascript
-// Streaming request
-const response = await fetch('https://your-domain.com/chat', {
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/json',
-    'Accept': 'text/event-stream'
-  },
-  body: JSON.stringify({
-    message: 'How do I create a Kubeflow pipeline?',
-    stream: true
-  })
-});
-
-const reader = response.body.getReader();
-const decoder = new TextDecoder();
-
-while (true) {
-  const { done, value } = await reader.read();
-  if (done) break;
-  
-  const chunk = decoder.decode(value);
-  const lines = chunk.split('\n');
-  
-  for (const line of lines) {
-    if (line.startsWith('data: ')) {
-      const data = JSON.parse(line.slice(6));
-      switch(data.type) {
-        case 'content':
-          console.log('Content:', data.content);
-          break;
-        case 'tool_result':
-          console.log('Tool:', data.tool_name, data.content);
-          break;
-        case 'citations':
-          console.log('Citations:', data.citations);
-          break;
-        case 'done':
-          console.log('Response complete');
-          break;
-      }
-    }
-  }
-}
-```
-
-**Python Integration Example**:
-```python
-import requests
-import json
-
-# Non-streaming request
-response = requests.post(
-    'https://your-domain.com/chat',
-    json={
-        'message': 'What is KServe?',
-        'stream': False
-    }
-)
-
-data = response.json()
-print(f"Response: {data['response']}")
-if data.get('citations'):
-    print(f"Sources: {data['citations']}")
-```
+---
 
 ## Configuration
 
-### Environment Variables
+### MCP Server Environment Variables
 
-<table>
-<thead>
-<tr>
-<th>Variable</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>KSERVE_URL</code></td>
-<td><code>http://llama.docs-agent.svc.cluster.local/openai/v1/chat/completions</code></td>
-<td>KServe endpoint URL</td>
-</tr>
-<tr>
-<td><code>MODEL</code></td>
-<td><code>llama3.1-8B</code></td>
-<td>Model name</td>
-</tr>
-<tr>
-<td><code>PORT</code></td>
-<td><code>8000</code></td>
-<td>API server port</td>
-</tr>
-<tr>
-<td><code>MILVUS_HOST</code></td>
-<td><code>my-release-milvus.docs-agent.svc.cluster.local</code></td>
-<td>Milvus host</td>
-</tr>
-<tr>
-<td><code>MILVUS_PORT</code></td>
-<td><code>19530</code></td>
-<td>Milvus port</td>
-</tr>
-<tr>
-<td><code>MILVUS_COLLECTION</code></td>
-<td><code>kubeflow_docs</code></td>
-<td>Milvus collection name</td>
-</tr>
-<tr>
-<td><code>EMBEDDING_MODEL</code></td>
-<td><code>sentence-transformers/all-mpnet-base-v2</code></td>
-<td>Embedding model</td>
-</tr>
-</tbody>
-</table>
+| Variable | Default | Description |
+|---|---|---|
+| `PORT` | `8000` | FastMCP server port |
+| `MAX_QUERY_CHARS` | `512` | Max allowed character limit per query |
+| `MAX_TOP_K` | `20` | Upper bound for top_k parameter |
+| `DOCS_CONTEXT_MAX_CHARS` | `4000` | Character budget for compressed docs context |
+| `SEARCH_MODE` | `auto` | Retrieval mode (`auto`, `hybrid`, `bm25`, `dense`) |
+| `COLLECTION_NAME` | `kubeflow_docs` | Milvus docs collection name |
+| `ISSUES_COLLECTION_NAME` | `issues_rag` | Milvus issues collection name |
+| `CODE_COLLECTION_NAME` | `code_rag` | Milvus code collection name |
+| `MILVUS_HOST` | `milvus.docs-agent.svc.cluster.local` | Milvus service hostname |
+| `MILVUS_PORT` | `19530` | Milvus service port |
+| `TEI_EMBEDDINGS_URL` | `http://tei-embeddings.ml-infra:80` | In-cluster TEI embeddings endpoint |
+| `TEI_RERANKER_URL` | `http://tei-reranker.ml-infra:80` | In-cluster TEI cross-encoder endpoint |
 
-### Pipeline Parameters
-
-<table>
-<thead>
-<tr>
-<th>Parameter</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>repo_owner</code></td>
-<td><code>kubeflow</code></td>
-<td>GitHub repository owner</td>
-</tr>
-<tr>
-<td><code>repo_name</code></td>
-<td><code>website</code></td>
-<td>GitHub repository name</td>
-</tr>
-<tr>
-<td><code>directory_path</code></td>
-<td><code>content/en</code></td>
-<td>Documentation directory path</td>
-</tr>
-<tr>
-<td><code>chunk_size</code></td>
-<td><code>1000</code></td>
-<td>Text chunk size for embedding</td>
-</tr>
-<tr>
-<td><code>chunk_overlap</code></td>
-<td><code>100</code></td>
-<td>Overlap between chunks</td>
-</tr>
-<tr>
-<td><code>base_url</code></td>
-<td><code>https://www.kubeflow.org/docs</code></td>
-<td>Base URL for citations</td>
-</tr>
-<tr>
-<td><code>milvus_host</code></td>
-<td><code>milvus-standalone-final.docs-agent.svc.cluster.local</code></td>
-<td>Milvus host (used by <code>kubeflow-pipeline.py</code> and <code>incremental-pipeline.py</code>)</td>
-</tr>
-</tbody>
-</table>
-
-## Chat History and Persistence
-
-Currently, the system uses browser local storage for chat history management to:
-
-- **Reduce Server Overhead**: No server-side storage requirements
-- **Improve Performance**: Client-side handling of chat state
-- **Ensure Privacy**: Data stays on the user's device
-
-### Future Enhancements
-
-- **Chat History Summarization**: Implement conversation summarization to prevent token overflow
-- **Persistent Storage**: Optional server-side chat history storage
-- **Multi-session Support**: Support for multiple concurrent chat sessions
+---
 
 ## Troubleshooting
 
-### Common Issues
+<details>
+<summary><b>View Common Issues & Debug Commands</b></summary>
 
-1. **RBAC Errors**: Ensure proper service account permissions are set
-2. **SSL Certificate Issues**: Verify certificate validity and browser trust
-3. **GPU Resource Constraints**: Check GPU availability and memory allocation
-4. **Milvus Connection**: Verify network connectivity and service discovery
+### Common Diagnostic Checks
 
-### Debug Commands
+1. **Verify Milvus Status**:
+   ```bash
+   kubectl get pods -n docs-agent -l app.kubernetes.io/name=milvus
+   ```
 
-```bash
-# Check Milvus status
-kubectl get pods -n docs-agent | grep milvus
+2. **Verify TEI Embeddings & Reranker**:
+   ```bash
+   kubectl get pods -n ml-infra -l app=tei-embeddings
+   kubectl logs -n ml-infra deployment/tei-reranker --tail=50
+   ```
 
-# Check KServe status
-kubectl get inferenceservice -n docs-agent
+3. **Check MCP Server Logs**:
+   ```bash
+   kubectl logs -n docs-agent deployment/mcp-kubeflow-docs -c mcp-server --tail=100
+   ```
 
-# Check API server logs
-kubectl logs -f deployment/docs-assistant-api
+4. **Test Milvus Connection via Python**:
+   ```python
+   from pymilvus import connections
+   connections.connect("default", host="milvus.docs-agent.svc.cluster.local", port="19530")
+   print("Connected successfully!")
+   ```
+</details>
 
-# Test Milvus connection
-python -c "from pymilvus import connections; connections.connect('default', host='your-milvus-host', port='19530'); print('Connected!')"
-```
+---
 
 ## Contributing
 
-We welcome contributions! Please see our [contributing guidelines](CONTRIBUTING.md) for details.
-
-### Development Setup
+We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details.
 
 1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'feat: add some feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+---
 
 ## License
 
@@ -728,15 +431,15 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 
 ### Organizations
 - [Google Summer of Code (GSoC)](https://summerofcode.withgoogle.com/) for providing this incredible opportunity
-- [Red Hat AI](https://www.redhat.com/en/topics/ai) for providing the Llama 3.1-8B model
-- [Hugging Face](https://huggingface.co/) for the model hosting and sentence transformers library
+- [Red Hat AI](https://www.redhat.com/en/topics/ai) for initial model serving support
+- [Hugging Face](https://huggingface.co/) for model hosting and TEI inference engines
 - [Oracle Cloud Infrastructure (OCI)](https://www.oracle.com/cloud/) for providing cloud resources and infrastructure
 
 ### Open Source Community
 - [Kubeflow Community](https://github.com/kubeflow/community) for the KEP-867 proposal
-- [Milvus](https://milvus.io/) for the vector database
-- [KServe](https://kserve.github.io/website/) for model serving
-- [vLLM](https://github.com/vllm-project/vllm) for high-performance LLM inference
+- [Milvus](https://milvus.io/) for high-performance vector search
+- [vLLM](https://github.com/vllm-project/vllm) for high-performance LLM serving
+- [FastMCP](https://github.com/jlowin/fastmcp) for standard agentic tool integration
 
 ---
 
@@ -772,3 +475,55 @@ The ingestion pipeline was rewritten to maximize efficiency and avoid Kubernetes
 | **`tests.yml`** | Every PR and push to `main` | Ruff lint/format + pytest (no cluster) |
 
 Operator forks set `ENABLE_OKE_DEPLOY=true` and configure the `kubeflow` GitHub Environment (OCI secrets) for cluster deploy and `smoke_tools.py` validation. GHCR push uses the built-in `GITHUB_TOKEN`; optional `GHCR_TOKEN` / `GHCR_USERNAME` are only needed if the package is private.
+
+### Argo CD staging & promotion (`deploy/argocd/`)
+
+Argo CD deploys everything in this repo. The root Application `flo-apps`
+(`deploy/argocd/root.yaml`) keeps the Applications in `deploy/argocd/apps/`
+in line with `main`.
+
+| Application | Tracks | Sync |
+|---|---|---|
+| `docs-agent-staging` | `main`, image = each commit's short SHA | Automatic; every merge runs the staging eval |
+| `docs-agent`, `gateway-guardrails` | The commit in `# prod-revision` | Automatic; merging a promotion PR deploys it |
+| `llm-runtime`, `llm-judge` | `main` | Manual: a sync restarts the GPU pod and reloads the model |
+| `langfuse` | Chart 2.1.0 + `main` values | Manual: stateful, review the diff first |
+
+Every merge to `main` builds `ghcr.io/kubeflow/mcp-kubeflow-docs:<short sha>`
+and staging deploys and evaluates that commit. Production moves only when
+someone promotes a commit, usually every week or two:
+```bash
+deploy/promote.sh            # promote the tip of main
+deploy/promote.sh 9145c31    # or a specific commit
+deploy/promote.sh --open     # also push to your fork and open the PR
+```
+
+The script checks both images exist, moves the `# prod-revision` lines, and
+writes the PR description with the commits since the current production
+revision and the staging eval for that commit (Langfuse project `flo-eval`).
+Reviewers check the eval and approve; after merge, Argo CD syncs production
+to that commit. To roll back, revert the promotion PR.
+
+See [`deploy/argocd/README.md`](deploy/argocd/README.md) for the full
+workflow, including secrets and what lives where.
+
+### Operator commands
+
+There is no single CLI binary. Operators run these commands from the repo root:
+
+```bash
+# Promote a commit on main to production (see Argo CD above)
+deploy/promote.sh            # tip of main
+deploy/promote.sh 9145c31    # a specific commit
+deploy/promote.sh --open     # also push to your fork and open the PR
+```
+
+- **Pre-merge eval**: a maintainer comments `/eval` on a PR. CI builds the
+  PR's MCP image, Argo CD deploys it to a throwaway `docs-agent-preview`
+  namespace, and an eval job compares it against staging (`main`) and comments
+  the metrics, the cases that got worse or better, the judge's reasons, and a
+  public Langfuse trace per case on the PR. It only runs when an OWNERS
+  approver asks, because it uses the shared GPU model — review the diff
+  before asking, as for `/ok-to-test`.
+- **Diagnostics**: see [Troubleshooting](#troubleshooting) (`kubectl` checks
+  for Milvus, TEI, and the MCP server).
