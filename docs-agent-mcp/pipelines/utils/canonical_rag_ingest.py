@@ -33,7 +33,9 @@ ALERT_RE = re.compile(
 )
 LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 INLINE_CODE_RE = re.compile(r"`[^`\n]+`")
-HUGO_SHORTCODE_RE = re.compile(r"\{\{.*?%\}\}|\{\{.*?\}\}", re.DOTALL)
+# The first alternative must start at "{{%": a bare "{{" would let a "{{< ... >}}"
+# shortcode match lazily up to the next "%}}" and delete all text in between.
+HUGO_SHORTCODE_RE = re.compile(r"\{\{%.*?%\}\}|\{\{.*?\}\}", re.DOTALL)
 IMG_TAG_RE = re.compile(r'<img[^>]*alt="([^"]*)"[^>]*>', re.IGNORECASE)
 MD_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\([^)]+\)")
 ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
