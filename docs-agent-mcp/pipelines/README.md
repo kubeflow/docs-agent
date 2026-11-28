@@ -87,7 +87,11 @@ These pipelines are self-contained KFP components. Parsers and test helpers live
 
 ## Incremental docs ingest
 
-The incremental GitHub docs pipeline lives under **`legacy/pipelines/incremental-pipeline.py`**. It predates v4 hybrid schema and is kept for reference only; use **`kubeflow-pipeline.py`** for production docs indexing.
+The incremental GitHub docs pipeline (**`incremental-pipeline.py`**) processes only changed and deleted files, reusing the canonical v4 ingestion and storage utilities (`canonical_rag_ingest.py`, `milvus_store.py`) to update the v4 hybrid collection (`kubeflow_docs`) idempotently. Compile via:
+
+```bash
+python incremental-pipeline.py
+```
 
 ## Dependencies
 
