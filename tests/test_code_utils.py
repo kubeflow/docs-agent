@@ -90,6 +90,7 @@ def test_code_pipeline_preserves_github_canonical_citation_url(monkeypatch, tmp_
         code_data=SimpleNamespace(path=str(downloaded_path)),
         chunk_size=1000,
         chunk_overlap=100,
+        exclude_resource_kinds="CustomResourceDefinition",
         embeddings_service_url="http://embeddings.test/embed",
         embedding_batch_size=8,
         embedded_data=SimpleNamespace(path=str(embedded_path)),
