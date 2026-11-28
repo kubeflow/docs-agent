@@ -16,6 +16,7 @@ from canonical_rag_ingest import (
     DEFAULT_OVERLAP_TOKENS,
     DEFAULT_TARGET_TOKENS,
     build_milvus_records,
+    strip_context_delimiter,
 )
 from utils import DEFAULT_EMBEDDING_BATCH_SIZE, DOCS_COLLECTION, embed_texts, truncate_for_tei
 
@@ -232,7 +233,10 @@ def embed_chunk_records(
         return records
 
     batch_size = max(1, int(embedding_batch_size))
-    texts = [truncate_for_tei(record["content_text"]) for record in records]
+    texts = [
+        truncate_for_tei(strip_context_delimiter(record["content_text"]))
+        for record in records
+    ]
     vectors = embed_texts(
         texts,
         embeddings_service_url,
