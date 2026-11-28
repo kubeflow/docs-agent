@@ -772,3 +772,9 @@ The ingestion pipeline was rewritten to maximize efficiency and avoid Kubernetes
 | **`tests.yml`** | Every PR and push to `main` | Ruff lint/format + pytest (no cluster) |
 
 Operator forks set `ENABLE_OKE_DEPLOY=true` and configure the `kubeflow` GitHub Environment (OCI secrets) for cluster deploy and `smoke_tools.py` validation. GHCR push uses the built-in `GITHUB_TOKEN`; optional `GHCR_TOKEN` / `GHCR_USERNAME` are only needed if the package is private.
+
+## Contributors
+
+<a href="https://github.com/kubeflow/docs-agent/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=kubeflow/docs-agent" alt="Contributors" />
+</a>
