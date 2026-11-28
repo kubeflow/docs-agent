@@ -78,12 +78,12 @@ description (`v=<SCHEMA_VERSION>`).
 | Incremental | existing records | `docs-agent-mcp/pipelines/incremental-pipeline.py` |
 | Shared TEI / truncation | — | `docs-agent-mcp/pipelines/utils.py` |
 
-Gap: chunking is bounded in characters; TEI is bounded in tokens. Dense YAML
-and Go overflow (~1000 chars can still 413). Related: Issue #181.
+Gap: chunking is bounded in characters; TEI is bounded in tokens. With BAAI/bge-base-en-v1.5
+(512 tokens), inputs up to ~1400 characters are safely accommodated (even for dense Katib YAML). Related: Issue #181.
 
 ### 3. Vector database — `area/embeddings`
 
-One TEI InferenceService (`sentence-transformers/all-mpnet-base-v2`, 768-d,
+One TEI InferenceService (`BAAI/bge-base-en-v1.5`, 768-d,
 IVF_FLAT COSINE) is shared by runtime MCP and ingestion. Three collections,
 three schemas. Hybrid BM25+dense search is not enabled.
 

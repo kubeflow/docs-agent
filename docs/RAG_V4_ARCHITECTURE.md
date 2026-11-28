@@ -79,7 +79,7 @@ User
 GitHub docs (kubeflow/website)
   → KFP kubeflow-pipeline.py
   → canonical_rag_ingest.py (Hugo parse, token-aware chunk, release_date extract)
-  → TEI MPNet (768-d, sentence-transformers/all-mpnet-base-v2)
+  → TEI BGE (768-d, BAAI/bge-base-en-v1.5)
   → Milvus v4 schema (content_text BM25 input, vector, sparse_vector, release_date)
 ```
 

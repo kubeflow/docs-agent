@@ -10,8 +10,13 @@ import requests
 import flo_tracing
 
 DEFAULT_TIMEOUT_SEC = int(os.getenv("EMBEDDINGS_TIMEOUT_SEC", "60"))
-# TEI all-mpnet-base-v2: each input must be <384 tokens.
-MAX_TEI_INPUT_CHARS = int(os.getenv("MAX_TEI_INPUT_CHARS", "1000"))
+# TEI BAAI/bge-base-en-v1.5: inputs up to 512 tokens (~1400 chars safely for dense Katib YAML/code).
+MAX_TEI_INPUT_CHARS = int(os.getenv("MAX_TEI_INPUT_CHARS", "1400"))
+# Instruction prefix for asymmetric retrieval (e.g. BAAI/bge-base-en-v1.5 recommends
+# "Represent this sentence for searching relevant passages: "). Default to empty so
+# queries are not modified while the cluster serves all-mpnet-base-v2; set via chart values
+# when transitioning to BGE.
+BGE_QUERY_PREFIX = os.getenv("BGE_QUERY_PREFIX", "")
 
 
 def embed_texts(
@@ -21,7 +26,7 @@ def embed_texts(
     batch_size: int = 8,
     timeout: int = DEFAULT_TIMEOUT_SEC,
 ) -> list[list[float]]:
-    """Return embedding vectors for each input string (768-dim for all-mpnet-base-v2)."""
+    """Return embedding vectors for each input string (768-dim for BAAI/bge-base-en-v1.5)."""
     if not texts:
         return []
 
@@ -59,5 +64,6 @@ def embed_texts(
     model=os.getenv("EMBEDDINGS_MODEL", "tei"),
 )
 def embed_query(query: str, **kwargs) -> list[float]:
-    """Embed a single search query."""
-    return embed_texts([query], **kwargs)[0]
+    """Embed a single search query, prepending the BGE retrieval instruction prefix if configured."""
+    prefixed_query = f"{BGE_QUERY_PREFIX}{query}" if BGE_QUERY_PREFIX else query
+    return embed_texts([prefixed_query], **kwargs)[0]

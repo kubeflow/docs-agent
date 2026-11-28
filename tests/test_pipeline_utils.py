@@ -207,7 +207,7 @@ class TestCleanContentEdgeCases:
 class TestTruncateForTei:
     def test_truncates_long_text(self):
         long = "word " * 500
-        assert len(truncate_for_tei(long)) == 1000
+        assert len(truncate_for_tei(long)) == 1400
 
 
 class TestEmbedTexts:
@@ -248,4 +248,62 @@ class TestEmbedTexts:
         monkeypatch.setattr("utils.requests.post", fake_post)
         long = "x" * 5000
         embed_texts([long], "http://embeddings/embed", batch_size=1)
-        assert len(sent[0]) == 1000
+        assert len(sent[0]) == 1400
+
+
+class TestEmbedQuery:
+    def test_embed_query_default_no_prefix(self, monkeypatch):
+        mcp_dir = Path(__file__).parent.parent / "docs-agent-mcp" / "mcp-server"
+        sys.path.insert(0, str(mcp_dir))
+        import embeddings_client
+
+        sent = []
+
+        class FakeResponse:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return [[0.1] * 768]
+
+        def fake_post(url, json, headers, timeout):
+            sent.extend(json["inputs"])
+            return FakeResponse()
+
+        monkeypatch.setenv("EMBEDDINGS_URL", "http://fake-tei/embed")
+        monkeypatch.setattr(embeddings_client, "BGE_QUERY_PREFIX", "")
+        monkeypatch.setattr(embeddings_client.requests, "post", fake_post)
+
+        embeddings_client.embed_query("how to tune katib")
+        assert sent[0] == "how to tune katib"
+
+    def test_embed_query_prepends_bge_prefix_when_configured(self, monkeypatch):
+        mcp_dir = Path(__file__).parent.parent / "docs-agent-mcp" / "mcp-server"
+        sys.path.insert(0, str(mcp_dir))
+        import embeddings_client
+
+        sent = []
+
+        class FakeResponse:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return [[0.1] * 768]
+
+        def fake_post(url, json, headers, timeout):
+            sent.extend(json["inputs"])
+            return FakeResponse()
+
+        monkeypatch.setenv("EMBEDDINGS_URL", "http://fake-tei/embed")
+        monkeypatch.setattr(
+            embeddings_client,
+            "BGE_QUERY_PREFIX",
+            "Represent this sentence for searching relevant passages: ",
+        )
+        monkeypatch.setattr(embeddings_client.requests, "post", fake_post)
+
+        embeddings_client.embed_query("how to tune katib")
+        assert sent[0] == (
+            "Represent this sentence for searching relevant passages: how to tune katib"
+        )
