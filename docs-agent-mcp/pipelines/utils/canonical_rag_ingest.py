@@ -623,6 +623,35 @@ def build_document_breadcrumb(file_path: str, title: str = "") -> str:
     return SECTION_PATH_SEP.join(parts)
 
 
+def _build_contextual_header(document_breadcrumb: str, section_heading: str) -> str:
+    """Build a Document/Section header bounded by MAX_BREADCRUMB_HEADER_CHARS."""
+    doc_crumb = (document_breadcrumb or "").strip()
+    heading = (section_heading or "").strip()
+    if heading == doc_crumb:
+        heading = ""
+
+    doc_line = f"Document: {doc_crumb}" if doc_crumb else ""
+    sec_line = f"Section: {heading}" if heading else ""
+    if not doc_line and not sec_line:
+        return ""
+
+    metadata_budget = MAX_BREADCRUMB_HEADER_CHARS - len(CONTEXT_DELIMITER)
+    if doc_line and sec_line:
+        if len(doc_line) + 1 + len(sec_line) > metadata_budget:
+            avail = metadata_budget - 1
+            sec_budget = min(len(sec_line), max(90, avail - len(doc_line)))
+            sec_line = sec_line[:sec_budget].rstrip()
+            doc_budget = avail - len(sec_line)
+            doc_line = doc_line[:doc_budget].rstrip()
+    elif doc_line:
+        doc_line = doc_line[:metadata_budget].rstrip()
+    else:
+        sec_line = sec_line[:metadata_budget].rstrip()
+
+    lines = [line for line in (doc_line, sec_line) if line]
+    return "\n".join(lines) + CONTEXT_DELIMITER
+
+
 def format_contextual_text(
     content: str,
     *,
@@ -634,26 +663,29 @@ def format_contextual_text(
     Creates structured context:
         Document: Kubeflow Documentation > Katib > Early Stopping
         Section: Configuring the Median Stopping Rule
-        Content:
+        <!--kubeflow:context:end-->
         [clean chunk content]
     """
     clean_content = content.strip()
     if not clean_content:
         return ""
 
-    lines = []
-    if document_breadcrumb:
-        lines.append(f"Document: {document_breadcrumb}")
-    heading = section_heading.strip() if section_heading else ""
-    if heading and heading != document_breadcrumb:
-        lines.append(f"Section: {heading}")
-    header = "\n".join(lines) + CONTEXT_DELIMITER
+    header = _build_contextual_header(document_breadcrumb, section_heading)
 
     if len(header) + len(clean_content) <= MAX_CONTENT_TEXT_CHARS:
         return f"{header}{clean_content}"
 
     budget = max(50, MAX_CONTENT_TEXT_CHARS - len(header))
     return f"{header}{clean_content[:budget]}"
+
+
+def strip_context_delimiter(text: str) -> str:
+    """Remove the context delimiter sentinel before dense embedding."""
+    if CONTEXT_DELIMITER in text:
+        return text.replace(CONTEXT_DELIMITER, "\n", 1)
+    if "<!--kubeflow:context:end-->" in text:
+        return text.replace("<!--kubeflow:context:end-->", "", 1).strip()
+    return text
 
 
 def build_citation_url(file_path: str, base_url: str) -> str:
@@ -918,4 +950,5 @@ __all__ = [
     "parse_and_chunk_file",
     "parse_canonical_document",
     "split_prose_by_tokens",
+    "strip_context_delimiter",
 ]

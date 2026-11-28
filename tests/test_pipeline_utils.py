@@ -308,8 +308,7 @@ class TestContextualRetrievalChunks:
         )
         assert "Section:" not in contextual
         assert (
-            "Document: Kubeflow Documentation > Overview\n<!--kubeflow:context:end-->\nIntroductory text."
-            == contextual
+            "Document: Kubeflow Documentation > Overview\n<!--kubeflow:context:end-->\nIntroductory text." == contextual
         )
 
     def test_format_contextual_text_respects_max_chars(self):
@@ -403,7 +402,89 @@ class TestContextualRetrievalChunks:
         )
         assert "Section: Configuring Rules" in first_record["content_text"]
         assert "<!--kubeflow:context:end-->" in first_record["content_text"]
-        assert (
-            extract_clean_content(first_record["content_text"])
-            == "Set median_stop_rule: true to stop trials early."
+        assert extract_clean_content(first_record["content_text"]) == "Set median_stop_rule: true to stop trials early."
+
+    def test_extract_clean_content_preserves_document_and_content_text_without_sentinel(self):
+        mcp_dir = Path(__file__).parent.parent / "docs-agent-mcp" / "mcp-server"
+        if str(mcp_dir) not in sys.path:
+            sys.path.insert(0, str(mcp_dir))
+        from citations import extract_clean_content
+
+        prose = "Document: My CRD Schema\n\nContent:\nSet replicas: 3."
+        assert extract_clean_content(prose) == prose
+
+    def test_format_contextual_text_caps_header_and_preserves_max_body(self):
+        from canonical_rag_ingest import (
+            CONTEXT_DELIMITER,
+            MAX_BREADCRUMB_HEADER_CHARS,
+            MAX_CHUNK_BODY_CHARS,
+            MAX_CONTENT_TEXT_CHARS,
+            format_contextual_text,
         )
+
+        long_breadcrumb = "Kubeflow Documentation > " + ("Very Long Component Name > " * 12)
+        long_heading = "Very Detailed Section Title " * 10
+        body = "b" * MAX_CHUNK_BODY_CHARS
+
+        contextual = format_contextual_text(
+            body,
+            document_breadcrumb=long_breadcrumb,
+            section_heading=long_heading,
+        )
+
+        assert len(contextual) <= MAX_CONTENT_TEXT_CHARS
+        assert CONTEXT_DELIMITER in contextual
+        header, extracted_body = contextual.split(CONTEXT_DELIMITER, 1)
+        assert len(header) + len(CONTEXT_DELIMITER) <= MAX_BREADCRUMB_HEADER_CHARS
+        assert extracted_body == body
+
+    def test_strip_context_delimiter_removes_sentinel_only(self):
+        from canonical_rag_ingest import format_contextual_text, strip_context_delimiter
+
+        contextual = format_contextual_text(
+            "spec.replicas sets instances.",
+            document_breadcrumb="Kubeflow Documentation > Katib",
+            section_heading="Replicas",
+        )
+        stripped = strip_context_delimiter(contextual)
+        assert "<!--kubeflow:context:end-->" not in stripped
+        assert "Document: Kubeflow Documentation > Katib" in stripped
+        assert "Section: Replicas" in stripped
+        assert "spec.replicas sets instances." in stripped
+        assert strip_context_delimiter("Plain text without sentinel") == "Plain text without sentinel"
+
+    def test_embed_chunk_records_strips_sentinel_before_embed_texts(self, monkeypatch):
+        from unittest.mock import MagicMock
+
+        monkeypatch.setitem(sys.modules, "pymilvus", MagicMock())
+        sys.modules.pop("milvus_store", None)
+        import milvus_store
+
+        captured = []
+
+        def fake_embed_texts(texts, url, batch_size=8):
+            captured.extend(texts)
+            return [[0.1] * 768 for _ in texts]
+
+        monkeypatch.setattr(milvus_store, "embed_texts", fake_embed_texts)
+
+        records = [
+            {
+                "content_text": (
+                    "Document: Kubeflow Documentation > Katib\n"
+                    "Section: Early Stopping\n"
+                    "<!--kubeflow:context:end-->\n"
+                    "Set median_stop_rule: true."
+                )
+            }
+        ]
+        result = milvus_store.embed_chunk_records(
+            records,
+            embeddings_service_url="http://embeddings/embed",
+        )
+
+        assert len(captured) == 1
+        assert "<!--kubeflow:context:end-->" not in captured[0]
+        assert "Document: Kubeflow Documentation > Katib" in captured[0]
+        assert "Set median_stop_rule: true." in captured[0]
+        assert "<!--kubeflow:context:end-->" in result[0]["content_text"]

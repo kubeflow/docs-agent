@@ -23,10 +23,6 @@ def extract_clean_content(text: object) -> str:
     raw = str(text or "")
     if _SENTINEL_MARKER in raw:
         return raw.split(_SENTINEL_MARKER, 1)[1].strip()
-    # Backward-compatible fallback for prototype format
-    marker = "\nContent:\n"
-    if raw.startswith("Document:") and marker in raw:
-        return raw.split(marker, 1)[1].strip()
     return raw
 
 
@@ -54,7 +50,7 @@ def format_docs_hits(hits: list[dict]) -> tuple[str, list[dict]]:
         release_date = entity.get("release_date")
         if release_date is not None:
             entry += f"\n**Release date:** {format_release_date(release_date)}"
-        content = entity.get("clean_content") or extract_clean_content(entity.get("content_text", ""))
+        content = extract_clean_content(entity.get("content_text", ""))
         entry += f"\n\n{sanitize_evidence_text(content)}\n"
         results.append(entry)
 
@@ -101,7 +97,7 @@ def format_issues_hits(hits: list[dict]) -> tuple[str, list[dict]]:
         if labels:
             entry += f"\n**Labels:** {labels}"
 
-        issue_content = entity.get("clean_content") or extract_clean_content(entity.get("content_text", ""))
+        issue_content = extract_clean_content(entity.get("content_text", ""))
         entry += f"\n\n{sanitize_evidence_text(issue_content)}\n"
         results.append(entry)
 
@@ -144,7 +140,7 @@ def format_code_hits(hits: list[dict]) -> tuple[str, list[dict]]:
         if ftype:
             entry += f"\n**Type:** {ftype}"
 
-        code_content = entity.get("clean_content") or extract_clean_content(entity.get("content_text", ""))
+        code_content = extract_clean_content(entity.get("content_text", ""))
         entry += f"\n\n```\n{sanitize_evidence_text(code_content)}\n```\n"
         results.append(entry)
 
